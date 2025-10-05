@@ -5,7 +5,8 @@ test.describe.serial('認可コードフローフェデレーションのテス�
   // 環境変数から動的にエンドポイントを取得（デフォルト値はGitHub Actions用）
   const authorizationEndpoint = process.env.E2E_AUTHORIZATION_ENDPOINT || 'https://localhost:8081/authorization';
   const tokenEndpoint = process.env.E2E_TOKEN_ENDPOINT || 'https://localhost:8081/token';
-  const userInfoEndpoint = process.env.E2E_USERINFO_ENDPOINT || 'https://localhost:9091/userinfo';
+  const ecAuthUserInfoEndpoint = process.env.E2E_ECAUTH_USERINFO_ENDPOINT || 'https://localhost:8081/userinfo';
+  const externalIdpUserInfoEndpoint = process.env.E2E_USERINFO_ENDPOINT || 'https://localhost:9091/userinfo';
   const redirectUri = process.env.E2E_REDIRECT_URI || 'https://localhost:8081/auth/callback';
   const clientId = 'client_id';
   const clientSecret = 'client_secret';
@@ -121,14 +122,32 @@ test.describe.serial('認可コードフローフェデレーションのテス�
     expect(responseBody.access_token).toBeTruthy();
     expect(responseBody.token_type).toBe('Bearer');
 
-    // const userInfoRequest = await request.newContext();
-    // const userInfoResponse = await userInfoRequest.get(userInfoEndpoint, {
-    //   headers: {
-    //     Authorization: `Bearer ${(await response.json()).access_token}`
-    //   }
-    // });
+    // UserInfo エンドポイントのテスト
+    console.log('📤 Sending UserInfo request to:', ecAuthUserInfoEndpoint);
+    console.log('🔑 Using access token:', responseBody.access_token.substring(0, 20) + '...');
 
-    // // console.log(await userInfoResponse.json());
-    // expect((await userInfoResponse.json()).sub).toBeTruthy();
+    const userInfoRequest = await request.newContext();
+    const userInfoResponse = await userInfoRequest.get(ecAuthUserInfoEndpoint, {
+      headers: {
+        Authorization: `Bearer ${responseBody.access_token}`
+      }
+    });
+
+    console.log('📥 UserInfo response status:', userInfoResponse.status());
+    console.log('📥 UserInfo response headers:', userInfoResponse.headers());
+
+    const userInfoBody = await userInfoResponse.json();
+    console.log('📥 UserInfo response body:', JSON.stringify(userInfoBody, null, 2));
+
+    if (userInfoBody.error) {
+      console.log('❌ UserInfo request failed with error:', userInfoBody.error);
+      console.log('❌ Error description:', userInfoBody.error_description);
+    } else {
+      console.log('✅ UserInfo request successful');
+    }
+
+    expect(userInfoResponse.status()).toBe(200);
+    expect(userInfoBody.sub).toBeTruthy();
+    console.log('✅ UserInfo endpoint test completed successfully');
   });
 });
