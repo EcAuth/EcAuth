@@ -10,6 +10,7 @@ builder.Services.AddScoped<ITenantService, TenantService>();
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IAuthorizationCodeService, AuthorizationCodeService>();
+builder.Services.AddScoped<IExternalIdpTokenService, ExternalIdpTokenService>();
 builder.Services.AddScoped<OrganizationFilter>();
 // Add services to the container.
 builder.Services.AddDbContext<EcAuthDbContext>((sp, options) =>
