@@ -99,7 +99,7 @@ jobs:
         run: yarn playwright test
       - name: Upload evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-results
           path: 'E2ETests/test-results/'
