@@ -149,5 +149,47 @@ test.describe.serial('認可コードフローフェデレーションのテス�
     expect(userInfoResponse.status()).toBe(200);
     expect(userInfoBody.sub).toBeTruthy();
     console.log('✅ UserInfo endpoint test completed successfully');
+
+    // External UserInfo エンドポイントのテスト
+    const externalUserInfoEndpoint = `${authorizationEndpoint.replace('/authorization', '')}/api/external-userinfo`;
+    console.log('📤 Sending External UserInfo request to:', externalUserInfoEndpoint);
+    console.log('🔑 Using access token:', responseBody.access_token.substring(0, 20) + '...');
+    console.log('🏷️ Provider:', providerName);
+
+    const externalUserInfoRequest = await request.newContext();
+    const externalUserInfoResponse = await externalUserInfoRequest.get(
+      `${externalUserInfoEndpoint}?provider=${providerName}`,
+      {
+        headers: {
+          Authorization: `Bearer ${responseBody.access_token}`
+        }
+      }
+    );
+
+    console.log('📥 External UserInfo response status:', externalUserInfoResponse.status());
+    console.log('📥 External UserInfo response headers:', externalUserInfoResponse.headers());
+
+    const externalUserInfoBody = await externalUserInfoResponse.json();
+    console.log('📥 External UserInfo response body:', JSON.stringify(externalUserInfoBody, null, 2));
+
+    if (externalUserInfoBody.error) {
+      console.log('❌ External UserInfo request failed with error:', externalUserInfoBody.error);
+      console.log('❌ Error description:', externalUserInfoBody.error_description);
+    } else {
+      console.log('✅ External UserInfo request successful');
+    }
+
+    // External UserInfo レスポンスの検証
+    expect(externalUserInfoResponse.status()).toBe(200);
+    expect(externalUserInfoBody.sub).toBeTruthy();
+    expect(externalUserInfoBody.email).toBeTruthy();
+    expect(externalUserInfoBody.provider).toBe(providerName);
+    console.log('✅ External UserInfo endpoint test completed successfully');
+    console.log('📊 External UserInfo claims:', {
+      sub: externalUserInfoBody.sub,
+      email: externalUserInfoBody.email,
+      name: externalUserInfoBody.name,
+      provider: externalUserInfoBody.provider
+    });
   });
 });
