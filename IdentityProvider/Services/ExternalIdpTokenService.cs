@@ -25,6 +25,7 @@ namespace IdentityProvider.Services
 
             // 既存のトークンを検索（ユニーク制約: ecauth_subject + external_provider）
             var existingToken = await _context.ExternalIdpTokens
+                .IgnoreQueryFilters()
                 .Include(t => t.EcAuthUser)
                     .ThenInclude(u => u.Organization)
                 .FirstOrDefaultAsync(t => t.EcAuthSubject == request.EcAuthSubject &&
@@ -78,6 +79,7 @@ namespace IdentityProvider.Services
                 throw new ArgumentException("ExternalProvider cannot be null or empty.", nameof(externalProvider));
 
             var token = await _context.ExternalIdpTokens
+                .IgnoreQueryFilters()
                 .Include(t => t.EcAuthUser)
                     .ThenInclude(u => u.Organization)
                 .FirstOrDefaultAsync(t => t.EcAuthSubject == ecAuthSubject &&
@@ -111,6 +113,7 @@ namespace IdentityProvider.Services
                 throw new ArgumentException("ExternalProvider cannot be null or empty.", nameof(externalProvider));
 
             var token = await _context.ExternalIdpTokens
+                .IgnoreQueryFilters()
                 .Include(t => t.EcAuthUser)
                     .ThenInclude(u => u.Organization)
                 .FirstOrDefaultAsync(t => t.EcAuthSubject == ecAuthSubject &&
@@ -143,6 +146,7 @@ namespace IdentityProvider.Services
             var now = DateTimeOffset.UtcNow;
 
             var expiredTokens = await _context.ExternalIdpTokens
+                .IgnoreQueryFilters()
                 .Include(t => t.EcAuthUser)
                     .ThenInclude(u => u.Organization)
                 .Where(t => t.ExpiresAt <= now)
