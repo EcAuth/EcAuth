@@ -70,6 +70,7 @@ namespace IdentityProvider.Services
                     request.ExternalProvider);
 
                 var openIdProvider = await _context.OpenIdProviders
+                    .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(p => p.Name == request.ExternalProvider);
 
                 if (openIdProvider == null)

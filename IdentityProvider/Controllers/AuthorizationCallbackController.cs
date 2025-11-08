@@ -81,6 +81,7 @@ namespace IdentityProvider.Controllers
 
                 // 2. OpenID Provider 情報を取得
                 var identityProvider = await _context.OpenIdProviders
+                    .IgnoreQueryFilters()
                     .Where(p => p.Id == stateData.OpenIdProviderId)
                     .FirstOrDefaultAsync();
 
