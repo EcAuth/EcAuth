@@ -39,6 +39,8 @@ namespace IdentityProvider.Services
                     request.EcAuthSubject, request.ExternalProvider);
 
                 var externalMapping = await _context.ExternalIdpMappings
+                    .Include(m => m.EcAuthUser)
+                        .ThenInclude(u => u.Organization)
                     .FirstOrDefaultAsync(m => m.EcAuthSubject == request.EcAuthSubject &&
                                              m.ExternalProvider == request.ExternalProvider);
 

@@ -218,6 +218,7 @@ namespace IdentityProvider.Services
             {
                 var accessToken = await _context.AccessTokens
                     .Include(at => at.EcAuthUser)
+                        .ThenInclude(u => u.Organization)
                     .FirstOrDefaultAsync(at => at.Token == token);
 
                 if (accessToken == null)
@@ -247,6 +248,8 @@ namespace IdentityProvider.Services
             try
             {
                 var accessToken = await _context.AccessTokens
+                    .Include(at => at.EcAuthUser)
+                        .ThenInclude(u => u.Organization)
                     .FirstOrDefaultAsync(at => at.Token == token);
 
                 if (accessToken == null)
