@@ -17,19 +17,20 @@ jobs:
       with:
         dotnet-version: '9.0.x'
 
+    - name: Add GitHub Packages NuGet source
+      run: |
+        dotnet nuget add source \
+          --username ${{ github.repository_owner }} \
+          --password ${{ secrets.GITHUB_TOKEN }} \
+          --store-password-in-clear-text \
+          --name github \
+          "https://nuget.pkg.github.com/EcAuth/index.json"
+
     - name: Restore .NET tools
       run: dotnet tool restore
 
     - name: Restore dependencies
       run: dotnet restore ./EcAuth.sln
-
-    - name: Build
-      working-directory: ./IdpUtilities.Test
-      run: dotnet build --no-restore
-
-    - name: Test
-      working-directory: ./IdpUtilities.Test
-      run: dotnet test --no-build --verbosity normal
 
     - name: Build
       working-directory: ./MockOpenIdProvider.Test
