@@ -24,7 +24,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MockOpenIdProvider\MockOpenIdProvider.csproj" />
-    <ProjectReference Include="..\IdpUtilities\IdpUtilities.csproj" />
   </ItemGroup>
 
   <ItemGroup>
