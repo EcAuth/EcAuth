@@ -19,6 +19,7 @@ jobs:
 
     - name: Add GitHub Packages source with credentials
       run: |
+        dotnet nuget remove source github || true
         dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
           --name github \
           --username ${{ github.repository_owner }} \
