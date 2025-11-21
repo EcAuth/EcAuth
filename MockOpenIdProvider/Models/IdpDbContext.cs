@@ -90,6 +90,10 @@ namespace MockOpenIdProvider.Models
             // OrganizationIdが未設定のエンティティに自動設定
             foreach (var entry in ChangeTracker.Entries())
             {
+                // Organizationエンティティ自体はスキップ（OrganizationIdプロパティを持たない）
+                if (entry.Entity is Organization)
+                    continue;
+
                 if (entry.State == EntityState.Added)
                 {
                     var organizationIdProperty = entry.Property("OrganizationId");
