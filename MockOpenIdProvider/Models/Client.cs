@@ -22,6 +22,9 @@ namespace MockOpenIdProvider.Models
         public string PublicKey { get; set; }
         [Column("private_key")]
         public string PrivateKey { get; set; }
+        [Column("organization_id")]
+        public int OrganizationId { get; set; }
+        public Organization Organization { get; set; }
         public ICollection<MockIdpUser> Users { get; } = new List<MockIdpUser>();
     }
 }

@@ -24,5 +24,8 @@ namespace MockOpenIdProvider.Models
         [Column("user_id")]
         public int UserId { get; set; }
         public MockIdpUser User { get; set; }
+        [Column("organization_id")]
+        public int OrganizationId { get; set; }
+        public Organization Organization { get; set; }
     }
 }
