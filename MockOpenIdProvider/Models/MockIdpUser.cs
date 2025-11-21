@@ -18,6 +18,9 @@ namespace MockOpenIdProvider.Models
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
         [Column("updated_at")]
         public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+        [Column("organization_id")]
+        public int OrganizationId { get; set; }
+        public Organization Organization { get; set; }
         public Client? Client { get; set; }
         public int? ClientId { get; set; }
     }
