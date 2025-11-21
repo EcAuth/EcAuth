@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MockOpenIdProvider.Controllers;
 using MockOpenIdProvider.Models;
+using MockOpenIdProvider.Services;
+using Moq;
 using Xunit;
 using System.Linq;
 
@@ -21,7 +23,12 @@ namespace MockOpenIdProvider.Test
             var options = new DbContextOptionsBuilder<IdpDbContext>()
                 .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
                 .Options;
-            var context = new IdpDbContext(options);
+
+            // OrganizationServiceのモックを作成
+            var mockOrganizationService = new Mock<IOrganizationService>();
+            mockOrganizationService.Setup(os => os.TenantName).Returns("dev");
+
+            var context = new IdpDbContext(options, mockOrganizationService.Object);
 
             return context;
         }
@@ -31,6 +38,17 @@ namespace MockOpenIdProvider.Test
         /// </summary>
         private async Task SeedTestData(IdpDbContext context)
         {
+            // テストOrganization作成
+            var organization = new Organization
+            {
+                Name = "Development",
+                TenantName = "dev",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            await context.Organizations.AddAsync(organization);
+            await context.SaveChangesAsync();
+
             // テストクライアント作成
             var client = new Client
             {
@@ -39,7 +57,8 @@ namespace MockOpenIdProvider.Test
                 ClientName = "Test Client",
                 RedirectUri = "https://localhost/callback",
                 PublicKey = "test_public_key",
-                PrivateKey = "test_private_key"
+                PrivateKey = "test_private_key",
+                OrganizationId = organization.Id
             };
             await context.Clients.AddAsync(client);
             await context.SaveChangesAsync();
@@ -49,7 +68,8 @@ namespace MockOpenIdProvider.Test
             {
                 Email = "test@example.com",
                 Password = "password",
-                ClientId = client.Id
+                ClientId = client.Id,
+                OrganizationId = organization.Id
             };
             await context.Users.AddAsync(user);
             await context.SaveChangesAsync();
@@ -69,6 +89,7 @@ namespace MockOpenIdProvider.Test
             var expireTime = (int)(now.AddHours(1).Subtract(new DateTime(1970, 1, 1))).TotalSeconds;
 
             // 有効な認可コードを作成
+            var organization = await context.Organizations.FirstAsync();
             var authCode = new AuthorizationCode
             {
                 Code = "valid_auth_code",
@@ -78,7 +99,8 @@ namespace MockOpenIdProvider.Test
                 ClientId = client.Id,
                 Client = client,
                 UserId = user.Id,
-                User = user
+                User = user,
+                OrganizationId = organization.Id
             };
             await context.AuthorizationCodes.AddAsync(authCode);
             await context.SaveChangesAsync();
@@ -109,12 +131,12 @@ namespace MockOpenIdProvider.Test
             Assert.NotNull(updatedAuthCode);
             Assert.True(updatedAuthCode!.Used);
             
-            // アクセストークンが保存されていることを確認
-            var accessToken = await context.AccessTokens.FirstOrDefaultAsync();
+            // アクセストークンが保存されていることを確認（グローバルクエリフィルターを無視）
+            var accessToken = await context.AccessTokens.IgnoreQueryFilters().FirstOrDefaultAsync();
             Assert.NotNull(accessToken);
-            
-            // リフレッシュトークンが保存されていることを確認
-            var refreshToken = await context.RefreshTokens.FirstOrDefaultAsync();
+
+            // リフレッシュトークンが保存されていることを確認（グローバルクエリフィルターを無視）
+            var refreshToken = await context.RefreshTokens.IgnoreQueryFilters().FirstOrDefaultAsync();
             Assert.NotNull(refreshToken);
         }
         
@@ -186,6 +208,7 @@ namespace MockOpenIdProvider.Test
             var expireTime = (int)(now.AddHours(1).Subtract(new DateTime(1970, 1, 1))).TotalSeconds;
 
             // 使用済みの認可コードを作成
+            var organization = await context.Organizations.FirstAsync();
             var authCode = new AuthorizationCode
             {
                 Code = "used_auth_code",
@@ -195,7 +218,8 @@ namespace MockOpenIdProvider.Test
                 ClientId = client.Id,
                 Client = client,
                 UserId = user.Id,
-                User = user
+                User = user,
+                OrganizationId = organization.Id
             };
             await context.AuthorizationCodes.AddAsync(authCode);
             await context.SaveChangesAsync();
@@ -236,6 +260,7 @@ namespace MockOpenIdProvider.Test
             var expireTime = (int)(now.AddHours(-1).Subtract(new DateTime(1970, 1, 1))).TotalSeconds;
 
             // 期限切れの認可コードを作成
+            var organization = await context.Organizations.FirstAsync();
             var authCode = new AuthorizationCode
             {
                 Code = "expired_auth_code",
@@ -245,7 +270,8 @@ namespace MockOpenIdProvider.Test
                 ClientId = client.Id,
                 Client = client,
                 UserId = user.Id,
-                User = user
+                User = user,
+                OrganizationId = organization.Id
             };
             await context.AuthorizationCodes.AddAsync(authCode);
             await context.SaveChangesAsync();
@@ -285,6 +311,7 @@ namespace MockOpenIdProvider.Test
             var expireTime = (int)(now.AddDays(30).Subtract(new DateTime(1970, 1, 1))).TotalSeconds;
 
             // 有効なリフレッシュトークンを作成
+            var organization = await context.Organizations.FirstAsync();
             var refreshToken = new RefreshToken
             {
                 Token = "valid_refresh_token",
@@ -293,7 +320,8 @@ namespace MockOpenIdProvider.Test
                 ClientId = client.Id,
                 Client = client,
                 UserId = user.Id,
-                User = user
+                User = user,
+                OrganizationId = organization.Id
             };
             await context.RefreshTokens.AddAsync(refreshToken);
             await context.SaveChangesAsync();
@@ -321,8 +349,8 @@ namespace MockOpenIdProvider.Test
             Assert.Equal("Bearer", tokenResponse["token_type"].ToString());
             Assert.Equal("valid_refresh_token", tokenResponse["refresh_token"].ToString());
 
-            // 新しいアクセストークンが保存されていることを確認
-            var accessToken = await context.AccessTokens.FirstOrDefaultAsync();
+            // 新しいアクセストークンが保存されていることを確認（グローバルクエリフィルターを無視）
+            var accessToken = await context.AccessTokens.IgnoreQueryFilters().FirstOrDefaultAsync();
             Assert.NotNull(accessToken);
         }
         
@@ -367,6 +395,7 @@ namespace MockOpenIdProvider.Test
             var expireTime = (int)(now.AddDays(-1).Subtract(new DateTime(1970, 1, 1))).TotalSeconds;
 
             // 期限切れのリフレッシュトークンを作成
+            var organization = await context.Organizations.FirstAsync();
             var refreshToken = new RefreshToken
             {
                 Token = "expired_refresh_token",
@@ -375,7 +404,8 @@ namespace MockOpenIdProvider.Test
                 ClientId = client.Id,
                 Client = client,
                 UserId = user.Id,
-                User = user
+                User = user,
+                OrganizationId = organization.Id
             };
             await context.RefreshTokens.AddAsync(refreshToken);
             await context.SaveChangesAsync();
@@ -399,8 +429,8 @@ namespace MockOpenIdProvider.Test
             Assert.True(errorResponse.ContainsKey("error"));
             Assert.Equal("invalid_grant", errorResponse["error"].ToString());
             
-            // 期限切れのリフレッシュトークンが削除されていることを確認
-            var tokenCount = await context.RefreshTokens.CountAsync();
+            // 期限切れのリフレッシュトークンが削除されていることを確認（グローバルクエリフィルターを無視）
+            var tokenCount = await context.RefreshTokens.IgnoreQueryFilters().CountAsync();
             Assert.Equal(0, tokenCount);
         }
         
