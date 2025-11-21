@@ -84,5 +84,37 @@ namespace MockOpenIdProvider.Models
 
             base.OnModelCreating(modelBuilder);
         }
+
+        public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            // OrganizationIdが未設定のエンティティに自動設定
+            foreach (var entry in ChangeTracker.Entries())
+            {
+                if (entry.State == EntityState.Added)
+                {
+                    var organizationIdProperty = entry.Property("OrganizationId");
+                    if (organizationIdProperty != null && (int)organizationIdProperty.CurrentValue == 0)
+                    {
+                        // TenantNameが設定されていない場合はスキップ（マイグレーション時など）
+                        if (string.IsNullOrEmpty(_organizationService.TenantName))
+                        {
+                            continue;
+                        }
+
+                        // グローバルクエリフィルターを無効化してOrganizationを取得
+                        var organization = await Organizations
+                            .IgnoreQueryFilters()
+                            .FirstOrDefaultAsync(o => o.TenantName == _organizationService.TenantName, cancellationToken);
+
+                        if (organization != null)
+                        {
+                            organizationIdProperty.CurrentValue = organization.Id;
+                        }
+                    }
+                }
+            }
+
+            return await base.SaveChangesAsync(cancellationToken);
+        }
     }
 }
