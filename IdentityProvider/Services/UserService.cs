@@ -64,7 +64,8 @@ namespace IdentityProvider.Services
                 EcAuthSubject = newUser.Subject,
                 ExternalProvider = request.ExternalProvider,
                 ExternalSubject = request.ExternalSubject,
-                CreatedAt = DateTimeOffset.UtcNow
+                CreatedAt = DateTimeOffset.UtcNow,
+                EcAuthUser = newUser  // Navigation propertyを明示的に設定（EF Core 9マルチテナントフィルタ対応）
             };
 
             _context.ExternalIdpMappings.Add(externalMapping);

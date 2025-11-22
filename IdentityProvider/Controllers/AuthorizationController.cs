@@ -45,6 +45,7 @@ namespace IdentityProvider.Controllers
                 .Where(c => c.ClientId == client_id)
                 .FirstOrDefaultAsync();
             var OpenIdProvider = await _context.OpenIdProviders
+                .IgnoreQueryFilters()
                 .Where(
                     p => p.Name == provider_name
                     && p.ClientId == Client.Id

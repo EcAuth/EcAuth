@@ -10,7 +10,10 @@ builder.Services.AddScoped<ITenantService, TenantService>();
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IAuthorizationCodeService, AuthorizationCodeService>();
+builder.Services.AddScoped<IExternalIdpTokenService, ExternalIdpTokenService>();
+builder.Services.AddScoped<IExternalUserInfoService, ExternalUserInfoService>();
 builder.Services.AddScoped<OrganizationFilter>();
+builder.Services.AddHttpClient(); // HttpClientFactoryを有効化（ExternalUserInfoServiceで使用）
 // Add services to the container.
 builder.Services.AddDbContext<EcAuthDbContext>((sp, options) =>
 {

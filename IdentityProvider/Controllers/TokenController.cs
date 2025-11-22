@@ -52,6 +52,7 @@ namespace IdentityProvider.Controllers
             var State = await Iron.Unseal<State>(state, password, options);
             var IdentityProviderId = State.OpenIdProviderId;
             var IdentityProvider = await _context.OpenIdProviders
+                .IgnoreQueryFilters()
                 .Where(p => p.Id == IdentityProviderId)
                 .FirstOrDefaultAsync();
 

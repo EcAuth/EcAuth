@@ -111,6 +111,8 @@ namespace IdentityProvider.Services
                 return null;
 
             var authorizationCode = await _context.AuthorizationCodes
+                .Include(ac => ac.EcAuthUser)
+                    .ThenInclude(u => u.Organization)
                 .FirstOrDefaultAsync(ac => ac.Code == code);
 
             if (authorizationCode == null)
@@ -146,6 +148,8 @@ namespace IdentityProvider.Services
                 return false;
 
             var authorizationCode = await _context.AuthorizationCodes
+                .Include(ac => ac.EcAuthUser)
+                    .ThenInclude(u => u.Organization)
                 .FirstOrDefaultAsync(ac => ac.Code == code);
 
             if (authorizationCode == null)
@@ -177,6 +181,8 @@ namespace IdentityProvider.Services
         public async Task<int> CleanupExpiredCodesAsync()
         {
             var expiredCodes = await _context.AuthorizationCodes
+                .Include(ac => ac.EcAuthUser)
+                    .ThenInclude(u => u.Organization)
                 .Where(ac => ac.ExpiresAt <= DateTimeOffset.UtcNow)
                 .ToListAsync();
 

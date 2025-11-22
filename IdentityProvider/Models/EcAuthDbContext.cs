@@ -24,6 +24,7 @@ namespace IdentityProvider.Models
         public DbSet<ExternalIdpMapping> ExternalIdpMappings { get; set; }
         public DbSet<AuthorizationCode> AuthorizationCodes { get; set; }
         public DbSet<AccessToken> AccessTokens { get; set; }
+        public DbSet<ExternalIdpToken> ExternalIdpTokens { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -46,6 +47,10 @@ namespace IdentityProvider.Models
             // AccessTokenにもグローバルクエリフィルターを適用
             modelBuilder.Entity<AccessToken>()
                 .HasQueryFilter(at => at.EcAuthUser != null && at.EcAuthUser.Organization != null && at.EcAuthUser.Organization.TenantName == _tenantService.TenantName);
+
+            // ExternalIdpTokenにもグローバルクエリフィルターを適用
+            modelBuilder.Entity<ExternalIdpToken>()
+                .HasQueryFilter(eit => eit.EcAuthUser != null && eit.EcAuthUser.Organization != null && eit.EcAuthUser.Organization.TenantName == _tenantService.TenantName);
 
             // EcAuthUser関連の設定
             modelBuilder.Entity<EcAuthUser>()
@@ -76,6 +81,13 @@ namespace IdentityProvider.Models
                 .HasMany<AccessToken>()
                 .WithOne(at => at.EcAuthUser)
                 .HasForeignKey(at => at.EcAuthSubject)
+                .HasPrincipalKey(u => u.Subject)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<EcAuthUser>()
+                .HasMany<ExternalIdpToken>()
+                .WithOne(eit => eit.EcAuthUser)
+                .HasForeignKey(eit => eit.EcAuthSubject)
                 .HasPrincipalKey(u => u.Subject)
                 .OnDelete(DeleteBehavior.Cascade);
 
@@ -115,6 +127,13 @@ namespace IdentityProvider.Models
 
             modelBuilder.Entity<AccessToken>()
                 .HasIndex(at => at.ExpiresAt);
+
+            modelBuilder.Entity<ExternalIdpToken>()
+                .HasIndex(eit => new { eit.EcAuthSubject, eit.ExternalProvider })
+                .IsUnique();
+
+            modelBuilder.Entity<ExternalIdpToken>()
+                .HasIndex(eit => eit.ExpiresAt);
 
             base.OnModelCreating(modelBuilder);
         }
