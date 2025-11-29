@@ -15,18 +15,3 @@ services:
       - "8081:8081"
     volumes:
       - ${HOME}/.microsoft/usersecrets:/home/app/.microsoft/usersecrets:ro
-
-  mockopenidprovider:
-    build:
-      target: final-with-https
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_HTTP_PORTS=8080
-      - ASPNETCORE_HTTPS_PORTS=8081
-      - ASPNETCORE_Kestrel__Certificates__Default__Password=changeit
-      - ASPNETCORE_Kestrel__Certificates__Default__Path=/https/aspnetapp.pfx
-    ports:
-      - "9090:8080"
-      - "9091:8081"
-    volumes:
-      - ${HOME}/.microsoft/usersecrets:/home/app/.microsoft/usersecrets:ro

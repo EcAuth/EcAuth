@@ -10,6 +10,9 @@ jobs:
 
     env:
       DB_PASSWORD: <YourStrong@Passw0rd>
+      # MockIdP URL は secrets から取得（リポジトリにはコミットしない）
+      MOCK_IDP_BASE_URL: ${{ secrets.MOCK_IDP_BASE_URL }}
+      MOCK_IDP_ORG: dev
 
     services:
       sqlserver:
@@ -29,20 +32,36 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - run: cat .env.dist >> $GITHUB_ENV
-      - run: echo "DB_HOST=localhost" >> $GITHUB_ENV
-      - run: echo "ConnectionStrings__EcAuthDbContext=Server=${DB_HOST};Database=${DB_NAME};User Id=${DB_USER};Password=${DB_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true" >> $GITHUB_ENV
-      - run: echo "ConnectionStrings__MockIdpDbContext=Server=${DB_HOST};Database=${MOCK_IDP_DB_NAME};User Id=${DB_USER};Password=${DB_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true" >> $GITHUB_ENV
-      - run: echo "FEDERATE_OAUTH2_CLIENT_ID=${MOCK_IDP_FEDERATE_CLIENT_ID}" >> $GITHUB_ENV
-      - run: echo "FEDERATE_OAUTH2_CLIENT_SECRET=${MOCK_IDP_FEDERATE_CLIENT_SECRET}" >> $GITHUB_ENV
-      - run: echo "FEDERATE_OAUTH2_AUTHORIZATION_ENDPOINT=https://localhost:9091/authorization" >> $GITHUB_ENV
-      - run: echo "FEDERATE_OAUTH2_TOKEN_ENDPOINT=https://localhost:9091/token" >> $GITHUB_ENV
-      - run: echo "FEDERATE_OAUTH2_USERINFO_ENDPOINT=https://localhost:9091/userinfo" >> $GITHUB_ENV
-      # E2Eテスト用の環境変数（GitHub Actions環境でのHTTPSエンドポイント）
-      - run: echo "E2E_AUTHORIZATION_ENDPOINT=https://localhost:8081/authorization" >> $GITHUB_ENV
-      - run: echo "E2E_TOKEN_ENDPOINT=https://localhost:8081/token" >> $GITHUB_ENV
-      - run: echo "E2E_USERINFO_ENDPOINT=https://localhost:9091/userinfo" >> $GITHUB_ENV
-      - run: echo "E2E_REDIRECT_URI=https://localhost:8081/auth/callback" >> $GITHUB_ENV
+      - name: Load environment variables from .env.dist
+        run: |
+          # .env.dist を読み込み（変数展開を含むものは除外）
+          grep -v '^\$' .env.dist | grep -v '^#' | grep -v '^$' | grep -v '\${' >> $GITHUB_ENV
+
+      - name: Set up environment variables
+        run: |
+          echo "DB_HOST=localhost" >> $GITHUB_ENV
+          echo "ConnectionStrings__EcAuthDbContext=Server=localhost;Database=${DB_NAME};User Id=${DB_USER};Password=${DB_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true" >> $GITHUB_ENV
+          # MockIdP エンドポイント（外部環境を使用）
+          echo "FEDERATE_OAUTH2_CLIENT_ID=${MOCK_IDP_FEDERATE_CLIENT_ID}" >> $GITHUB_ENV
+          echo "FEDERATE_OAUTH2_CLIENT_SECRET=${MOCK_IDP_FEDERATE_CLIENT_SECRET}" >> $GITHUB_ENV
+          echo "FEDERATE_OAUTH2_AUTHORIZATION_ENDPOINT=${MOCK_IDP_BASE_URL}/authorization?org=${MOCK_IDP_ORG}" >> $GITHUB_ENV
+          echo "FEDERATE_OAUTH2_TOKEN_ENDPOINT=${MOCK_IDP_BASE_URL}/token?org=${MOCK_IDP_ORG}" >> $GITHUB_ENV
+          echo "FEDERATE_OAUTH2_USERINFO_ENDPOINT=${MOCK_IDP_BASE_URL}/userinfo?org=${MOCK_IDP_ORG}" >> $GITHUB_ENV
+          # E2Eテスト用の環境変数
+          echo "E2E_AUTHORIZATION_ENDPOINT=https://localhost:8081/authorization" >> $GITHUB_ENV
+          echo "E2E_TOKEN_ENDPOINT=https://localhost:8081/token" >> $GITHUB_ENV
+          echo "E2E_USERINFO_ENDPOINT=${MOCK_IDP_BASE_URL}/userinfo?org=${MOCK_IDP_ORG}" >> $GITHUB_ENV
+          echo "E2E_REDIRECT_URI=https://localhost:8081/auth/callback" >> $GITHUB_ENV
+          # MockIdP 単体テスト用
+          echo "E2E_MOCK_IDP_REDIRECT_URI=http://localhost:8080/auth/callback" >> $GITHUB_ENV
+        env:
+          DB_NAME: ${{ env.DB_NAME }}
+          DB_USER: ${{ env.DB_USER }}
+          DB_PASSWORD: ${{ env.DB_PASSWORD }}
+          MOCK_IDP_FEDERATE_CLIENT_ID: ${{ env.MOCK_IDP_FEDERATE_CLIENT_ID }}
+          MOCK_IDP_FEDERATE_CLIENT_SECRET: ${{ env.MOCK_IDP_FEDERATE_CLIENT_SECRET }}
+          MOCK_IDP_BASE_URL: ${{ env.MOCK_IDP_BASE_URL }}
+          MOCK_IDP_ORG: ${{ env.MOCK_IDP_ORG }}
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -55,7 +74,7 @@ jobs:
           dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
             --name github \
             --username ${{ github.actor }} \
-            --password ${{ secrets.PACKAGES_READ_TOKEN }} \
+            --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
             --store-password-in-clear-text
 
       - name: Restore .NET tools
@@ -67,23 +86,9 @@ jobs:
       - name: Build IdentityProvider
         run: dotnet build --no-restore --configuration Release IdentityProvider
 
-      - name: Build MockOpenIdProvider
-        run: dotnet build --no-restore --configuration Release MockOpenIdProvider
       - name: Migrate IdentityProvider DB
         working-directory: IdentityProvider
         run: dotnet ef database update
-
-      - name: Migrate MockOpenIdProvider DB
-        working-directory: MockOpenIdProvider
-        run: dotnet ef database update
-
-      - name: Start MockOpenIdProvider
-        run: |
-          export ASPNETCORE_HTTPS_PORT=9091
-          export ASPNETCORE_URLS="https://0.0.0.0:9091"
-          dotnet run --project MockOpenIdProvider --configuration Release --urls "https://0.0.0.0:9091" &
-        env:
-          ASPNETCORE_ENVIRONMENT: Development
 
       - name: Start IdentityProvider
         run: |
@@ -92,6 +97,18 @@ jobs:
           dotnet run --project IdentityProvider --configuration Release --urls "https://0.0.0.0:8081" &
         env:
           ASPNETCORE_ENVIRONMENT: Development
+
+      - name: Wait for IdentityProvider to start
+        run: |
+          echo "Waiting for IdentityProvider to start..."
+          for i in {1..30}; do
+            if curl -sk https://localhost:8081/healthz > /dev/null 2>&1; then
+              echo "IdentityProvider is ready"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
 
       - name: Install Node.js
         uses: actions/setup-node@v5
@@ -107,6 +124,10 @@ jobs:
       - name: Run Playwright E2E Tests
         working-directory: E2ETests
         run: yarn playwright test
+        env:
+          MOCK_IDP_BASE_URL: ${{ env.MOCK_IDP_BASE_URL }}
+          MOCK_IDP_ORG: ${{ env.MOCK_IDP_ORG }}
+
       - name: Upload evidence
         if: failure()
         uses: actions/upload-artifact@v4
@@ -117,6 +138,3 @@ jobs:
       - name: Display .NET exceptions
         if: failure()
         run: cat IdentityProvider/logs/*.log || echo "No logs found"
-      - name: Display .NET exceptions
-        if: failure()
-        run: cat MockOpenIdProvider/logs/*.log || echo "No logs found"

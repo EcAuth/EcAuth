@@ -2,12 +2,15 @@ import { test, expect, request } from '@playwright/test';
 
 test.describe.serial('認可コードフローのテストをします', () => {
 
-  const authorizationEndpoint = 'https://localhost:9091/authorization';
-  const tokenEndpoint = 'https://localhost:9091/token';
-  const userInfoEndpoint = 'https://localhost:9091/userinfo';
-  const redirectUri = 'https://localhost:8081/auth/callback';
-  const clientId = 'mockclientid';
-  const clientSecret = 'mock-client-secret';
+  // MockIdP の URL は環境変数から取得（デフォルト: ローカル Docker 環境）
+  const mockIdpBaseUrl = process.env.MOCK_IDP_BASE_URL || 'https://localhost:9091';
+  const mockIdpOrg = process.env.MOCK_IDP_ORG || 'dev';
+  const authorizationEndpoint = `${mockIdpBaseUrl}/authorization?org=${mockIdpOrg}`;
+  const tokenEndpoint = `${mockIdpBaseUrl}/token?org=${mockIdpOrg}`;
+  const userInfoEndpoint = `${mockIdpBaseUrl}/userinfo?org=${mockIdpOrg}`;
+  const redirectUri = process.env.E2E_MOCK_IDP_REDIRECT_URI || 'https://localhost:8081/auth/callback';
+  const clientId = process.env.E2E_MOCK_IDP_CLIENT_ID || 'mockclientid';
+  const clientSecret = process.env.E2E_MOCK_IDP_CLIENT_SECRET || 'mock-client-secret';
   const scopes = 'openid profile email';
 
   test.use({
@@ -20,7 +23,7 @@ test.describe.serial('認可コードフローのテストをします', () => {
   test('MockOpenIdProvider の認可コードフローをテストをします', async ({ page }) => {
     const tokenRequest = await request.newContext();
 
-    await page.goto(`${authorizationEndpoint}?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}`);
+    await page.goto(`${authorizationEndpoint}&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}`);
     const url = new URL(page.url());
     const response = await tokenRequest.post(tokenEndpoint, {
       form: {
