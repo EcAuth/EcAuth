@@ -19,9 +19,15 @@ USER $APP_UID
 # このステージは、サービス プロジェクトのビルドに使用されます
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 ARG BUILD_CONFIGURATION=Release
+ARG GITHUB_USER
+ARG GITHUB_TOKEN
 WORKDIR /src
 COPY ["IdentityProvider/IdentityProvider.csproj", "IdentityProvider/"]
-RUN dotnet restore "./IdentityProvider/IdentityProvider.csproj"
+COPY ["nuget.config", "."]
+RUN if [ -n "$GITHUB_USER" ] && [ -n "$GITHUB_TOKEN" ]; then \
+        dotnet nuget update source github --username "$GITHUB_USER" --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile nuget.config; \
+    fi
+RUN dotnet restore "./IdentityProvider/IdentityProvider.csproj" --configfile nuget.config
 COPY . .
 WORKDIR "/src/IdentityProvider"
 RUN dotnet build "./IdentityProvider.csproj" -c $BUILD_CONFIGURATION -o /app/build

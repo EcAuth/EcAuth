@@ -12,6 +12,9 @@ services:
     build:
       context: .
       dockerfile: IdentityProvider/Dockerfile
+      args:
+        - GITHUB_USER=${GITHUB_USER}
+        - GITHUB_TOKEN=${GITHUB_TOKEN}
     depends_on:
       - db
     environment:
@@ -78,12 +81,3 @@ services:
   #   environment:
   #     ConnectionStrings__EcAuthDbContext: "Server=${DB_HOST};Database=${DB_NAME};User Id=${DB_USER};Password=${DB_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true"
 
-  mockopenidprovider:
-    image: ${DOCKER_REGISTRY-}mockopenidprovider
-    build:
-      context: .
-      dockerfile: MockOpenIdProvider/Dockerfile
-    environment:
-      ConnectionStrings__MockIdpDbContext: "Server=${DB_HOST};Database=${MOCK_IDP_DB_NAME};User Id=${DB_USER};Password=${DB_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true"
-    networks:
-      - backend

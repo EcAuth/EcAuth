@@ -492,5 +492,8 @@ $RECYCLE.BIN/
 /blob-report/
 /playwright/.cache/
 
-# docs
-/EcAuthDocs/
+# docs (EcAuthDocs submodule/clone)
+/docs/
+
+# AI agent work files
+.ai-agent/
