@@ -60,7 +60,8 @@ jobs:
           DB_PASSWORD: ${{ env.DB_PASSWORD }}
           MOCK_IDP_FEDERATE_CLIENT_ID: ${{ env.MOCK_IDP_FEDERATE_CLIENT_ID }}
           MOCK_IDP_FEDERATE_CLIENT_SECRET: ${{ env.MOCK_IDP_FEDERATE_CLIENT_SECRET }}
-          MOCK_IDP_BASE_URL: ${{ env.MOCK_IDP_BASE_URL }}
+          # secrets から直接参照（ジョブレベルのenvでは空になるため）
+          MOCK_IDP_BASE_URL: ${{ secrets.MOCK_IDP_BASE_URL }}
           MOCK_IDP_ORG: ${{ env.MOCK_IDP_ORG }}
 
       - name: Set up .NET
@@ -146,8 +147,10 @@ jobs:
         working-directory: E2ETests
         run: yarn playwright test
         env:
-          MOCK_IDP_BASE_URL: ${{ env.MOCK_IDP_BASE_URL }}
+          # secrets から直接参照（env経由では空になるため）
+          MOCK_IDP_BASE_URL: ${{ secrets.MOCK_IDP_BASE_URL }}
           MOCK_IDP_ORG: ${{ env.MOCK_IDP_ORG }}
+          E2E_MOCK_IDP_REDIRECT_URI: ${{ env.E2E_MOCK_IDP_REDIRECT_URI }}
 
       - name: Upload evidence
         if: failure()
