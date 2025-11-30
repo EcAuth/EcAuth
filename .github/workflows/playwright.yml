@@ -88,27 +88,48 @@ jobs:
 
       - name: Migrate IdentityProvider DB
         working-directory: IdentityProvider
-        run: dotnet ef database update
+        run: |
+          dotnet ef database update
+          # データベースが完全に起動するまで待機
+          echo "Waiting for database to be fully online..."
+          sleep 10
 
       - name: Start IdentityProvider
         run: |
           export ASPNETCORE_HTTPS_PORT=8081
           export ASPNETCORE_URLS="https://0.0.0.0:8081"
-          dotnet run --project IdentityProvider --configuration Release --urls "https://0.0.0.0:8081" &
+          # ログファイルに出力しながらバックグラウンドで起動
+          dotnet run --project IdentityProvider --configuration Release --urls "https://0.0.0.0:8081" > /tmp/identityprovider.log 2>&1 &
+          echo $! > /tmp/identityprovider.pid
+          echo "IdentityProvider started with PID: $(cat /tmp/identityprovider.pid)"
         env:
           ASPNETCORE_ENVIRONMENT: Development
 
       - name: Wait for IdentityProvider to start
         run: |
           echo "Waiting for IdentityProvider to start..."
-          for i in {1..30}; do
+          for i in {1..60}; do
             if curl -sk https://localhost:8081/healthz > /dev/null 2>&1; then
               echo "IdentityProvider is ready"
+              # 追加の安定待機時間
+              sleep 5
               break
             fi
-            echo "Waiting... ($i/30)"
+            # 起動に失敗した場合のログ出力
+            if [ $i -eq 30 ]; then
+              echo "=== IdentityProvider logs (intermediate check) ==="
+              cat /tmp/identityprovider.log || echo "No logs available"
+            fi
+            echo "Waiting... ($i/60)"
             sleep 2
           done
+          # 最終確認
+          if ! curl -sk https://localhost:8081/healthz > /dev/null 2>&1; then
+            echo "ERROR: IdentityProvider failed to start"
+            echo "=== IdentityProvider logs ==="
+            cat /tmp/identityprovider.log || echo "No logs available"
+            exit 1
+          fi
 
       - name: Install Node.js
         uses: actions/setup-node@v5
@@ -135,6 +156,10 @@ jobs:
           name: test-results
           path: 'E2ETests/test-results/'
 
-      - name: Display .NET exceptions
-        if: failure()
-        run: cat IdentityProvider/logs/*.log || echo "No logs found"
+      - name: Display IdentityProvider logs
+        if: always()
+        run: |
+          echo "=== IdentityProvider logs ==="
+          cat /tmp/identityprovider.log || echo "No logs available"
+          echo "=== .NET exception logs ==="
+          cat IdentityProvider/logs/*.log 2>/dev/null || echo "No exception logs found"

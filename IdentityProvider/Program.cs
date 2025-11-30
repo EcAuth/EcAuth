@@ -52,4 +52,22 @@ app.UseAuthorization();
 
 app.MapControllers();
 
+// ヘルスチェックエンドポイント
+app.MapGet("/healthz", async (EcAuthDbContext dbContext) =>
+{
+    try
+    {
+        // データベース接続確認
+        await dbContext.Database.CanConnectAsync();
+        return Results.Ok(new { status = "healthy", database = "connected" });
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(
+            new { status = "unhealthy", database = "disconnected", error = ex.Message },
+            statusCode: 503
+        );
+    }
+});
+
 app.Run();
