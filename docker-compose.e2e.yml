@@ -1,4 +1,5 @@
 # E2Eテスト用のDocker Compose設定
+# MockOpenIdProvider は外部環境（Azure）を使用
 services:
   identityprovider:
     environment:
@@ -10,20 +11,6 @@ services:
     ports:
       - "8080:8080"
       #- "8081:8081"
-    volumes:
-      - ${APPDATA}/Microsoft/UserSecrets:/home/app/.microsoft/usersecrets:ro
-      #- ${APPDATA}/ASP.NET/Https:/home/app/.aspnet/https:ro
-
-  mockopenidprovider:
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_HTTP_PORTS=8080
-      # HTTPS無効化
-      #- ASPNETCORE_HTTPS_PORTS=8081
-      - ASPNETCORE_URLS=http://+:8080
-    ports:
-      - "9090:8080"
-      #- "9091:8081"
     volumes:
       - ${APPDATA}/Microsoft/UserSecrets:/home/app/.microsoft/usersecrets:ro
       #- ${APPDATA}/ASP.NET/Https:/home/app/.aspnet/https:ro

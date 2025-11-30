@@ -28,7 +28,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\IdpUtilities\IdpUtilities.csproj" />
+    <PackageReference Include="EcAuth.IdpUtilities" Version="1.0.0" />
   </ItemGroup>
 
 </Project>

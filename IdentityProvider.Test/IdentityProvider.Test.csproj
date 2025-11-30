@@ -26,7 +26,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\IdentityProvider\IdentityProvider.csproj" />
-    <ProjectReference Include="..\IdpUtilities\IdpUtilities.csproj" />
   </ItemGroup>
 
   <ItemGroup>

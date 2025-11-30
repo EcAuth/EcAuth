@@ -15,9 +15,11 @@ docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-co
 
 ### HTTPSエンドポイント
 - IdentityProvider: https://localhost:8081
-- MockOpenIdProvider: https://localhost:9091
 
 注意: 自己署名証明書を使用しているため、ブラウザで証明書の警告が表示されます。
+
+### E2Eテスト用 MockIdP
+MockIdP は Azure 環境で運用されています。詳細は [docs/CLAUDE.md](docs/CLAUDE.md) を参照してください。
 
 ## Windows環境での起動方法
 
