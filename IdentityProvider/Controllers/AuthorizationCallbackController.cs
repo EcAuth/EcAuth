@@ -14,6 +14,7 @@ namespace IdentityProvider.Controllers
         private readonly EcAuthDbContext _context;
         private readonly IAuthorizationCodeService _authorizationCodeService;
         private readonly IUserService _userService;
+        private readonly IExternalIdpTokenService _externalIdpTokenService;
         private readonly ILogger<AuthorizationCallbackController> _logger;
         private readonly IHostEnvironment _environment;
         private readonly IConfiguration _configuration;
@@ -22,6 +23,7 @@ namespace IdentityProvider.Controllers
             EcAuthDbContext context,
             IAuthorizationCodeService authorizationCodeService,
             IUserService userService,
+            IExternalIdpTokenService externalIdpTokenService,
             ILogger<AuthorizationCallbackController> logger,
             IHostEnvironment environment,
             IConfiguration configuration)
@@ -29,6 +31,7 @@ namespace IdentityProvider.Controllers
             _context = context;
             _authorizationCodeService = authorizationCodeService;
             _userService = userService;
+            _externalIdpTokenService = externalIdpTokenService;
             _logger = logger;
             _environment = environment;
             _configuration = configuration;
@@ -78,6 +81,7 @@ namespace IdentityProvider.Controllers
 
                 // 2. OpenID Provider 情報を取得
                 var identityProvider = await _context.OpenIdProviders
+                    .IgnoreQueryFilters()
                     .Where(p => p.Id == stateData.OpenIdProviderId)
                     .FirstOrDefaultAsync();
 
@@ -88,15 +92,15 @@ namespace IdentityProvider.Controllers
                 }
 
                 // 3. 外部IdPのトークンエンドポイントを呼び出してアクセストークンを取得
-                var accessToken = await ExchangeCodeForTokenAsync(identityProvider, code);
-                if (string.IsNullOrEmpty(accessToken))
+                var tokenResponse = await ExchangeCodeForTokenAsync(identityProvider, code);
+                if (tokenResponse == null || string.IsNullOrEmpty(tokenResponse.AccessToken))
                 {
                     _logger.LogError("Failed to exchange code for access token");
                     return BadRequest("Failed to exchange authorization code");
                 }
 
                 // 4. 外部IdPのユーザー情報を取得
-                var externalUserInfo = await GetExternalUserInfoAsync(identityProvider, accessToken);
+                var externalUserInfo = await GetExternalUserInfoAsync(identityProvider, tokenResponse.AccessToken);
                 if (externalUserInfo == null)
                 {
                     _logger.LogError("Failed to get user info from external provider");
@@ -106,6 +110,19 @@ namespace IdentityProvider.Controllers
                 // 5. JITプロビジョニング：ユーザーを取得または作成
                 var ecAuthUser = await _userService.CreateOrUpdateFromExternalAsync(
                     externalUserInfo, stateData.OrganizationId);
+
+                // 5.1. 外部IdPトークンを保存
+                await _externalIdpTokenService.SaveTokenAsync(new IExternalIdpTokenService.SaveTokenRequest
+                {
+                    EcAuthSubject = ecAuthUser.Subject,
+                    ExternalProvider = identityProvider.Name,
+                    AccessToken = tokenResponse.AccessToken,
+                    RefreshToken = tokenResponse.RefreshToken,
+                    ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(tokenResponse.ExpiresIn)
+                });
+
+                _logger.LogInformation("External IdP token saved for user {Subject} and provider {Provider}",
+                    ecAuthUser.Subject, identityProvider.Name);
 
                 // 6. EcAuth独自の認可コードを生成
                 var client = await _context.Clients
@@ -147,9 +164,19 @@ namespace IdentityProvider.Controllers
         }
 
         /// <summary>
+        /// トークンエンドポイントからのレスポンス
+        /// </summary>
+        private class TokenResponse
+        {
+            public string AccessToken { get; set; } = string.Empty;
+            public string? RefreshToken { get; set; }
+            public int ExpiresIn { get; set; }
+        }
+
+        /// <summary>
         /// 外部IdPの認可コードをアクセストークンに交換
         /// </summary>
-        private async Task<string?> ExchangeCodeForTokenAsync(OpenIdProvider provider, string code)
+        private async Task<TokenResponse?> ExchangeCodeForTokenAsync(OpenIdProvider provider, string code)
         {
             try
             {
@@ -183,11 +210,35 @@ namespace IdentityProvider.Controllers
                 }
 
                 var tokenContent = await response.Content.ReadAsStringAsync();
-                var tokenResponse = JsonSerializer.Deserialize<Dictionary<string, object>>(tokenContent);
+                var tokenData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(tokenContent);
 
-                return tokenResponse?.ContainsKey("access_token") == true
-                    ? tokenResponse["access_token"].ToString()
+                if (tokenData?.ContainsKey("access_token") != true)
+                {
+                    _logger.LogError("Access token not found in token response");
+                    return null;
+                }
+
+                var accessToken = tokenData["access_token"].GetString();
+                if (string.IsNullOrEmpty(accessToken))
+                {
+                    _logger.LogError("Access token is null or empty");
+                    return null;
+                }
+
+                var refreshToken = tokenData.ContainsKey("refresh_token")
+                    ? tokenData["refresh_token"].GetString()
                     : null;
+
+                var expiresIn = tokenData.ContainsKey("expires_in")
+                    ? tokenData["expires_in"].GetInt32()
+                    : 3600; // デフォルト1時間
+
+                return new TokenResponse
+                {
+                    AccessToken = accessToken,
+                    RefreshToken = refreshToken,
+                    ExpiresIn = expiresIn
+                };
             }
             catch (Exception ex)
             {

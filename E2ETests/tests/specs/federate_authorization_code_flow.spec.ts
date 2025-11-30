@@ -14,17 +14,49 @@ test.describe.serial('認可コードフローフェデレーションのテス�
   const providerName = 'federate-oauth2';
   const state = 'state';
 
-  test.use({
-    httpCredentials: {
-      username: 'defaultuser@example.com',
-      password: 'password',
-    },
-  });
+  // MockIdPのBasic認証情報
+  const mockIdpCredentials = {
+    username: 'defaultuser@example.com',
+    password: 'password',
+  };
 
-  test('フェデレーションをテストをします', async ({ page }) => {
+  test('フェデレーションをテストをします', async ({ browser }) => {
+    // MockIdPドメインへの認証情報を含むコンテキストを作成
+    const mockIdpBaseUrl = process.env.MOCK_IDP_BASE_URL || 'https://mock-openid-provider.mangoplant-f8a75293.japaneast.azurecontainerapps.io';
+    const mockIdpOrigin = new URL(mockIdpBaseUrl).origin;
+
+    const context = await browser.newContext({
+      ignoreHTTPSErrors: true,
+      httpCredentials: {
+        ...mockIdpCredentials,
+        origin: mockIdpOrigin,
+      },
+    });
+    const page = await context.newPage();
     const tokenRequest = await request.newContext();
     const authUrl = `${authorizationEndpoint}?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&provider_name=${providerName}&state=${state}`;
+
+    console.log('========================================');
+    console.log('🔵 E2E Test Configuration:');
+    console.log('   Authorization Endpoint:', authorizationEndpoint);
+    console.log('   Token Endpoint:', tokenEndpoint);
+    console.log('   EcAuth UserInfo Endpoint:', ecAuthUserInfoEndpoint);
+    console.log('   External IdP UserInfo Endpoint:', externalIdpUserInfoEndpoint);
+    console.log('   Redirect URI:', redirectUri);
+    console.log('   Provider Name:', providerName);
+    console.log('   MockIdP Origin:', mockIdpOrigin);
+    console.log('========================================');
     console.log('🔵 Opening authorization URL:', authUrl);
+
+    // ネットワークリクエストのログ
+    page.on('request', (request) => {
+      console.log('🌐 Request:', request.method(), request.url());
+    });
+
+    // ネットワークレスポンスのログ
+    page.on('response', (response) => {
+      console.log('📨 Response:', response.status(), response.url());
+    });
 
     // ページナビゲーションのイベントをログ
     page.on('framenavigated', (frame) => {
@@ -36,6 +68,11 @@ test.describe.serial('認可コードフローフェデレーションのテス�
     // コンソールログを表示
     page.on('console', (msg) => {
       console.log('🖥️ Browser console:', msg.type(), msg.text());
+    });
+
+    // リクエスト失敗のログ
+    page.on('requestfailed', (request) => {
+      console.log('❌ Request failed:', request.url(), request.failure()?.errorText);
     });
 
     await page.goto(authUrl);
@@ -149,5 +186,51 @@ test.describe.serial('認可コードフローフェデレーションのテス�
     expect(userInfoResponse.status()).toBe(200);
     expect(userInfoBody.sub).toBeTruthy();
     console.log('✅ UserInfo endpoint test completed successfully');
+
+    // External UserInfo エンドポイントのテスト
+    const externalUserInfoEndpoint = `${authorizationEndpoint.replace('/authorization', '')}/api/external-userinfo`;
+    console.log('📤 Sending External UserInfo request to:', externalUserInfoEndpoint);
+    console.log('🔑 Using access token:', responseBody.access_token.substring(0, 20) + '...');
+    console.log('🏷️ Provider:', providerName);
+
+    const externalUserInfoRequest = await request.newContext();
+    const externalUserInfoResponse = await externalUserInfoRequest.get(
+      `${externalUserInfoEndpoint}?provider=${providerName}`,
+      {
+        headers: {
+          Authorization: `Bearer ${responseBody.access_token}`
+        }
+      }
+    );
+
+    console.log('📥 External UserInfo response status:', externalUserInfoResponse.status());
+    console.log('📥 External UserInfo response headers:', externalUserInfoResponse.headers());
+
+    const externalUserInfoBody = await externalUserInfoResponse.json();
+    console.log('📥 External UserInfo response body:', JSON.stringify(externalUserInfoBody, null, 2));
+
+    if (externalUserInfoBody.error) {
+      console.log('❌ External UserInfo request failed with error:', externalUserInfoBody.error);
+      console.log('❌ Error description:', externalUserInfoBody.error_description);
+    } else {
+      console.log('✅ External UserInfo request successful');
+    }
+
+    // External UserInfo レスポンスの検証
+    // Note: 現在のMockIdPのUserInfoエンドポイントはsubのみを返します
+    // email等の追加クレームはMockIdPの改修後に検証を追加
+    expect(externalUserInfoResponse.status()).toBe(200);
+    expect(externalUserInfoBody.sub).toBeTruthy();
+    expect(externalUserInfoBody.provider).toBe(providerName);
+    console.log('✅ External UserInfo endpoint test completed successfully');
+    console.log('📊 External UserInfo claims:', {
+      sub: externalUserInfoBody.sub,
+      email: externalUserInfoBody.email ?? '(not provided by MockIdP)',
+      name: externalUserInfoBody.name ?? '(not provided by MockIdP)',
+      provider: externalUserInfoBody.provider
+    });
+
+    // コンテキストをクローズ
+    await context.close();
   });
 });
