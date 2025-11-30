@@ -69,9 +69,11 @@ namespace IdentityProvider.Controllers
             Console.WriteLine($"Sealed Data: {sealedData}");
             var unsealedData = await Iron.Unseal<State>(sealedData, password, options);
             Console.WriteLine($"Unsealed Data: {unsealedData}");
+            // AuthorizationEndpoint に既存のクエリパラメータが含まれている場合は & で連結
+            var separator = OpenIdProvider.AuthorizationEndpoint?.Contains("?") == true ? "&" : "?";
             return Redirect(
                 $"{OpenIdProvider.AuthorizationEndpoint}" +
-                $"?client_id={OpenIdProvider.IdpClientId}" +
+                $"{separator}client_id={OpenIdProvider.IdpClientId}" +
                 $"&scope={Uri.EscapeDataString(scopes)}" +
                 $"&response_type=code" +
                 $"&redirect_uri={Uri.EscapeDataString(_configuration["DEFAULT_ORGANIZATION_REDIRECT_URI"] ?? "https://localhost:8081/auth/callback")}" +

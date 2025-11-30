@@ -42,6 +42,7 @@ jobs:
           echo "DB_HOST=localhost" >> $GITHUB_ENV
           echo "ConnectionStrings__EcAuthDbContext=Server=localhost;Database=${DB_NAME};User Id=${DB_USER};Password=${DB_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true" >> $GITHUB_ENV
           # MockIdP エンドポイント（外部環境を使用）
+          # ?org= パラメータはマルチテナント対応のMockIdPで必須
           echo "FEDERATE_OAUTH2_CLIENT_ID=${MOCK_IDP_FEDERATE_CLIENT_ID}" >> $GITHUB_ENV
           echo "FEDERATE_OAUTH2_CLIENT_SECRET=${MOCK_IDP_FEDERATE_CLIENT_SECRET}" >> $GITHUB_ENV
           echo "FEDERATE_OAUTH2_AUTHORIZATION_ENDPOINT=${MOCK_IDP_BASE_URL}/authorization?org=${MOCK_IDP_ORG}" >> $GITHUB_ENV
