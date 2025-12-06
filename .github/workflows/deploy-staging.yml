@@ -15,6 +15,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      packages: read
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -23,6 +27,15 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Add GitHub Packages source with credentials
+        run: |
+          dotnet nuget remove source github || true
+          dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
+            --name github \
+            --username ${{ github.actor }} \
+            --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+            --store-password-in-clear-text
 
       - name: Restore dependencies
         run: dotnet restore IdentityProvider/IdentityProvider.csproj
@@ -45,6 +58,10 @@ jobs:
     environment:
       name: staging
       url: https://ecauth-staging.azurewebsites.net
+
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Download artifact
