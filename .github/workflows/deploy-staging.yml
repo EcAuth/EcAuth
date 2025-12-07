@@ -56,7 +56,6 @@ jobs:
     needs: build
     environment:
       name: staging
-      url: https://ecauth-staging-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
 
     permissions:
       id-token: write
