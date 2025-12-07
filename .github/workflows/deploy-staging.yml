@@ -83,7 +83,7 @@ jobs:
 
       - name: Health check
         env:
-          HEALTH_CHECK_URL: https://ecauth-staging-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net/health
+          HEALTH_CHECK_URL: https://ecauth-staging-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net/healthz
         run: |
           echo "Waiting for deployment to complete..."
           sleep 30
