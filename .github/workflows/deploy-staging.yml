@@ -7,7 +7,6 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_WEBAPP_NAME: ecauth-staging
   AZURE_WEBAPP_PACKAGE_PATH: ./publish
   DOTNET_VERSION: '9.0.x'
 
@@ -57,7 +56,7 @@ jobs:
     needs: build
     environment:
       name: staging
-      url: https://ecauth-staging.azurewebsites.net
+      url: https://ecauth-staging-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
 
     permissions:
       id-token: write
@@ -80,15 +79,17 @@ jobs:
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          app-name: ecauth-staging-${{ secrets.WEB_APP_SUFFIX }}
           package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
 
       - name: Health check
+        env:
+          HEALTH_CHECK_URL: https://ecauth-staging-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net/health
         run: |
           echo "Waiting for deployment to complete..."
           sleep 30
           for i in {1..10}; do
-            response=$(curl -s -o /dev/null -w "%{http_code}" https://ecauth-staging.azurewebsites.net/health || echo "000")
+            response=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" || echo "000")
             if [ "$response" = "200" ]; then
               echo "Health check passed!"
               exit 0
