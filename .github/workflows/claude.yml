@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: read
       pull-requests: write
       issues: write
       id-token: write
@@ -43,6 +44,14 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '9.0.x'
+      - name: Add GitHub Packages source with credentials
+        run: |
+          dotnet nuget remove source github || true
+          dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
+            --name github \
+            --username ${{ github.actor }} \
+            --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+            --store-password-in-clear-text
       - name: Restore .NET tools
         run: dotnet tool restore
       - name: Restore dependencies
@@ -64,4 +73,3 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://docs.claude.com/en/docs/claude-code/sdk#command-line for available options
           claude_args: '--allowed-tools Bash'
-
