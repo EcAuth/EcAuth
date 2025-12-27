@@ -44,6 +44,14 @@ namespace IdentityProvider.Middlewares
                 return string.Empty;
             }
 
+            // Azure プラットフォームドメインの場合は空文字列を返す（デフォルトテナントにフォールバック）
+            // これらのドメインはテナント名を含まないため除外する
+            if (host.EndsWith(".azurewebsites.net", StringComparison.OrdinalIgnoreCase) ||
+                host.EndsWith(".azurecontainerapps.io", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
             // サブドメイン形式（tenant.example.com）からテナント名を抽出
             var segments = host.Split('.');
             if (segments.Length > 2)
