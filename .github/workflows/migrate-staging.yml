@@ -1,0 +1,120 @@
+name: Migrate Staging Database
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run mode (generate script only, do not apply)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  DOTNET_VERSION: '9.0.x'
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: read
+      id-token: write  # Required for Azure workload identity federation
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Load secrets from 1Password
+        id: load_secrets
+        uses: 1password/load-secrets-action@v3
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_NONPROD }}
+          # Azure SQL Database credentials
+          SQL_HOST: op://EcAuth/ecauth-staging-sql/hostname
+          SQL_DATABASE: op://EcAuth/ecauth-staging-sql/database
+          SQL_USERNAME: op://EcAuth/ecauth-staging-sql/username
+          SQL_PASSWORD: op://EcAuth/ecauth-staging-sql/password
+          # Staging Organization/Client settings (for migration data)
+          STAGING_ORGANIZATION_CODE: op://EcAuth/ecauth-staging-app/organization_code
+          STAGING_ORGANIZATION_NAME: op://EcAuth/ecauth-staging-app/organization_name
+          STAGING_ORGANIZATION_TENANT_NAME: op://EcAuth/ecauth-staging-app/organization_tenant_name
+          STAGING_CLIENT_ID: op://EcAuth/ecauth-staging-app/client_id
+          STAGING_CLIENT_SECRET: op://EcAuth/ecauth-staging-app/client_secret
+          STAGING_APP_NAME: op://EcAuth/ecauth-staging-app/app_name
+          STAGING_REDIRECT_URI: op://EcAuth/ecauth-staging-app/redirect_uri
+          # Staging MockIdP settings
+          STAGING_MOCK_IDP_APP_NAME: op://EcAuth/ecauth-staging-mockidp/app_name
+          STAGING_MOCK_IDP_CLIENT_ID: op://EcAuth/ecauth-staging-mockidp/client_id
+          STAGING_MOCK_IDP_CLIENT_SECRET: op://EcAuth/ecauth-staging-mockidp/client_secret
+          MOCK_IDP_BASE_URL: op://EcAuth/mockidp-staging/base_url
+          STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT: op://EcAuth/mockidp-staging/authorization_endpoint
+          STAGING_MOCK_IDP_TOKEN_ENDPOINT: op://EcAuth/mockidp-staging/token_endpoint
+          STAGING_MOCK_IDP_USERINFO_ENDPOINT: op://EcAuth/mockidp-staging/userinfo_endpoint
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Add GitHub Packages source with credentials
+        run: |
+          dotnet nuget remove source github || true
+          dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
+            --name github \
+            --username ${{ github.actor }} \
+            --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+            --store-password-in-clear-text
+
+      - name: Restore .NET tools
+        run: dotnet tool restore
+
+      - name: Restore dependencies
+        run: dotnet restore IdentityProvider/IdentityProvider.csproj
+
+      - name: Build
+        run: dotnet build IdentityProvider/IdentityProvider.csproj --configuration Release --no-restore
+
+      - name: Generate migration script
+        run: |
+          cd IdentityProvider
+          dotnet ef migrations script --idempotent --output ../migration.sql
+          echo "Generated migration script:"
+          cat ../migration.sql
+
+      - name: Upload migration script as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-script
+          path: migration.sql
+          retention-days: 30
+
+      - name: Build connection string
+        id: connection
+        run: |
+          CONNECTION_STRING="Server=tcp:${SQL_HOST},1433;Initial Catalog=${SQL_DATABASE};User ID=${SQL_USERNAME};Password=${SQL_PASSWORD};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+          echo "::add-mask::${CONNECTION_STRING}"
+          echo "connection_string=${CONNECTION_STRING}" >> $GITHUB_OUTPUT
+
+      - name: Login to Azure
+        if: ${{ inputs.dry_run != true }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Apply migration to staging database
+        if: ${{ inputs.dry_run != true }}
+        uses: azure/sql-action@v2.3
+        with:
+          connection-string: ${{ steps.connection.outputs.connection_string }}
+          path: ./migration.sql
+
+      - name: Dry run - Skip migration apply
+        if: ${{ inputs.dry_run == true }}
+        run: |
+          echo "Dry run mode enabled. Migration script was generated but not applied."
+          echo "Review the migration script artifact before running without dry_run."
