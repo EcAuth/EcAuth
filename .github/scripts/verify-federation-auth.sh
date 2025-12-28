@@ -82,7 +82,7 @@ main() {
 
   # Step 1: EcAuth 認可エンドポイント
   log_step "Step 1: EcAuth 認可エンドポイント"
-  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=staging-mockidp&state=test123" 2>&1 | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=staging-mockidp&state=test123" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
 
   if [ -z "$MOCKIDP_URL" ]; then
     log_error "Failed to get MockIdP redirect URL"
@@ -96,7 +96,7 @@ main() {
 
   # Step 2: MockIdP で認証
   log_step "Step 2: MockIdP で認証"
-  ECAUTH_CALLBACK=$(curl -s -i -u "${MOCK_USER}:${MOCK_PASS}" "$MOCKIDP_URL" 2>&1 | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+  ECAUTH_CALLBACK=$(curl -s -i -u "${MOCK_USER}:${MOCK_PASS}" "$MOCKIDP_URL" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
 
   if [ -z "$ECAUTH_CALLBACK" ]; then
     log_error "Failed to authenticate with MockIdP"
@@ -118,7 +118,7 @@ main() {
     -d "code=${MOCKIDP_CODE}" \
     -d "state=${STATE}" \
     -d "scope=" \
-    -d "action=authorize" 2>&1 | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+    -d "action=authorize" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
 
   ECAUTH_CODE=$(echo "$FINAL_REDIRECT" | sed -n 's/.*code=\([^&]*\).*/\1/p')
   if [ -z "$ECAUTH_CODE" ]; then
