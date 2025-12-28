@@ -13,7 +13,7 @@
 #   GITHUB_OUTPUT    - GitHub Actions の output ファイル（設定されていれば出力を書き込む）
 #   GITHUB_STEP_SUMMARY - GitHub Actions の step summary ファイル
 #
-set -e
+set -eo pipefail
 
 # 色付き出力（GitHub Actions では無効化）
 if [ -n "$GITHUB_ACTIONS" ]; then
