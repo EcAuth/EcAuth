@@ -148,7 +148,8 @@ main() {
 
   if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
     log_error "Failed to get access token"
-    echo "Response: $TOKEN_RESPONSE"
+    # セキュリティ: トークン情報を除外してエラー情報のみ出力
+    echo "Error: $(echo "$TOKEN_RESPONSE" | jq -c '{error, error_description}' 2>/dev/null || echo 'Failed to parse response')"
     write_summary "| トークン取得 | ❌ Failed |"
     write_output "result" "failure"
     write_output "failed_step" "token_endpoint"
@@ -167,7 +168,8 @@ main() {
   SUB=$(echo "$USERINFO_RESPONSE" | jq -r '.sub')
   if [ -z "$SUB" ] || [ "$SUB" = "null" ]; then
     log_error "Failed to get user info"
-    echo "Response: $USERINFO_RESPONSE"
+    # セキュリティ: エラー情報のみ出力（PII を含む可能性があるため全体を出力しない）
+    echo "Error: $(echo "$USERINFO_RESPONSE" | jq -c '{error, error_description}' 2>/dev/null || echo 'Failed to parse response')"
     write_summary "| ユーザー情報取得 | ❌ Failed |"
     write_output "result" "failure"
     write_output "failed_step" "userinfo_endpoint"
