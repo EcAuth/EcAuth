@@ -149,12 +149,13 @@ namespace IdentityProvider.Controllers
                 _logger.LogInformation("Generated EcAuth authorization code for user: {Subject}", ecAuthUser.Subject);
 
                 // 7. クライアントにリダイレクト（EcAuth独自の認可コードを使用）
-                return Redirect(
-                    $"{stateData.RedirectUri}" +
-                    $"?code={authorizationCode.Code}" +
-                    $"&scope={stateData.Scope}" +
-                    $"&state={HttpUtility.UrlEncode(state)}"
-                );
+                // RFC 6749 Section 4.1.2: クライアントから受け取った state をそのまま返す
+                var redirectUrl = $"{stateData.RedirectUri}?code={authorizationCode.Code}&scope={stateData.Scope}";
+                if (!string.IsNullOrEmpty(stateData.ClientState))
+                {
+                    redirectUrl += $"&state={HttpUtility.UrlEncode(stateData.ClientState)}";
+                }
+                return Redirect(redirectUrl);
             }
             catch (Exception ex)
             {
