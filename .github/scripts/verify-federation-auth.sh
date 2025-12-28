@@ -113,6 +113,15 @@ main() {
   MOCKIDP_CODE=$(echo "$ECAUTH_CALLBACK" | sed -n 's/.*code=\([^&]*\).*/\1/p')
   STATE=$(echo "$ECAUTH_CALLBACK" | sed -n 's/.*state=\([^&]*\).*/\1/p')
 
+  # code と state パラメータの検証
+  if [ -z "$MOCKIDP_CODE" ] || [ -z "$STATE" ]; then
+    log_error "Failed to extract code or state from callback URL"
+    write_summary "| 認可画面承認 | ❌ Missing parameters |"
+    write_output "result" "failure"
+    write_output "failed_step" "callback_parameter_extraction"
+    exit 1
+  fi
+
   FINAL_REDIRECT=$(curl -s -i -X POST "${ECAUTH_BASE_URL}/auth/callback" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "code=${MOCKIDP_CODE}" \
