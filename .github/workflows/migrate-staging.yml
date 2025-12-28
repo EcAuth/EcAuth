@@ -15,6 +15,8 @@ env:
 jobs:
   migrate:
     runs-on: ubuntu-latest
+    environment:
+      name: staging
 
     permissions:
       contents: read
@@ -53,6 +55,9 @@ jobs:
           STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT: op://EcAuth/mockidp-staging/authorization_endpoint
           STAGING_MOCK_IDP_TOKEN_ENDPOINT: op://EcAuth/mockidp-staging/token_endpoint
           STAGING_MOCK_IDP_USERINFO_ENDPOINT: op://EcAuth/mockidp-staging/userinfo_endpoint
+          # MockIdP test user credentials (for federation verification)
+          MOCK_USER: op://EcAuth/mockidp-staging/default_user_email
+          MOCK_PASS: op://EcAuth/mockidp-staging/default_user_password
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -118,3 +123,24 @@ jobs:
         run: |
           echo "Dry run mode enabled. Migration script was generated but not applied."
           echo "Review the migration script artifact before running without dry_run."
+
+      - name: Federation authentication verification
+        if: ${{ inputs.dry_run != true }}
+        id: federation_verify
+        env:
+          ECAUTH_BASE_URL: https://ecauth-staging-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
+        run: |
+          # 1Password action でエクスポートされたシェル環境変数を使用
+          export CLIENT_ID="$STAGING_CLIENT_ID"
+          export CLIENT_SECRET="$STAGING_CLIENT_SECRET"
+          ./.github/scripts/verify-federation-auth.sh
+
+      - name: Federation verification result
+        if: ${{ inputs.dry_run != true && always() }}
+        run: |
+          echo "Federation verification result: ${{ steps.federation_verify.outputs.result }}"
+          if [ "${{ steps.federation_verify.outputs.result }}" = "success" ]; then
+            echo "✅ User subject: ${{ steps.federation_verify.outputs.user_sub }}"
+          else
+            echo "❌ Failed at step: ${{ steps.federation_verify.outputs.failed_step }}"
+          fi
