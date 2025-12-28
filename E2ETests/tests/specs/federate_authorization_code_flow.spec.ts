@@ -119,6 +119,9 @@ test.describe.serial('認可コードフローフェデレーションのテス�
     console.log('🔑 Authorization code:', url.searchParams.get('code'));
     console.log('🏷️ State:', url.searchParams.get('state'));
 
+    // RFC 6749 Section 4.1.2: クライアントから送信した state がそのまま返されることを検証
+    expect(url.searchParams.get('state')).toBe(state);
+
     // トークンエンドポイントへのリクエスト
     const tokenRequestData = {
       client_id: clientId,

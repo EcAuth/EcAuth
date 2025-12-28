@@ -30,6 +30,7 @@ namespace IdentityProvider.Controllers
         /// - client.client_id
         /// - open_id_provider.name
         /// - redirect_uri
+        /// - state（オプション：クライアントから渡された場合はコールバック時にそのまま返す）
         /// パラメータで OpenID Provider を特定し、その IdP の Authorization endpoint にリダイレクトします。
         /// リダイレクト時に以下のパラメータを付与します。
         /// - client_id=<open_id_provider.client_id>
@@ -38,7 +39,7 @@ namespace IdentityProvider.Controllers
         /// - redirect_uri=<clientに登録したredirect_uri>
         /// - state=<state>
         /// </remarks>
-        public async Task<IActionResult> Federate([FromQuery] string client_id, [FromQuery] string provider_name, [FromQuery] string redirect_uri)
+        public async Task<IActionResult> Federate([FromQuery] string client_id, [FromQuery] string provider_name, [FromQuery] string redirect_uri, [FromQuery] string? state)
         {
             Console.WriteLine(_tenantService.TenantName);
             var Client = await _context.Clients
@@ -55,13 +56,14 @@ namespace IdentityProvider.Controllers
             {
                 scopes = "profile postal_code profile:user_id";
             }
-            var data = new State 
-            { 
-                OpenIdProviderId = OpenIdProvider.Id, 
+            var data = new State
+            {
+                OpenIdProviderId = OpenIdProvider.Id,
                 RedirectUri = redirect_uri,
                 ClientId = Client.Id,
                 OrganizationId = Client.OrganizationId ?? 0,
-                Scope = scopes
+                Scope = scopes,
+                ClientState = state  // クライアントの state を保存（RFC 6749 Section 4.1.2 準拠）
             };
             var password = Environment.GetEnvironmentVariable("STATE_PASSWORD");
             var options = new Iron.Options();

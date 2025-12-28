@@ -14,6 +14,7 @@ namespace IdentityProvider.Test.Models
             Assert.Equal(0, state.ClientId);
             Assert.Equal(0, state.OrganizationId);
             Assert.Null(state.Scope);
+            Assert.Null(state.ClientState);
         }
 
         [Fact]
@@ -24,6 +25,7 @@ namespace IdentityProvider.Test.Models
             var clientId = 2;
             var organizationId = 3;
             var scope = "openid profile";
+            var clientState = "TfZPj0gtwK0HSEAlEyXiTzuevf1";
 
             var state = new State
             {
@@ -31,7 +33,8 @@ namespace IdentityProvider.Test.Models
                 RedirectUri = redirectUri,
                 ClientId = clientId,
                 OrganizationId = organizationId,
-                Scope = scope
+                Scope = scope,
+                ClientState = clientState
             };
 
             Assert.Equal(openIdProviderId, state.OpenIdProviderId);
@@ -39,6 +42,7 @@ namespace IdentityProvider.Test.Models
             Assert.Equal(clientId, state.ClientId);
             Assert.Equal(organizationId, state.OrganizationId);
             Assert.Equal(scope, state.Scope);
+            Assert.Equal(clientState, state.ClientState);
         }
 
         [Theory]
@@ -153,10 +157,44 @@ namespace IdentityProvider.Test.Models
             Assert.Equal(0, state.ClientId);
             Assert.Equal(0, state.OrganizationId);
             Assert.Null(state.Scope);
+            Assert.Null(state.ClientState);
 
             // 既存のプロパティが正常に動作することを確認
             Assert.Equal(1, state.OpenIdProviderId);
             Assert.Equal("https://example.com/callback", state.RedirectUri);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("TfZPj0gtwK0HSEAlEyXiTzuevf1")]
+        [InlineData("abc123xyz")]
+        [InlineData("TfZPj0gtwK0HSEAlEyXiTzuevf1.~SHT")]
+        public void State_ClientState_ShouldAcceptValidValues(string? clientState)
+        {
+            var state = new State { ClientState = clientState };
+
+            Assert.Equal(clientState, state.ClientState);
+        }
+
+        [Fact]
+        public void State_ClientState_ShouldPreserveOriginalValue()
+        {
+            // RFC 6749 Section 4.1.2: クライアントから受け取った state は
+            // そのまま返す必要があるため、値が変更されないことを確認
+            var originalState = "TfZPj0gtwK0HSEAlEyXiTzuevf1.~SHT";
+            var state = new State { ClientState = originalState };
+
+            Assert.Equal(originalState, state.ClientState);
+
+            // 他のプロパティを変更しても ClientState に影響しないことを確認
+            state.OpenIdProviderId = 999;
+            state.ClientId = 123;
+            state.OrganizationId = 456;
+            state.Scope = "openid profile email";
+            state.RedirectUri = "https://other.example.com/callback";
+
+            Assert.Equal(originalState, state.ClientState);
         }
     }
 }
