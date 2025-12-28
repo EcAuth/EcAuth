@@ -40,3 +40,10 @@ MOCK_IDP_BASE_URL=op://EcAuth/mockidp-staging/base_url
 STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT=op://EcAuth/mockidp-staging/authorization_endpoint
 STAGING_MOCK_IDP_TOKEN_ENDPOINT=op://EcAuth/mockidp-staging/token_endpoint
 STAGING_MOCK_IDP_USERINFO_ENDPOINT=op://EcAuth/mockidp-staging/userinfo_endpoint
+
+# =============================================================================
+# EC-CUBE2 Plugin Client Settings
+# =============================================================================
+ECCUBE2_CLIENT_ID=op://EcAuth/eccube2-ecauth-plugin/client_id
+ECCUBE2_CLIENT_SECRET=op://EcAuth/eccube2-ecauth-plugin/client_secret
+ECCUBE2_REDIRECT_URI=op://EcAuth/eccube2-ecauth-plugin/redirect_uri
