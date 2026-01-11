@@ -160,11 +160,11 @@
         <div class="grid">
             <div class="form-group">
                 <label for="clientId">Client ID</label>
-                <input type="text" id="clientId" value="test-client-id" placeholder="Enter Client ID">
+                <input type="text" id="clientId" value="client_id" placeholder="Enter Client ID">
             </div>
             <div class="form-group">
                 <label for="clientSecret">Client Secret</label>
-                <input type="text" id="clientSecret" value="test-client-secret" placeholder="Enter Client Secret">
+                <input type="text" id="clientSecret" value="client_secret" placeholder="Enter Client Secret">
             </div>
             <div class="form-group">
                 <label for="rpId">RP ID (Domain)</label>
@@ -181,6 +181,7 @@
             <div class="form-group">
                 <label for="redirectUri">Redirect URI</label>
                 <input type="text" id="redirectUri" value="https://localhost:8081/admin/ecauth/callback" placeholder="e.g., https://shop.example.com/admin/ecauth/callback">
+                <small style="color:#666;">Note: Must be registered in the client's allowed redirect URIs</small>
             </div>
         </div>
         <button onclick="generateSubject()">Generate Random Subject</button>

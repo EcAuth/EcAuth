@@ -4,6 +4,7 @@ using IdentityProvider.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Headers;
+using System.Text.Json.Serialization;
 using System.Web;
 
 namespace IdentityProvider.Controllers
@@ -45,11 +46,17 @@ namespace IdentityProvider.Controllers
         /// </summary>
         public class RegisterOptionsRequest
         {
+            [JsonPropertyName("client_id")]
             public string ClientId { get; set; } = string.Empty;
+            [JsonPropertyName("client_secret")]
             public string ClientSecret { get; set; } = string.Empty;
+            [JsonPropertyName("rp_id")]
             public string RpId { get; set; } = string.Empty;
+            [JsonPropertyName("b2b_subject")]
             public string B2BSubject { get; set; } = string.Empty;
+            [JsonPropertyName("display_name")]
             public string? DisplayName { get; set; }
+            [JsonPropertyName("device_name")]
             public string? DeviceName { get; set; }
         }
 
@@ -58,10 +65,15 @@ namespace IdentityProvider.Controllers
         /// </summary>
         public class RegisterVerifyRequest
         {
+            [JsonPropertyName("client_id")]
             public string ClientId { get; set; } = string.Empty;
+            [JsonPropertyName("client_secret")]
             public string ClientSecret { get; set; } = string.Empty;
+            [JsonPropertyName("session_id")]
             public string SessionId { get; set; } = string.Empty;
+            [JsonPropertyName("response")]
             public AuthenticatorAttestationRawResponse Response { get; set; } = null!;
+            [JsonPropertyName("device_name")]
             public string? DeviceName { get; set; }
         }
 
@@ -70,8 +82,11 @@ namespace IdentityProvider.Controllers
         /// </summary>
         public class AuthenticateOptionsRequest
         {
+            [JsonPropertyName("client_id")]
             public string ClientId { get; set; } = string.Empty;
+            [JsonPropertyName("rp_id")]
             public string RpId { get; set; } = string.Empty;
+            [JsonPropertyName("b2b_subject")]
             public string? B2BSubject { get; set; }
         }
 
@@ -80,10 +95,15 @@ namespace IdentityProvider.Controllers
         /// </summary>
         public class AuthenticateVerifyRequest
         {
+            [JsonPropertyName("client_id")]
             public string ClientId { get; set; } = string.Empty;
+            [JsonPropertyName("session_id")]
             public string SessionId { get; set; } = string.Empty;
+            [JsonPropertyName("redirect_uri")]
             public string RedirectUri { get; set; } = string.Empty;
+            [JsonPropertyName("state")]
             public string? State { get; set; }
+            [JsonPropertyName("response")]
             public AuthenticatorAssertionRawResponse Response { get; set; } = null!;
         }
 
