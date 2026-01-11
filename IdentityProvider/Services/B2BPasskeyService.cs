@@ -157,11 +157,17 @@ namespace IdentityProvider.Services
                     };
                 }
 
+                // Client と Organization を取得してRP名を動的に設定
+                var client = await _context.Clients
+                    .Include(c => c.Organization)
+                    .FirstOrDefaultAsync(c => c.Id == challenge.ClientId);
+                var rpName = client?.Organization?.Name ?? "EcAuth"; // フォールバック
+
                 // CredentialCreateOptionsを復元
                 var options = new CredentialCreateOptions
                 {
                     Challenge = WebEncoders.Base64UrlDecode(challenge.Challenge),
-                    Rp = new PublicKeyCredentialRpEntity(challenge.RpId!, "EcAuth"),
+                    Rp = new PublicKeyCredentialRpEntity(challenge.RpId!, rpName),
                     User = new Fido2User
                     {
                         Id = Encoding.UTF8.GetBytes(challenge.Subject!),
