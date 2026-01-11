@@ -403,7 +403,8 @@
                                 attestationObject: base64UrlEncode(credential.response.attestationObject),
                                 clientDataJSON: base64UrlEncode(credential.response.clientDataJSON)
                             },
-                            type: credential.type
+                            type: credential.type,
+                            clientExtensionResults: credential.getClientExtensionResults ? credential.getClientExtensionResults() : {}
                         },
                         device_name: deviceName
                     })
@@ -502,7 +503,8 @@
                                 signature: base64UrlEncode(credential.response.signature),
                                 userHandle: credential.response.userHandle ? base64UrlEncode(credential.response.userHandle) : null
                             },
-                            type: credential.type
+                            type: credential.type,
+                            clientExtensionResults: credential.getClientExtensionResults ? credential.getClientExtensionResults() : {}
                         }
                     })
                 });
