@@ -354,10 +354,10 @@ namespace IdentityProvider.Services
                 // クレデンシャル取得
                 // Fido2.NetLib 4.0.0では Id は Base64URL文字列なのでデコードが必要
                 var assertionCredentialIdBytes = WebEncoders.Base64UrlDecode(request.AssertionResponse.Id);
-                var credentials = await _context.B2BPasskeyCredentials
+                // EF Coreは byte[] の == 演算子をSQLに変換可能（SequenceEqualは不可）
+                var credential = await _context.B2BPasskeyCredentials
                     .IgnoreQueryFilters()
-                    .ToListAsync();
-                var credential = credentials.FirstOrDefault(c => c.CredentialId.SequenceEqual(assertionCredentialIdBytes));
+                    .FirstOrDefaultAsync(c => c.CredentialId == assertionCredentialIdBytes);
 
                 if (credential == null)
                 {
@@ -471,11 +471,12 @@ namespace IdentityProvider.Services
                 return false;
             }
 
+            // EF Coreは byte[] の == 演算子をSQLに変換可能（SequenceEqualは不可）
             var credential = await _context.B2BPasskeyCredentials
                 .IgnoreQueryFilters()
                 .FirstOrDefaultAsync(c =>
                     c.B2BSubject == b2bSubject &&
-                    c.CredentialId.SequenceEqual(credentialIdBytes));
+                    c.CredentialId == credentialIdBytes);
 
             if (credential == null)
                 return false;
