@@ -388,15 +388,11 @@ namespace IdentityProvider.Services
                 };
 
                 // ユーザーハンドル所有権チェック用デリゲート
-                IsUserHandleOwnerOfCredentialIdAsync isUserHandleOwner = async (args, cancellationToken) =>
+                // credential オブジェクトは既にこのメソッドのスコープで取得済みのため、再クエリは不要
+                IsUserHandleOwnerOfCredentialIdAsync isUserHandleOwner = (args, cancellationToken) =>
                 {
-                    var cred = await _context.B2BPasskeyCredentials
-                        .IgnoreQueryFilters()
-                        .FirstOrDefaultAsync(c => c.CredentialId == args.CredentialId, cancellationToken);
-                    if (cred == null) return false;
-
                     var userHandle = Encoding.UTF8.GetString(args.UserHandle);
-                    return cred.B2BSubject == userHandle;
+                    return Task.FromResult(credential.B2BSubject == userHandle);
                 };
 
                 // 認証検証（Fido2.NetLib 4.0.0 API）
