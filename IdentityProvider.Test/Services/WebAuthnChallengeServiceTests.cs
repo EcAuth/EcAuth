@@ -279,6 +279,32 @@ namespace IdentityProvider.Test.Services
             Assert.True(result.ExpiresAt <= expectedMaxExpiresAt.AddSeconds(1));
         }
 
+        [Fact]
+        public async Task GenerateChallengeAsync_ConcurrentRequests_ShouldGenerateUniqueSessionIds()
+        {
+            // Arrange
+            var requests = Enumerable.Range(0, 10).Select(_ => new IWebAuthnChallengeService.ChallengeRequest
+            {
+                Type = "registration",
+                UserType = "b2b",
+                Subject = "test-subject",
+                RpId = "shop.example.com",
+                ClientId = 1
+            }).ToList();
+
+            // Act - 10件の並行リクエスト
+            var tasks = requests.Select(r => _service.GenerateChallengeAsync(r));
+            var results = await Task.WhenAll(tasks);
+
+            // Assert - 全てのSessionIdがユニークであること
+            var uniqueSessionIds = results.Select(r => r.SessionId).Distinct().Count();
+            Assert.Equal(10, uniqueSessionIds);
+
+            // 全てのチャレンジもユニークであること
+            var uniqueChallenges = results.Select(r => r.Challenge).Distinct().Count();
+            Assert.Equal(10, uniqueChallenges);
+        }
+
         #endregion
 
         #region GetChallengeBySessionIdAsync Tests

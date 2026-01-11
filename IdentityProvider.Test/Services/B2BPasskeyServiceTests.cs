@@ -726,6 +726,75 @@ namespace IdentityProvider.Test.Services
             Assert.Contains("Credential", result.ErrorMessage);
         }
 
+        [Fact]
+        public async Task VerifyAuthenticationAsync_SignCountDecreased_ShouldReturnError()
+        {
+            // Arrange
+            // クローン攻撃シミュレーション: 前回のSignCount(10)より小さい値が返された場合
+            var credentialIdBytes = Encoding.UTF8.GetBytes("cloned-credential-id");
+            var credential = new B2BPasskeyCredential
+            {
+                B2BSubject = "test-b2b-subject",
+                CredentialId = credentialIdBytes,
+                PublicKey = Encoding.UTF8.GetBytes("public-key"),
+                SignCount = 10, // 前回のSignCount
+                DeviceName = "MacBook Pro",
+                AaGuid = Guid.NewGuid()
+            };
+            _context.B2BPasskeyCredentials.Add(credential);
+            await _context.SaveChangesAsync();
+
+            var challenge = new WebAuthnChallenge
+            {
+                SessionId = "clone-attack-session",
+                Challenge = "Y2xvbmUtY2hhbGxlbmdl", // Base64URL of "clone-challenge"
+                Type = "authentication",
+                UserType = "b2b",
+                Subject = "test-b2b-subject",
+                RpId = "shop.example.com",
+                ClientId = 1,
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+
+            _mockChallengeService.Setup(x => x.GetChallengeBySessionIdAsync("clone-attack-session"))
+                .ReturnsAsync(challenge);
+
+            var assertionResponse = new AuthenticatorAssertionRawResponse
+            {
+                Id = WebEncoders.Base64UrlEncode(credentialIdBytes),
+                RawId = credentialIdBytes,
+                Type = PublicKeyCredentialType.PublicKey,
+                Response = new AuthenticatorAssertionRawResponse.AssertionResponse
+                {
+                    AuthenticatorData = Encoding.UTF8.GetBytes("auth-data"),
+                    ClientDataJson = Encoding.UTF8.GetBytes("client-data"),
+                    Signature = Encoding.UTF8.GetBytes("signature")
+                }
+            };
+
+            var request = new IB2BPasskeyService.AuthenticationVerifyRequest
+            {
+                SessionId = "clone-attack-session",
+                ClientId = "test-client-id",
+                AssertionResponse = assertionResponse
+            };
+
+            // Fido2.NetLibがSignCount異常を検出して例外をスロー
+            _mockFido2.Setup(x => x.MakeAssertionAsync(
+                It.IsAny<MakeAssertionParams>(),
+                It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new Fido2VerificationException("Signature counter was not greater than stored value"));
+
+            // Act
+            var result = await _service.VerifyAuthenticationAsync(request);
+
+            // Assert
+            Assert.False(result.Success);
+            Assert.NotNull(result.ErrorMessage);
+            // SignCount異常（クローン攻撃の可能性）としてエラーが返されること
+            Assert.Contains("Signature counter", result.ErrorMessage);
+        }
+
         #endregion
 
         #region GetCredentialsBySubjectAsync Tests
