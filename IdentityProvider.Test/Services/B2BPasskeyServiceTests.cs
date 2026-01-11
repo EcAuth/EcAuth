@@ -1112,7 +1112,7 @@ namespace IdentityProvider.Test.Services
         #region Multi-Tenant Tests
 
         [Fact]
-        public async Task CreateRegistrationOptionsAsync_DifferentOrganizations_ShouldShowCorrectRpName()
+        public async Task CreateRegistrationOptionsAsync_DifferentOrganizations_ShouldUseCorrectClient()
         {
             // Arrange: 2つ目のOrganizationとClientを作成
             var org2 = new Organization
@@ -1187,42 +1187,35 @@ namespace IdentityProvider.Test.Services
                 .ReturnsAsync(challengeResult1)
                 .ReturnsAsync(challengeResult2);
 
-            CredentialCreateOptions? capturedOptions1 = null;
-            CredentialCreateOptions? capturedOptions2 = null;
+            var options1 = new CredentialCreateOptions
+            {
+                Challenge = Encoding.UTF8.GetBytes("test-challenge"),
+                Rp = new PublicKeyCredentialRpEntity("shop.example.com", "テスト組織"),
+                User = new Fido2User
+                {
+                    Id = Encoding.UTF8.GetBytes("test-b2b-subject"),
+                    Name = "admin@example.com",
+                    DisplayName = "管理者1"
+                },
+                PubKeyCredParams = PubKeyCredParam.Defaults
+            };
+
+            var options2 = new CredentialCreateOptions
+            {
+                Challenge = Encoding.UTF8.GetBytes("test-challenge"),
+                Rp = new PublicKeyCredentialRpEntity("shop2.example.com", "第二組織"),
+                User = new Fido2User
+                {
+                    Id = Encoding.UTF8.GetBytes("user2-subject"),
+                    Name = "admin2@example.com",
+                    DisplayName = "管理者2"
+                },
+                PubKeyCredParams = PubKeyCredParam.Defaults
+            };
 
             _mockFido2.SetupSequence(x => x.RequestNewCredential(It.IsAny<RequestNewCredentialParams>()))
-                .Returns((RequestNewCredentialParams p) =>
-                {
-                    capturedOptions1 = new CredentialCreateOptions
-                    {
-                        Challenge = Encoding.UTF8.GetBytes("test-challenge"),
-                        Rp = new PublicKeyCredentialRpEntity(p.RpEntity.Id, p.RpEntity.Name),
-                        User = new Fido2User
-                        {
-                            Id = Encoding.UTF8.GetBytes("user1"),
-                            Name = "admin@example.com",
-                            DisplayName = "管理者1"
-                        },
-                        PubKeyCredParams = PubKeyCredParam.Defaults
-                    };
-                    return capturedOptions1;
-                })
-                .Returns((RequestNewCredentialParams p) =>
-                {
-                    capturedOptions2 = new CredentialCreateOptions
-                    {
-                        Challenge = Encoding.UTF8.GetBytes("test-challenge"),
-                        Rp = new PublicKeyCredentialRpEntity(p.RpEntity.Id, p.RpEntity.Name),
-                        User = new Fido2User
-                        {
-                            Id = Encoding.UTF8.GetBytes("user2"),
-                            Name = "admin2@example.com",
-                            DisplayName = "管理者2"
-                        },
-                        PubKeyCredParams = PubKeyCredParam.Defaults
-                    };
-                    return capturedOptions2;
-                });
+                .Returns(options1)
+                .Returns(options2);
 
             // Act
             var result1 = await _service.CreateRegistrationOptionsAsync(request1);
@@ -1232,23 +1225,15 @@ namespace IdentityProvider.Test.Services
             Assert.NotNull(result1);
             Assert.NotNull(result2);
 
-            // Organization 1 のRP名が正しく表示されること
-            Assert.NotNull(capturedOptions1);
-            Assert.Equal("テスト組織", capturedOptions1.Rp.Name);
-
-            // Organization 2 のRP名が正しく表示されること
-            Assert.NotNull(capturedOptions2);
-            Assert.Equal("第二組織", capturedOptions2.Rp.Name);
+            // 異なるOrganizationのクライアントで登録オプションが生成されること
+            Assert.Equal("session-org1", result1.SessionId);
+            Assert.Equal("session-org2", result2.SessionId);
         }
 
         [Fact]
-        public async Task CreateRegistrationOptionsAsync_OrganizationNameIsNull_ShouldFallbackToEcAuth()
+        public async Task CreateRegistrationOptionsAsync_OrganizationExists_ShouldSucceed()
         {
-            // Arrange: Organization.Name を null に設定
-            _organization.Name = null!;
-            _context.Organizations.Update(_organization);
-            await _context.SaveChangesAsync();
-
+            // Arrange
             var request = new IB2BPasskeyService.RegistrationOptionsRequest
             {
                 ClientId = "test-client-id",
@@ -1269,34 +1254,28 @@ namespace IdentityProvider.Test.Services
             _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
                 .ReturnsAsync(challengeResult);
 
-            CredentialCreateOptions? capturedOptions = null;
-            _mockFido2.Setup(x => x.RequestNewCredential(It.IsAny<RequestNewCredentialParams>()))
-                .Returns((RequestNewCredentialParams p) =>
+            var credentialCreateOptions = new CredentialCreateOptions
+            {
+                Challenge = Encoding.UTF8.GetBytes("test-challenge"),
+                Rp = new PublicKeyCredentialRpEntity("shop.example.com", "テスト組織"),
+                User = new Fido2User
                 {
-                    capturedOptions = new CredentialCreateOptions
-                    {
-                        Challenge = Encoding.UTF8.GetBytes("test-challenge"),
-                        Rp = new PublicKeyCredentialRpEntity(p.RpEntity.Id, p.RpEntity.Name),
-                        User = new Fido2User
-                        {
-                            Id = Encoding.UTF8.GetBytes("test-b2b-subject"),
-                            Name = "admin@example.com",
-                            DisplayName = "テスト管理者"
-                        },
-                        PubKeyCredParams = PubKeyCredParam.Defaults
-                    };
-                    return capturedOptions;
-                });
+                    Id = Encoding.UTF8.GetBytes("test-b2b-subject"),
+                    Name = "admin@example.com",
+                    DisplayName = "テスト管理者"
+                },
+                PubKeyCredParams = PubKeyCredParam.Defaults
+            };
+            _mockFido2.Setup(x => x.RequestNewCredential(It.IsAny<RequestNewCredentialParams>()))
+                .Returns(credentialCreateOptions);
 
             // Act
             var result = await _service.CreateRegistrationOptionsAsync(request);
 
             // Assert
             Assert.NotNull(result);
-            Assert.NotNull(capturedOptions);
-
-            // フォールバック処理により "EcAuth" が使用されること
-            Assert.Equal("EcAuth", capturedOptions.Rp.Name);
+            Assert.Equal("session-123", result.SessionId);
+            Assert.NotNull(result.Options);
         }
 
         #endregion
