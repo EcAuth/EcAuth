@@ -94,7 +94,7 @@ namespace IdentityProvider.Test.Services
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
             {
                 SessionId = "session-123",
-                Challenge = "challenge-base64url",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U", // Base64URL of "test-challenge"
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
             };
             _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
@@ -438,7 +438,7 @@ namespace IdentityProvider.Test.Services
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
             {
                 SessionId = "auth-session-123",
-                Challenge = "auth-challenge-base64url",
+                Challenge = "YXV0aC1jaGFsbGVuZ2U", // Base64URL of "auth-challenge"
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
             };
             _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
@@ -1241,14 +1241,14 @@ namespace IdentityProvider.Test.Services
             var challengeResult1 = new IWebAuthnChallengeService.ChallengeResult
             {
                 SessionId = "session-org1",
-                Challenge = "challenge1",
+                Challenge = "Y2hhbGxlbmdlMQ", // Base64URL of "challenge1"
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
             };
 
             var challengeResult2 = new IWebAuthnChallengeService.ChallengeResult
             {
                 SessionId = "session-org2",
-                Challenge = "challenge2",
+                Challenge = "Y2hhbGxlbmdlMg", // Base64URL of "challenge2"
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
             };
 
@@ -1256,35 +1256,7 @@ namespace IdentityProvider.Test.Services
                 .ReturnsAsync(challengeResult1)
                 .ReturnsAsync(challengeResult2);
 
-            var options1 = new CredentialCreateOptions
-            {
-                Challenge = Encoding.UTF8.GetBytes("test-challenge"),
-                Rp = new PublicKeyCredentialRpEntity("shop.example.com", "テスト組織"),
-                User = new Fido2User
-                {
-                    Id = Encoding.UTF8.GetBytes("test-b2b-subject"),
-                    Name = "admin@example.com",
-                    DisplayName = "管理者1"
-                },
-                PubKeyCredParams = PubKeyCredParam.Defaults
-            };
-
-            var options2 = new CredentialCreateOptions
-            {
-                Challenge = Encoding.UTF8.GetBytes("test-challenge"),
-                Rp = new PublicKeyCredentialRpEntity("shop2.example.com", "第二組織"),
-                User = new Fido2User
-                {
-                    Id = Encoding.UTF8.GetBytes("user2-subject"),
-                    Name = "admin2@example.com",
-                    DisplayName = "管理者2"
-                },
-                PubKeyCredParams = PubKeyCredParam.Defaults
-            };
-
-            _mockFido2.SetupSequence(x => x.RequestNewCredential(It.IsAny<RequestNewCredentialParams>()))
-                .Returns(options1)
-                .Returns(options2);
+            // 注: _fido2.RequestNewCredentialは使用しなくなったため、モック設定は不要
 
             // Act
             var result1 = await _service.CreateRegistrationOptionsAsync(request1);
@@ -1317,7 +1289,7 @@ namespace IdentityProvider.Test.Services
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
             {
                 SessionId = "session-123",
-                Challenge = "challenge-base64url",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U", // Base64URL of "test-challenge"
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
             };
             _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))

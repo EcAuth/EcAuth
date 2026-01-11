@@ -99,14 +99,19 @@ namespace IdentityProvider.Services
                 UserVerification = UserVerificationRequirement.Preferred
             };
 
-            // 登録オプション生成（Fido2.NetLib 4.0.0 API）
-            var options = _fido2.RequestNewCredential(new RequestNewCredentialParams
+            // 登録オプション生成
+            // 注: _fido2.RequestNewCredential()は内部で別のチャレンジを生成するため使用しない
+            // _challengeServiceで生成したチャレンジと一致させるため、手動でCredentialCreateOptionsを構築
+            var options = new CredentialCreateOptions
             {
+                Rp = new PublicKeyCredentialRpEntity(request.RpId, client.Organization?.Name ?? "EcAuth"),
                 User = fido2User,
-                ExcludeCredentials = existingCredentials,
+                Challenge = WebEncoders.Base64UrlDecode(challengeResult.Challenge),
+                PubKeyCredParams = PubKeyCredParam.Defaults,
                 AuthenticatorSelection = authenticatorSelection,
-                AttestationPreference = AttestationConveyancePreference.None
-            });
+                Attestation = AttestationConveyancePreference.None,
+                ExcludeCredentials = existingCredentials
+            };
 
             _logger.LogInformation(
                 "Created registration options for B2BUser {Subject}, SessionId: {SessionId}",
