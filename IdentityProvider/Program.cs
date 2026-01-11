@@ -1,3 +1,4 @@
+using Fido2NetLib;
 using IdentityProvider.Filters;
 using IdentityProvider.Middlewares;
 using IdentityProvider.Models;
@@ -14,6 +15,24 @@ builder.Services.AddScoped<IExternalIdpTokenService, ExternalIdpTokenService>();
 builder.Services.AddScoped<IExternalUserInfoService, ExternalUserInfoService>();
 builder.Services.AddScoped<OrganizationFilter>();
 builder.Services.AddHttpClient(); // HttpClientFactoryを有効化（ExternalUserInfoServiceで使用）
+
+// B2Bパスキー認証関連サービス
+builder.Services.AddScoped<IWebAuthnChallengeService, WebAuthnChallengeService>();
+builder.Services.AddScoped<IB2BUserService, B2BUserService>();
+builder.Services.AddScoped<IB2BPasskeyService, B2BPasskeyService>();
+// Fido2.NetLib設定（動的RP IDに対応するためリクエストごとに設定を変更する必要あり）
+// ここではデフォルト設定を登録し、実際のRP IDはB2BPasskeyService内で動的に処理
+builder.Services.AddSingleton<IFido2>(sp =>
+{
+    // デフォルト設定（実際の使用時はクライアントごとのRP IDを使用）
+    var config = new Fido2Configuration
+    {
+        ServerDomain = builder.Configuration["Fido2:ServerDomain"] ?? "localhost",
+        ServerName = builder.Configuration["Fido2:ServerName"] ?? "EcAuth",
+        Origins = new HashSet<string> { builder.Configuration["Fido2:Origin"] ?? "https://localhost" }
+    };
+    return new Fido2(config);
+});
 // Add services to the container.
 builder.Services.AddDbContext<EcAuthDbContext>((sp, options) =>
 {
