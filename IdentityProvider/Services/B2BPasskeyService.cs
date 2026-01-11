@@ -159,11 +159,8 @@ namespace IdentityProvider.Services
                     };
                 }
 
-                // Client と Organization を取得してRP名を動的に設定
-                var client = await _context.Clients
-                    .Include(c => c.Organization)
-                    .FirstOrDefaultAsync(c => c.Id == challenge.ClientId);
-                var rpName = client?.Organization?.Name ?? "EcAuth"; // フォールバック
+                // GetChallengeBySessionIdAsync で既に Client.Organization を Include 済み
+                var rpName = challenge.Client?.Organization?.Name ?? "EcAuth"; // フォールバック
 
                 // CredentialCreateOptionsを復元
                 var options = new CredentialCreateOptions
