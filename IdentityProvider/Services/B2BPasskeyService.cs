@@ -137,7 +137,9 @@ namespace IdentityProvider.Services
                     };
                 }
 
-                // 期限チェック
+                // 期限チェック（defense-in-depth）
+                // 注: GetChallengeBySessionIdAsync で既に期限切れチェック済みだが、
+                // 多層防御として明示的に検証。将来の実装変更に対する安全性を確保。
                 if (challenge.ExpiresAt < DateTimeOffset.UtcNow)
                 {
                     return new IB2BPasskeyService.RegistrationVerifyResult
@@ -337,7 +339,9 @@ namespace IdentityProvider.Services
                     };
                 }
 
-                // 期限チェック
+                // 期限チェック（defense-in-depth）
+                // 注: GetChallengeBySessionIdAsync で既に期限切れチェック済みだが、
+                // 多層防御として明示的に検証。将来の実装変更に対する安全性を確保。
                 if (challenge.ExpiresAt < DateTimeOffset.UtcNow)
                 {
                     return new IB2BPasskeyService.AuthenticationVerifyResult
