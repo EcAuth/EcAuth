@@ -1,4 +1,14 @@
 version: 2
+
+# プライベートレジストリの認証設定
+# GitHub Packages へのアクセスには ORG_PAT が必要（Dependabot secrets に登録済み）
+registries:
+  github-packages:
+    type: nuget-feed
+    url: https://nuget.pkg.github.com/EcAuth/index.json
+    username: x-access-token
+    password: ${{secrets.ORG_PAT}}
+
 updates:
   # GitHub Actions の自動更新
   - package-ecosystem: "github-actions"
@@ -42,6 +52,9 @@ updates:
     # セキュリティアップデートは即座に作成
     allow:
       - dependency-type: "all"
+    # GitHub Packages の認証設定を参照
+    registries:
+      - github-packages
 
   # E2ETests の npm パッケージの自動更新
   - package-ecosystem: "npm"
