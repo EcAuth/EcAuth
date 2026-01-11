@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json;
 
 namespace IdentityProvider.Models
 {
@@ -26,5 +27,20 @@ namespace IdentityProvider.Models
         public RsaKeyPair? RsaKeyPair { get; set; }
         public ICollection<RedirectUri>? RedirectUris { get; } = new List<RedirectUri>();
         public ICollection<OpenIdProvider>? OpenIdProviders { get; } = new List<OpenIdProvider>();
+
+        [Column("allowed_rp_ids")]
+        [MaxLength(2000)]
+        public string? AllowedRpIdsJson { get; set; }
+
+        [NotMapped]
+        public List<string> AllowedRpIds
+        {
+            get => string.IsNullOrEmpty(AllowedRpIdsJson)
+                ? new List<string>()
+                : JsonSerializer.Deserialize<List<string>>(AllowedRpIdsJson) ?? new List<string>();
+            set => AllowedRpIdsJson = value == null || value.Count == 0
+                ? null
+                : JsonSerializer.Serialize(value);
+        }
     }
 }
