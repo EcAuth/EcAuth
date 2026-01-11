@@ -466,8 +466,14 @@ namespace IdentityProvider.Services
             {
                 credentialIdBytes = WebEncoders.Base64UrlDecode(credentialId);
             }
-            catch
+            catch (FormatException ex)
             {
+                _logger.LogWarning(ex, "無効なCredentialId形式です: {CredentialId}", credentialId);
+                return false;
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning(ex, "無効なCredentialId引数です: {CredentialId}", credentialId);
                 return false;
             }
 
@@ -524,8 +530,9 @@ namespace IdentityProvider.Services
                     .Select(t => t!.Value)
                     .ToArray();
             }
-            catch
+            catch (System.Text.Json.JsonException)
             {
+                // JSON形式が不正な場合はnullを返す（ログは記録しない：パフォーマンス考慮）
                 return null;
             }
         }
