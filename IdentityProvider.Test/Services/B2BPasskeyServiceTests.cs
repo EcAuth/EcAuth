@@ -31,12 +31,17 @@ namespace IdentityProvider.Test.Services
             _mockUserService = new Mock<IB2BUserService>();
             _mockLogger = new Mock<ILogger<B2BPasskeyService>>();
 
+            // マルチテナント対応: origin検証のために動的にFido2インスタンスを作成
+            // テストではモックを返すファクトリーを注入
+            Func<Fido2Configuration, IFido2> fido2Factory = _ => _mockFido2.Object;
+
             _service = new B2BPasskeyService(
                 _context,
                 _mockFido2.Object,
                 _mockChallengeService.Object,
                 _mockUserService.Object,
-                _mockLogger.Object);
+                _mockLogger.Object,
+                fido2Factory);
 
             // テスト用のテナント・クライアントをセットアップ
             _organization = new Organization
@@ -505,31 +510,26 @@ namespace IdentityProvider.Test.Services
                 B2BSubject = null // 全ユーザー
             };
 
+            // Base64URL形式のチャレンジ（"auth-challenge"をエンコード）
+            var challengeBytes = Encoding.UTF8.GetBytes("auth-challenge");
+            var challengeBase64Url = WebEncoders.Base64UrlEncode(challengeBytes);
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
             {
                 SessionId = "auth-session-456",
-                Challenge = "auth-challenge",
+                Challenge = challengeBase64Url,
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
             };
             _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
                 .ReturnsAsync(challengeResult);
-
-            var assertionOptions = new AssertionOptions
-            {
-                Challenge = Encoding.UTF8.GetBytes("auth-challenge"),
-                RpId = "shop.example.com"
-            };
-            _mockFido2.Setup(x => x.GetAssertionOptions(It.IsAny<GetAssertionOptionsParams>()))
-                .Returns(assertionOptions);
 
             // Act
             var result = await _service.CreateAuthenticationOptionsAsync(request);
 
             // Assert
             Assert.NotNull(result);
-            // GetAssertionOptionsに渡されたクレデンシャル数を確認
-            _mockFido2.Verify(x => x.GetAssertionOptions(
-                It.Is<GetAssertionOptionsParams>(p => p.AllowedCredentials.Count == 2)), Times.Once);
+            // 手動構築されたAssertionOptionsの内容を確認
+            Assert.Equal(challengeBytes, result.Options.Challenge);
+            Assert.Equal(2, result.Options.AllowCredentials!.Count);
         }
 
         [Fact]
@@ -543,30 +543,26 @@ namespace IdentityProvider.Test.Services
                 B2BSubject = "user-with-no-passkeys"
             };
 
+            // Base64URL形式のチャレンジ（"auth-challenge"をエンコード）
+            var challengeBytes = Encoding.UTF8.GetBytes("auth-challenge");
+            var challengeBase64Url = WebEncoders.Base64UrlEncode(challengeBytes);
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
             {
                 SessionId = "auth-session-789",
-                Challenge = "auth-challenge",
+                Challenge = challengeBase64Url,
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
             };
             _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
                 .ReturnsAsync(challengeResult);
-
-            var assertionOptions = new AssertionOptions
-            {
-                Challenge = Encoding.UTF8.GetBytes("auth-challenge"),
-                RpId = "shop.example.com"
-            };
-            _mockFido2.Setup(x => x.GetAssertionOptions(It.IsAny<GetAssertionOptionsParams>()))
-                .Returns(assertionOptions);
 
             // Act
             var result = await _service.CreateAuthenticationOptionsAsync(request);
 
             // Assert
             Assert.NotNull(result);
-            _mockFido2.Verify(x => x.GetAssertionOptions(
-                It.Is<GetAssertionOptionsParams>(p => p.AllowedCredentials.Count == 0)), Times.Once);
+            // 手動構築されたAssertionOptionsの内容を確認
+            Assert.Equal(challengeBytes, result.Options.Challenge);
+            Assert.Empty(result.Options.AllowCredentials!);
         }
 
         #endregion

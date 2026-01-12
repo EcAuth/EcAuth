@@ -395,6 +395,7 @@ namespace IdentityProvider.Controllers
                 // クライアント存在確認・redirect_uri検証
                 var client = await _context.Clients
                     .IgnoreQueryFilters()
+                    .Include(c => c.RedirectUris)
                     .FirstOrDefaultAsync(c => c.ClientId == request.ClientId);
 
                 if (client == null)
@@ -450,7 +451,8 @@ namespace IdentityProvider.Controllers
                     RedirectUri = request.RedirectUri,
                     State = request.State,
                     Scope = "openid b2b",
-                    ExpirationMinutes = 10
+                    ExpirationMinutes = 10,
+                    IsB2B = true  // B2B認証フラグ
                 };
 
                 var authCode = await _authorizationCodeService.GenerateAuthorizationCodeAsync(authCodeRequest);

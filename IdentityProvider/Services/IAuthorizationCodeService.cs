@@ -15,6 +15,7 @@ namespace IdentityProvider.Services
             public string? Scope { get; set; }            // スコープ（オプション）
             public string? State { get; set; }            // Stateパラメータ（オプション）
             public int ExpirationMinutes { get; set; } = 10; // 有効期限（デフォルト10分）
+            public bool IsB2B { get; set; } = false;      // B2B認証の場合true
         }
 
         /// <summary>

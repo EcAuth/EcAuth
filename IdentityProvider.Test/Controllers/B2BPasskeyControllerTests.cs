@@ -454,6 +454,93 @@ namespace IdentityProvider.Test.Controllers
             Assert.Equal("invalid_request", error);
         }
 
+        [Fact]
+        public async Task AuthenticateVerify_ClientWithNoRedirectUris_ReturnsBadRequest()
+        {
+            // Arrange - RedirectUri を設定しないクライアントを作成
+            var organization = new Organization
+            {
+                Code = "test-org-no-redirect",
+                Name = "Test Organization No Redirect",
+                TenantName = "test-tenant",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            _context.Organizations.Add(organization);
+            await _context.SaveChangesAsync();
+
+            var clientWithNoRedirect = new Client
+            {
+                ClientId = "client-no-redirect",
+                ClientSecret = "test-client-secret",
+                AppName = "Test App No Redirect",
+                OrganizationId = organization.Id,
+                AllowedRpIds = new List<string> { "shop.example.com" },
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            _context.Clients.Add(clientWithNoRedirect);
+            await _context.SaveChangesAsync();
+            // RedirectUri は追加しない
+
+            var request = new B2BPasskeyController.AuthenticateVerifyRequest
+            {
+                ClientId = clientWithNoRedirect.ClientId,
+                SessionId = "test-session-id",
+                RedirectUri = "https://shop.example.com/admin/ecauth/callback",
+                Response = new AuthenticatorAssertionRawResponse()
+            };
+
+            // Act
+            var result = await _controller.AuthenticateVerify(request);
+
+            // Assert - RedirectUri が設定されていないため、検証失敗
+            var badRequestResult = Assert.IsType<BadRequestObjectResult>(result);
+            var response = badRequestResult.Value;
+            Assert.NotNull(response);
+
+            var error = response.GetType().GetProperty("error")?.GetValue(response);
+            Assert.Equal("invalid_request", error);
+
+            var errorDescription = response.GetType().GetProperty("error_description")?.GetValue(response);
+            Assert.Equal("redirect_uri が許可されていません。", errorDescription);
+        }
+
+        [Fact]
+        public async Task AuthenticateVerify_ValidRedirectUri_PassesRedirectUriValidation()
+        {
+            // Arrange
+            var client = await CreateTestClientAsync();
+
+            var request = new B2BPasskeyController.AuthenticateVerifyRequest
+            {
+                ClientId = client.ClientId,
+                SessionId = "test-session-id",
+                RedirectUri = "https://shop.example.com/admin/ecauth/callback", // 許可されたURI
+                State = "test-state",
+                Response = new AuthenticatorAssertionRawResponse()
+            };
+
+            // サービスモックを設定（redirect_uri検証後にサービスエラーになる）
+            _mockPasskeyService.Setup(x => x.VerifyAuthenticationAsync(It.IsAny<AuthenticationVerifyRequest>()))
+                .ReturnsAsync(new AuthenticationVerifyResult
+                {
+                    Success = false,
+                    ErrorMessage = "Challenge not found" // redirect_uri検証は通過したことを示す
+                });
+
+            // Act
+            var result = await _controller.AuthenticateVerify(request);
+
+            // Assert - redirect_uri検証は通過し、サービスエラー（Challenge not found）が返る
+            var badRequestResult = Assert.IsType<BadRequestObjectResult>(result);
+            var response = badRequestResult.Value;
+            Assert.NotNull(response);
+
+            var errorDescription = response.GetType().GetProperty("error_description")?.GetValue(response);
+            Assert.Equal("Challenge not found", errorDescription);
+        }
+
         #endregion
 
         #region List Tests

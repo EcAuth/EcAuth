@@ -172,7 +172,8 @@
             </div>
             <div class="form-group">
                 <label for="b2bSubject">B2B Subject (User ID)</label>
-                <input type="text" id="b2bSubject" value="" placeholder="e.g., admin-user-uuid">
+                <input type="text" id="b2bSubject" value="3f7c0ab4-b004-4102-b6ed-a730369dd237" placeholder="e.g., admin-user-uuid">
+                <small style="color:#666;">Note: Must match an existing B2BUser in the database</small>
             </div>
             <div class="form-group">
                 <label for="displayName">Display Name</label>
@@ -401,7 +402,8 @@
                             rawId: base64UrlEncode(credential.rawId),
                             response: {
                                 attestationObject: base64UrlEncode(credential.response.attestationObject),
-                                clientDataJSON: base64UrlEncode(credential.response.clientDataJSON)
+                                clientDataJSON: base64UrlEncode(credential.response.clientDataJSON),
+                                transports: credential.response.getTransports ? credential.response.getTransports() : []
                             },
                             type: credential.type,
                             clientExtensionResults: credential.getClientExtensionResults ? credential.getClientExtensionResults() : {}
@@ -614,8 +616,7 @@
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
-            // Generate initial values
-            generateSubject();
+            // Generate initial state only (B2B Subject should use the pre-registered value)
             generateState();
 
             // Set RP ID based on current hostname
@@ -623,6 +624,7 @@
             rpIdEl.value = window.location.hostname;
 
             log('Page initialized. RP ID set to: ' + window.location.hostname);
+            log('Using pre-registered B2B Subject: ' + document.getElementById('b2bSubject').value);
         });
     </script>
 </body>
