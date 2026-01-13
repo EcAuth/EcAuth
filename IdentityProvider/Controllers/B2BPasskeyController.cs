@@ -594,6 +594,17 @@ namespace IdentityProvider.Controllers
         /// <summary>
         /// クライアント認証（client_id + client_secret）
         /// </summary>
+        /// <remarks>
+        /// セキュリティ対策: タイミング攻撃防止のため、client_secret の比較には
+        /// CryptographicOperations.FixedTimeEquals を使用しています。
+        ///
+        /// DBクエリ内での文字列比較（== 演算子）は、最初の不一致文字で比較が終了するため、
+        /// 応答時間の微妙な違いから秘密情報を推測される可能性があります（タイミング攻撃）。
+        /// FixedTimeEquals は入力の長さに関係なく一定時間で比較を行うため、
+        /// このリスクを軽減できます。
+        ///
+        /// 参考: https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.cryptographicoperations.fixedtimeequals
+        /// </remarks>
         private async Task<Client?> AuthenticateClientAsync(string clientId, string clientSecret)
         {
             if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
@@ -601,11 +612,26 @@ namespace IdentityProvider.Controllers
                 return null;
             }
 
+            // client_id のみでクエリし、client_secret はアプリケーション側で比較
             var client = await _context.Clients
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(c => c.ClientId == clientId && c.ClientSecret == clientSecret);
+                .FirstOrDefaultAsync(c => c.ClientId == clientId);
 
-            return client;
+            if (client?.ClientSecret == null)
+            {
+                return null;
+            }
+
+            // タイミング攻撃対策: 定時間比較
+            var secretBytes = System.Text.Encoding.UTF8.GetBytes(clientSecret);
+            var storedSecretBytes = System.Text.Encoding.UTF8.GetBytes(client.ClientSecret);
+
+            if (System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(secretBytes, storedSecretBytes))
+            {
+                return client;
+            }
+
+            return null;
         }
 
         /// <summary>
