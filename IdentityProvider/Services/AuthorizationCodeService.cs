@@ -84,7 +84,9 @@ namespace IdentityProvider.Services
             var authorizationCode = new AuthorizationCode
             {
                 Code = code,
-                EcAuthSubject = request.Subject,
+                // B2B認証の場合はB2BSubjectを設定、B2C認証の場合はEcAuthSubjectを設定
+                EcAuthSubject = request.IsB2B ? null : request.Subject,
+                B2BSubject = request.IsB2B ? request.Subject : null,
                 ClientId = request.ClientId,
                 RedirectUri = request.RedirectUri,
                 Scope = request.Scope,

@@ -73,12 +73,23 @@ namespace IdentityProvider.Models
                 .HasPrincipalKey(u => u.Subject)
                 .OnDelete(DeleteBehavior.Cascade);
 
+            // B2C: EcAuthUser -> AuthorizationCode (optional)
             modelBuilder.Entity<EcAuthUser>()
                 .HasMany(u => u.AuthorizationCodes)
                 .WithOne(ac => ac.EcAuthUser)
                 .HasForeignKey(ac => ac.EcAuthSubject)
                 .HasPrincipalKey(u => u.Subject)
-                .OnDelete(DeleteBehavior.Cascade);
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // B2B: B2BUser -> AuthorizationCode (optional)
+            modelBuilder.Entity<B2BUser>()
+                .HasMany(u => u.AuthorizationCodes)
+                .WithOne(ac => ac.B2BUser)
+                .HasForeignKey(ac => ac.B2BSubject)
+                .HasPrincipalKey(u => u.Subject)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
 
             modelBuilder.Entity<EcAuthUser>()
                 .HasMany<AccessToken>()

@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B2B Passkey Test - EcAuth</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #555;
+            margin-top: 30px;
+        }
+        .section {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+        input[type="text"], textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        input[type="text"]:focus, textarea:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button.danger {
+            background-color: #dc3545;
+        }
+        button.danger:hover {
+            background-color: #c82333;
+        }
+        button.success {
+            background-color: #28a745;
+        }
+        button.success:hover {
+            background-color: #218838;
+        }
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+        }
+        .result.error {
+            border-left-color: #dc3545;
+            background-color: #fff5f5;
+        }
+        .result.success {
+            border-left-color: #28a745;
+            background-color: #f5fff5;
+        }
+        pre {
+            background: #282c34;
+            color: #abb2bf;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+        .passkey-list {
+            margin-top: 15px;
+        }
+        .passkey-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            border: 1px solid #e9ecef;
+        }
+        .passkey-info {
+            flex: 1;
+        }
+        .passkey-info strong {
+            color: #333;
+        }
+        .passkey-info small {
+            color: #666;
+            display: block;
+            margin-top: 5px;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            color: #856404;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>B2B Passkey Test Page</h1>
+
+    <div class="warning">
+        <strong>Note:</strong> This page is for development testing only.
+        WebAuthn API requires HTTPS or localhost. Make sure your environment is properly configured.
+    </div>
+
+    <!-- Configuration Section -->
+    <div class="section">
+        <h2>Configuration</h2>
+        <div class="grid">
+            <div class="form-group">
+                <label for="clientId">Client ID</label>
+                <input type="text" id="clientId" value="client_id" placeholder="Enter Client ID">
+            </div>
+            <div class="form-group">
+                <label for="clientSecret">Client Secret</label>
+                <input type="text" id="clientSecret" value="client_secret" placeholder="Enter Client Secret">
+            </div>
+            <div class="form-group">
+                <label for="rpId">RP ID (Domain)</label>
+                <input type="text" id="rpId" value="localhost" placeholder="e.g., shop.example.com">
+            </div>
+            <div class="form-group">
+                <label for="b2bSubject">B2B Subject (User ID)</label>
+                <input type="text" id="b2bSubject" value="3f7c0ab4-b004-4102-b6ed-a730369dd237" placeholder="e.g., admin-user-uuid">
+                <small style="color:#666;">Note: Must match an existing B2BUser in the database</small>
+            </div>
+            <div class="form-group">
+                <label for="displayName">Display Name</label>
+                <input type="text" id="displayName" value="Test Admin" placeholder="e.g., Admin User">
+            </div>
+            <div class="form-group">
+                <label for="redirectUri">Redirect URI</label>
+                <input type="text" id="redirectUri" value="https://localhost:8081/admin/ecauth/callback" placeholder="e.g., https://shop.example.com/admin/ecauth/callback">
+                <small style="color:#666;">Note: Must be registered in the client's allowed redirect URIs</small>
+            </div>
+        </div>
+        <button onclick="generateSubject()">Generate Random Subject</button>
+    </div>
+
+    <!-- Registration Section -->
+    <div class="section">
+        <h2>1. Passkey Registration</h2>
+        <p>Register a new passkey for the B2B user. This requires client authentication (client_id + client_secret).</p>
+
+        <div class="form-group">
+            <label for="deviceName">Device Name</label>
+            <input type="text" id="deviceName" value="Test Device" placeholder="e.g., MacBook Pro">
+        </div>
+
+        <button class="success" onclick="registerPasskey()">Register New Passkey</button>
+
+        <div id="registerResult" class="result" style="display: none;"></div>
+    </div>
+
+    <!-- Authentication Section -->
+    <div class="section">
+        <h2>2. Passkey Authentication</h2>
+        <p>Authenticate using a registered passkey. This issues an authorization code upon success.</p>
+
+        <div class="form-group">
+            <label for="state">State (CSRF Token)</label>
+            <input type="text" id="state" value="" placeholder="Random state for CSRF protection">
+        </div>
+        <button onclick="generateState()">Generate Random State</button>
+        <br><br>
+
+        <button onclick="authenticatePasskey()">Authenticate with Passkey</button>
+
+        <div id="authenticateResult" class="result" style="display: none;"></div>
+    </div>
+
+    <!-- Management Section -->
+    <div class="section">
+        <h2>3. Passkey Management</h2>
+        <p>List and delete registered passkeys. Requires Bearer token authentication.</p>
+
+        <div class="form-group">
+            <label for="accessToken">Access Token</label>
+            <input type="text" id="accessToken" placeholder="Enter access token for Bearer authentication">
+        </div>
+
+        <button onclick="listPasskeys()">List Passkeys</button>
+
+        <div id="passkeyList" class="passkey-list" style="display: none;"></div>
+        <div id="listResult" class="result" style="display: none;"></div>
+    </div>
+
+    <!-- Debug Section -->
+    <div class="section">
+        <h2>Debug Log</h2>
+        <button onclick="clearLog()">Clear Log</button>
+        <pre id="debugLog"></pre>
+    </div>
+
+    <script>
+        // Utility functions
+        function log(message, data = null) {
+            const logEl = document.getElementById('debugLog');
+            const timestamp = new Date().toISOString();
+            let logEntry = `[${timestamp}] ${message}`;
+            if (data) {
+                logEntry += '\n' + JSON.stringify(data, null, 2);
+            }
+            logEl.textContent = logEntry + '\n\n' + logEl.textContent;
+        }
+
+        function clearLog() {
+            document.getElementById('debugLog').textContent = '';
+        }
+
+        function showResult(elementId, success, message, data = null) {
+            const el = document.getElementById(elementId);
+            el.style.display = 'block';
+            el.className = 'result ' + (success ? 'success' : 'error');
+            el.innerHTML = `<strong>${success ? 'Success' : 'Error'}:</strong> ${message}`;
+            if (data) {
+                el.innerHTML += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            }
+        }
+
+        function generateSubject() {
+            const uuid = crypto.randomUUID();
+            document.getElementById('b2bSubject').value = uuid;
+            log('Generated new B2B Subject: ' + uuid);
+        }
+
+        function generateState() {
+            const state = crypto.randomUUID();
+            document.getElementById('state').value = state;
+            log('Generated new State: ' + state);
+        }
+
+        // Base64URL encoding/decoding utilities
+        function base64UrlEncode(arrayBuffer) {
+            const bytes = new Uint8Array(arrayBuffer);
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary)
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=+$/, '');
+        }
+
+        function base64UrlDecode(base64url) {
+            const base64 = base64url
+                .replace(/-/g, '+')
+                .replace(/_/g, '/');
+            const padding = '='.repeat((4 - base64.length % 4) % 4);
+            const binary = atob(base64 + padding);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        // Passkey Registration
+        async function registerPasskey() {
+            const clientId = document.getElementById('clientId').value;
+            const clientSecret = document.getElementById('clientSecret').value;
+            const rpId = document.getElementById('rpId').value;
+            const b2bSubject = document.getElementById('b2bSubject').value;
+            const displayName = document.getElementById('displayName').value;
+            const deviceName = document.getElementById('deviceName').value;
+
+            if (!b2bSubject) {
+                showResult('registerResult', false, 'B2B Subject is required. Click "Generate Random Subject" to create one.');
+                return;
+            }
+
+            try {
+                log('Starting passkey registration...');
+
+                // Step 1: Get registration options
+                log('Step 1: Getting registration options from server...');
+                const optionsResponse = await fetch('/b2b/passkey/register/options', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_id: clientId,
+                        client_secret: clientSecret,
+                        rp_id: rpId,
+                        b2b_subject: b2bSubject,
+                        display_name: displayName,
+                        device_name: deviceName
+                    })
+                });
+
+                if (!optionsResponse.ok) {
+                    const error = await optionsResponse.json();
+                    throw new Error(error.error_description || 'Failed to get registration options');
+                }
+
+                const optionsData = await optionsResponse.json();
+                log('Registration options received', optionsData);
+
+                const sessionId = optionsData.session_id;
+                const options = optionsData.options;
+
+                // Step 2: Convert options for WebAuthn API
+                const publicKeyOptions = {
+                    challenge: base64UrlDecode(options.challenge),
+                    rp: {
+                        id: options.rp.id,
+                        name: options.rp.name
+                    },
+                    user: {
+                        id: base64UrlDecode(options.user.id),
+                        name: options.user.name,
+                        displayName: options.user.displayName
+                    },
+                    pubKeyCredParams: options.pubKeyCredParams.map(p => ({
+                        type: p.type,
+                        alg: p.alg
+                    })),
+                    timeout: options.timeout,
+                    attestation: options.attestation,
+                    authenticatorSelection: options.authenticatorSelection,
+                    excludeCredentials: (options.excludeCredentials || []).map(c => ({
+                        type: c.type,
+                        id: base64UrlDecode(c.id),
+                        transports: c.transports
+                    }))
+                };
+
+                log('Calling navigator.credentials.create()...', publicKeyOptions);
+
+                // Step 3: Create credential using WebAuthn API
+                const credential = await navigator.credentials.create({
+                    publicKey: publicKeyOptions
+                });
+
+                log('Credential created', {
+                    id: credential.id,
+                    type: credential.type
+                });
+
+                // Step 4: Verify registration
+                log('Step 4: Verifying registration with server...');
+                const verifyResponse = await fetch('/b2b/passkey/register/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_id: clientId,
+                        client_secret: clientSecret,
+                        session_id: sessionId,
+                        response: {
+                            id: credential.id,
+                            rawId: base64UrlEncode(credential.rawId),
+                            response: {
+                                attestationObject: base64UrlEncode(credential.response.attestationObject),
+                                clientDataJSON: base64UrlEncode(credential.response.clientDataJSON),
+                                transports: credential.response.getTransports ? credential.response.getTransports() : []
+                            },
+                            type: credential.type,
+                            clientExtensionResults: credential.getClientExtensionResults ? credential.getClientExtensionResults() : {}
+                        },
+                        device_name: deviceName
+                    })
+                });
+
+                if (!verifyResponse.ok) {
+                    const error = await verifyResponse.json();
+                    throw new Error(error.error_description || 'Failed to verify registration');
+                }
+
+                const verifyData = await verifyResponse.json();
+                log('Registration verified successfully', verifyData);
+                showResult('registerResult', true, 'Passkey registered successfully!', verifyData);
+
+            } catch (error) {
+                log('Registration error: ' + error.message);
+                showResult('registerResult', false, error.message);
+            }
+        }
+
+        // Passkey Authentication
+        async function authenticatePasskey() {
+            const clientId = document.getElementById('clientId').value;
+            const rpId = document.getElementById('rpId').value;
+            const b2bSubject = document.getElementById('b2bSubject').value;
+            const redirectUri = document.getElementById('redirectUri').value;
+            const state = document.getElementById('state').value;
+
+            try {
+                log('Starting passkey authentication...');
+
+                // Step 1: Get authentication options
+                log('Step 1: Getting authentication options from server...');
+                const optionsResponse = await fetch('/b2b/passkey/authenticate/options', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_id: clientId,
+                        rp_id: rpId,
+                        b2b_subject: b2bSubject || undefined
+                    })
+                });
+
+                if (!optionsResponse.ok) {
+                    const error = await optionsResponse.json();
+                    throw new Error(error.error_description || 'Failed to get authentication options');
+                }
+
+                const optionsData = await optionsResponse.json();
+                log('Authentication options received', optionsData);
+
+                const sessionId = optionsData.session_id;
+                const options = optionsData.options;
+
+                // Step 2: Convert options for WebAuthn API
+                const publicKeyOptions = {
+                    challenge: base64UrlDecode(options.challenge),
+                    rpId: options.rpId,
+                    allowCredentials: (options.allowCredentials || []).map(c => ({
+                        type: c.type,
+                        id: base64UrlDecode(c.id),
+                        transports: c.transports
+                    })),
+                    userVerification: options.userVerification,
+                    timeout: options.timeout
+                };
+
+                log('Calling navigator.credentials.get()...', publicKeyOptions);
+
+                // Step 3: Get assertion using WebAuthn API
+                const credential = await navigator.credentials.get({
+                    publicKey: publicKeyOptions
+                });
+
+                log('Assertion received', {
+                    id: credential.id,
+                    type: credential.type
+                });
+
+                // Step 4: Verify authentication
+                log('Step 4: Verifying authentication with server...');
+                const verifyResponse = await fetch('/b2b/passkey/authenticate/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_id: clientId,
+                        session_id: sessionId,
+                        redirect_uri: redirectUri,
+                        state: state || undefined,
+                        response: {
+                            id: credential.id,
+                            rawId: base64UrlEncode(credential.rawId),
+                            response: {
+                                authenticatorData: base64UrlEncode(credential.response.authenticatorData),
+                                clientDataJSON: base64UrlEncode(credential.response.clientDataJSON),
+                                signature: base64UrlEncode(credential.response.signature),
+                                userHandle: credential.response.userHandle ? base64UrlEncode(credential.response.userHandle) : null
+                            },
+                            type: credential.type,
+                            clientExtensionResults: credential.getClientExtensionResults ? credential.getClientExtensionResults() : {}
+                        }
+                    })
+                });
+
+                if (!verifyResponse.ok) {
+                    const error = await verifyResponse.json();
+                    throw new Error(error.error_description || 'Failed to verify authentication');
+                }
+
+                const verifyData = await verifyResponse.json();
+                log('Authentication verified successfully', verifyData);
+                showResult('authenticateResult', true, 'Authentication successful! Redirect URL generated.', verifyData);
+
+            } catch (error) {
+                log('Authentication error: ' + error.message);
+                showResult('authenticateResult', false, error.message);
+            }
+        }
+
+        // List Passkeys
+        async function listPasskeys() {
+            const accessToken = document.getElementById('accessToken').value;
+
+            if (!accessToken) {
+                showResult('listResult', false, 'Access token is required for this operation.');
+                return;
+            }
+
+            try {
+                log('Listing passkeys...');
+
+                const response = await fetch('/b2b/passkey/list', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error_description || 'Failed to list passkeys');
+                }
+
+                const data = await response.json();
+                log('Passkeys retrieved', data);
+
+                const listEl = document.getElementById('passkeyList');
+                listEl.style.display = 'block';
+
+                if (data.passkeys && data.passkeys.length > 0) {
+                    listEl.innerHTML = data.passkeys.map(p => `
+                        <div class="passkey-item">
+                            <div class="passkey-info">
+                                <strong>${p.device_name || 'Unknown Device'}</strong>
+                                <small>Credential ID: ${p.credential_id}</small>
+                                <small>Created: ${new Date(p.created_at).toLocaleString()}</small>
+                                <small>Last Used: ${p.last_used_at ? new Date(p.last_used_at).toLocaleString() : 'Never'}</small>
+                            </div>
+                            <button class="danger" onclick="deletePasskey('${p.credential_id}')">Delete</button>
+                        </div>
+                    `).join('');
+                } else {
+                    listEl.innerHTML = '<p>No passkeys registered.</p>';
+                }
+
+                document.getElementById('listResult').style.display = 'none';
+
+            } catch (error) {
+                log('List passkeys error: ' + error.message);
+                showResult('listResult', false, error.message);
+                document.getElementById('passkeyList').style.display = 'none';
+            }
+        }
+
+        // Delete Passkey
+        async function deletePasskey(credentialId) {
+            const accessToken = document.getElementById('accessToken').value;
+
+            if (!confirm('Are you sure you want to delete this passkey?')) {
+                return;
+            }
+
+            try {
+                log('Deleting passkey: ' + credentialId);
+
+                const response = await fetch(`/b2b/passkey/${encodeURIComponent(credentialId)}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error_description || 'Failed to delete passkey');
+                }
+
+                log('Passkey deleted successfully');
+                alert('Passkey deleted successfully!');
+                listPasskeys(); // Refresh list
+
+            } catch (error) {
+                log('Delete passkey error: ' + error.message);
+                alert('Error: ' + error.message);
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            // Generate initial state only (B2B Subject should use the pre-registered value)
+            generateState();
+
+            // Set RP ID based on current hostname
+            const rpIdEl = document.getElementById('rpId');
+            rpIdEl.value = window.location.hostname;
+
+            log('Page initialized. RP ID set to: ' + window.location.hostname);
+            log('Using pre-registered B2B Subject: ' + document.getElementById('b2bSubject').value);
+        });
+    </script>
+</body>
+</html>

@@ -18,19 +18,24 @@ namespace IdentityProvider.Services
         private readonly IWebAuthnChallengeService _challengeService;
         private readonly IB2BUserService _userService;
         private readonly ILogger<B2BPasskeyService> _logger;
+        private readonly Func<Fido2Configuration, IFido2> _fido2Factory;
 
         public B2BPasskeyService(
             EcAuthDbContext context,
             IFido2 fido2,
             IWebAuthnChallengeService challengeService,
             IB2BUserService userService,
-            ILogger<B2BPasskeyService> logger)
+            ILogger<B2BPasskeyService> logger,
+            Func<Fido2Configuration, IFido2>? fido2Factory = null)
         {
             _context = context;
             _fido2 = fido2;
             _challengeService = challengeService;
             _userService = userService;
             _logger = logger;
+            // マルチテナント対応: origin検証のために動的にFido2インスタンスを作成するためのファクトリー
+            // テスト時にはモックを返すファクトリーを注入可能
+            _fido2Factory = fido2Factory ?? (config => new Fido2(config));
         }
 
         #region Registration Methods
@@ -190,8 +195,26 @@ namespace IdentityProvider.Services
                     return !exists;
                 };
 
+                // 動的にoriginを構築（RP IDに基づく）
+                // 開発環境: localhost:8081, 本番環境: 各店舗のドメイン
+                // Fido2.NetLib 4.0.0ではorigin検証はFido2Configurationで設定するため、
+                // リクエストごとに新しいFido2インスタンスを作成
+                var allowedOrigins = new HashSet<string>
+                {
+                    $"https://{challenge.RpId}",
+                    $"https://{challenge.RpId}:8081",  // 開発環境用ポート
+                    $"https://{challenge.RpId}:443"
+                };
+                var dynamicConfig = new Fido2Configuration
+                {
+                    ServerDomain = challenge.RpId!,
+                    ServerName = rpName,
+                    Origins = allowedOrigins
+                };
+                var dynamicFido2 = _fido2Factory(dynamicConfig);
+
                 // 登録検証（Fido2.NetLib 4.0.0 API）
-                var result = await _fido2.MakeNewCredentialAsync(new MakeNewCredentialParams
+                var result = await dynamicFido2.MakeNewCredentialAsync(new MakeNewCredentialParams
                 {
                     AttestationResponse = request.AttestationResponse,
                     OriginalOptions = options,
@@ -305,12 +328,16 @@ namespace IdentityProvider.Services
                     ClientId = client.Id
                 });
 
-            // 認証オプション生成（Fido2.NetLib 4.0.0 API）
-            var options = _fido2.GetAssertionOptions(new GetAssertionOptionsParams
+            // 認証オプション生成
+            // 注: _fido2.GetAssertionOptions()は内部で別のチャレンジを生成するため使用しない
+            // _challengeServiceで生成したチャレンジと一致させるため、手動でAssertionOptionsを構築
+            var options = new AssertionOptions
             {
-                AllowedCredentials = allowCredentials,
+                Challenge = WebEncoders.Base64UrlDecode(challengeResult.Challenge),
+                RpId = request.RpId,
+                AllowCredentials = allowCredentials,
                 UserVerification = UserVerificationRequirement.Preferred
-            });
+            };
 
             _logger.LogInformation(
                 "Created authentication options, SessionId: {SessionId}, AllowCredentials: {Count}",
@@ -395,8 +422,25 @@ namespace IdentityProvider.Services
                     return Task.FromResult(credential.B2BSubject == userHandle);
                 };
 
+                // 動的にoriginを構築（RP IDに基づく）
+                // Fido2.NetLib 4.0.0ではorigin検証はFido2Configurationで設定するため、
+                // リクエストごとに新しいFido2インスタンスを作成
+                var allowedOrigins = new HashSet<string>
+                {
+                    $"https://{challenge.RpId}",
+                    $"https://{challenge.RpId}:8081",  // 開発環境用ポート
+                    $"https://{challenge.RpId}:443"
+                };
+                var dynamicConfig = new Fido2Configuration
+                {
+                    ServerDomain = challenge.RpId!,
+                    ServerName = "EcAuth",
+                    Origins = allowedOrigins
+                };
+                var dynamicFido2 = _fido2Factory(dynamicConfig);
+
                 // 認証検証（Fido2.NetLib 4.0.0 API）
-                var result = await _fido2.MakeAssertionAsync(new MakeAssertionParams
+                var result = await dynamicFido2.MakeAssertionAsync(new MakeAssertionParams
                 {
                     AssertionResponse = request.AssertionResponse,
                     OriginalOptions = options,

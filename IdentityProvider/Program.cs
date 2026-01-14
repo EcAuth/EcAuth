@@ -60,6 +60,8 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+    // 開発環境でのみ静的ファイルを有効化（B2Bパスキーテストページ用）
+    app.UseStaticFiles();
 }
 
 app.UseMiddleware<TenantMiddleware>();

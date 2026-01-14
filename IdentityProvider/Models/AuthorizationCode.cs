@@ -12,10 +12,19 @@ namespace IdentityProvider.Models
         [MaxLength(255)]
         public string Code { get; set; } = string.Empty;
 
+        /// <summary>
+        /// B2C認証時のSubject（EcAuthUserへの外部キー）
+        /// </summary>
         [Column("ecauth_subject")]
         [MaxLength(255)]
-        [Required]
-        public string EcAuthSubject { get; set; } = string.Empty;
+        public string? EcAuthSubject { get; set; }
+
+        /// <summary>
+        /// B2B認証時のSubject（B2BUserへの外部キー）
+        /// </summary>
+        [Column("b2b_subject")]
+        [MaxLength(255)]
+        public string? B2BSubject { get; set; }
 
         [Column("client_id")]
         [Required]
@@ -47,6 +56,7 @@ namespace IdentityProvider.Models
         public DateTimeOffset? UsedAt { get; set; }
 
         public EcAuthUser? EcAuthUser { get; set; }
+        public B2BUser? B2BUser { get; set; }
         public Client? Client { get; set; }
     }
 }

@@ -37,5 +37,6 @@ namespace IdentityProvider.Models
 
         public Organization? Organization { get; set; }
         public ICollection<B2BPasskeyCredential> PasskeyCredentials { get; } = new List<B2BPasskeyCredential>();
+        public ICollection<AuthorizationCode> AuthorizationCodes { get; } = new List<AuthorizationCode>();
     }
 }
