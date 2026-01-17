@@ -47,3 +47,11 @@ STAGING_MOCK_IDP_USERINFO_ENDPOINT=op://EcAuth/mockidp-staging/userinfo_endpoint
 ECCUBE2_CLIENT_ID=op://EcAuth/eccube2-ecauth-plugin/client_id
 ECCUBE2_CLIENT_SECRET=op://EcAuth/eccube2-ecauth-plugin/client_secret
 ECCUBE2_REDIRECT_URI=op://EcAuth/eccube2-ecauth-plugin/redirect_uri
+
+# =============================================================================
+# B2B Passkey Data (Staging)
+# =============================================================================
+STAGING_B2B_USER_SUBJECT=op://EcAuth/ecauth-staging-app/b2b_user_subject
+STAGING_B2B_USER_EXTERNAL_ID=op://EcAuth/ecauth-staging-app/b2b_user_external_id
+STAGING_B2B_REDIRECT_URI=op://EcAuth/ecauth-staging-app/b2b_redirect_uri
+STAGING_B2B_ALLOWED_RP_IDS=op://EcAuth/ecauth-staging-app/b2b_allowed_rp_ids
