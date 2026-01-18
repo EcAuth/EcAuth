@@ -70,3 +70,37 @@ AMAZON_OAUTH2_CLIENT_SECRET=<Amazon OAuth2 client_secret>
 AMAZON_OAUTH2_AUTHORIZATION_ENDPOINT=https://www.amazon.com/ap/oa
 AMAZON_OAUTH2_TOKEN_ENDPOINT=https://api.amazon.co.jp/auth/o2/token
 AMAZON_OAUTH2_USERINFO_ENDPOINT=https://api.amazon.com/user/profile
+
+# =============================================================================
+# Staging Organization/Client Settings (ローカル開発用ダミー値)
+# =============================================================================
+STAGING_ORGANIZATION_CODE=staging
+STAGING_ORGANIZATION_NAME=staging
+STAGING_ORGANIZATION_TENANT_NAME=staging
+STAGING_CLIENT_ID=staging_client_id
+STAGING_CLIENT_SECRET=staging_client_secret
+STAGING_APP_NAME=EC-CUBE4 Staging
+STAGING_REDIRECT_URI=https://localhost:4430/callback
+
+# Staging MockIdP Settings
+STAGING_MOCK_IDP_APP_NAME=staging-mock-idp
+STAGING_MOCK_IDP_CLIENT_ID=staging_mock_idp_client_id
+STAGING_MOCK_IDP_CLIENT_SECRET=staging_mock_idp_client_secret
+STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT=https://localhost:9091/authorization?org=staging
+STAGING_MOCK_IDP_TOKEN_ENDPOINT=https://localhost:9091/token
+STAGING_MOCK_IDP_USERINFO_ENDPOINT=https://localhost:9091/userinfo
+
+# =============================================================================
+# EC-CUBE 2系プラグイン Settings (ローカル開発用ダミー値)
+# =============================================================================
+ECCUBE2_CLIENT_ID=eccube2_client_id
+ECCUBE2_CLIENT_SECRET=eccube2_client_secret
+ECCUBE2_REDIRECT_URI=https://localhost:4430/eccube2/callback
+
+# =============================================================================
+# B2B Passkey Test Data (Development)
+# =============================================================================
+DEV_B2B_USER_SUBJECT=3f7c0ab4-b004-4102-b6ed-a730369dd237
+DEV_B2B_USER_EXTERNAL_ID=test-admin
+DEV_B2B_REDIRECT_URI=https://localhost:8081/admin/ecauth/callback
+DEV_B2B_ALLOWED_RP_IDS=localhost
