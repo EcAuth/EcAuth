@@ -85,7 +85,7 @@ public class B2BPasskeySeeder : IDbSeeder
         }
     }
 
-    private static async Task<bool> SeedAllowedRpIdsAsync(
+    private static Task<bool> SeedAllowedRpIdsAsync(
         EcAuthDbContext context,
         Client client,
         string? b2bAllowedRpIds,
@@ -94,13 +94,13 @@ public class B2BPasskeySeeder : IDbSeeder
     {
         if (string.IsNullOrEmpty(b2bAllowedRpIds))
         {
-            return false;
+            return Task.FromResult(false);
         }
 
         var currentRpIds = client.AllowedRpIds;
         if (currentRpIds.Contains(b2bAllowedRpIds))
         {
-            return false;
+            return Task.FromResult(false);
         }
 
         currentRpIds.Add(b2bAllowedRpIds);
@@ -110,7 +110,7 @@ public class B2BPasskeySeeder : IDbSeeder
         logger.LogInformation("Added {RpId} to AllowedRpIds for client {ClientId}",
             b2bAllowedRpIds, clientId);
 
-        return true;
+        return Task.FromResult(true);
     }
 
     private static async Task<bool> SeedRedirectUriAsync(
