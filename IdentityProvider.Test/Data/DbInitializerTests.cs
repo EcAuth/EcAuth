@@ -31,10 +31,10 @@ namespace IdentityProvider.Test.Data
             var seeder3 = new TestSeeder("Migration1", 200, () => executionOrder.Add(200));
 
             // シーダーが実行されるようにマイグレーションを模擬
-            // インメモリDBでは GetAppliedMigrationsAsync() が空を返すため、
-            // シーダーはスキップされる。このテストでは FakeDbInitializer を使用
+            // TestableDbInitializer は DbInitializer を継承し、
+            // CanConnectAsync と GetAppliedMigrationsAsync をオーバーライドして制御可能
             var seeders = new List<IDbSeeder> { seeder1, seeder2, seeder3 };
-            var initializer = new FakeDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -58,7 +58,7 @@ namespace IdentityProvider.Test.Data
             var seeder2 = new TestSeeder("Migration1", 100, () => executionOrder.Add("Second"));
 
             var seeders = new List<IDbSeeder> { seeder1, seeder2 };
-            var initializer = new FakeDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -83,7 +83,7 @@ namespace IdentityProvider.Test.Data
             var seeder = new TestSeeder("NonExistentMigration", 100, () => wasExecuted = true);
 
             var seeders = new List<IDbSeeder> { seeder };
-            var initializer = new FakeDbInitializer(seeders, _mockLogger.Object, new HashSet<string>());
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string>());
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -102,7 +102,7 @@ namespace IdentityProvider.Test.Data
             var seeder = new TestSeeder("AppliedMigration", 100, () => wasExecuted = true);
 
             var seeders = new List<IDbSeeder> { seeder };
-            var initializer = new FakeDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "AppliedMigration" });
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "AppliedMigration" });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -126,7 +126,7 @@ namespace IdentityProvider.Test.Data
             var seeders = new List<IDbSeeder> { seeder1, seeder2, seeder3 };
             // Only Migration1 and Migration3 are applied
             var appliedMigrations = new HashSet<string> { "Migration1", "Migration3" };
-            var initializer = new FakeDbInitializer(seeders, _mockLogger.Object, appliedMigrations);
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, appliedMigrations);
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -153,7 +153,7 @@ namespace IdentityProvider.Test.Data
 
             var seeders = new List<IDbSeeder> { seeder };
             // canConnect = false をシミュレート
-            var initializer = new FakeDbInitializer(
+            var initializer = new TestableDbInitializer(
                 seeders,
                 _mockLogger.Object,
                 new HashSet<string> { "Migration1" },
@@ -179,7 +179,7 @@ namespace IdentityProvider.Test.Data
             var seeder = new TestSeeder("Migration1", 100, () => throw new InvalidOperationException("Test exception"));
 
             var seeders = new List<IDbSeeder> { seeder };
-            var initializer = new FakeDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -195,7 +195,7 @@ namespace IdentityProvider.Test.Data
             var seeder = new TestSeeder("Migration1", 100, () => throw new InvalidOperationException("Test exception"));
 
             var seeders = new List<IDbSeeder> { seeder };
-            var initializer = new FakeDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -229,7 +229,7 @@ namespace IdentityProvider.Test.Data
         {
             // Arrange
             var seeders = new List<IDbSeeder>();
-            var initializer = new FakeDbInitializer(seeders, _mockLogger.Object, new HashSet<string>());
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string>());
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -272,71 +272,28 @@ namespace IdentityProvider.Test.Data
 
         /// <summary>
         /// テスト用の DbInitializer 実装
-        /// GetAppliedMigrationsAsync と CanConnectAsync の結果を制御可能
+        /// DbInitializer を継承し、CanConnectAsync と GetAppliedMigrationsAsync をオーバーライド
         /// </summary>
-        private class FakeDbInitializer
+        private class TestableDbInitializer : DbInitializer
         {
-            private readonly IEnumerable<IDbSeeder> _seeders;
-            private readonly ILogger<DbInitializer> _logger;
             private readonly HashSet<string> _appliedMigrations;
             private readonly bool _canConnect;
 
-            public FakeDbInitializer(
+            public TestableDbInitializer(
                 IEnumerable<IDbSeeder> seeders,
                 ILogger<DbInitializer> logger,
                 HashSet<string> appliedMigrations,
-                bool canConnect = true)
+                bool canConnect = true) : base(seeders, logger)
             {
-                _seeders = seeders;
-                _logger = logger;
                 _appliedMigrations = appliedMigrations;
                 _canConnect = canConnect;
             }
 
-            public async Task InitializeAsync(EcAuthDbContext context, IConfiguration configuration)
-            {
-                // データベース接続確認（モック）
-                if (!_canConnect)
-                {
-                    _logger.LogWarning("DbInitializer: Database is not available. Skipping seed.");
-                    return;
-                }
+            protected override Task<bool> CanConnectAsync(EcAuthDbContext context)
+                => Task.FromResult(_canConnect);
 
-                // 適用済みマイグレーションを取得（モック）
-                _logger.LogInformation("DbInitializer: Found {Count} applied migrations", _appliedMigrations.Count);
-
-                // シーダーを Order 順にソートして実行
-                var orderedSeeders = _seeders.OrderBy(s => s.Order);
-
-                foreach (var seeder in orderedSeeders)
-                {
-                    var seederName = seeder.GetType().Name;
-
-                    if (_appliedMigrations.Contains(seeder.RequiredMigration))
-                    {
-                        _logger.LogInformation("DbInitializer: Running {Seeder}", seederName);
-
-                        try
-                        {
-                            await seeder.SeedAsync(context, configuration, _logger);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "DbInitializer: Error running {Seeder}", seederName);
-                            throw;
-                        }
-                    }
-                    else
-                    {
-                        _logger.LogInformation(
-                            "DbInitializer: Skipping {Seeder} - migration {Migration} not applied yet",
-                            seederName,
-                            seeder.RequiredMigration);
-                    }
-                }
-
-                _logger.LogInformation("DbInitializer: Initialization completed");
-            }
+            protected override Task<HashSet<string>> GetAppliedMigrationsAsync(EcAuthDbContext context)
+                => Task.FromResult(_appliedMigrations);
         }
 
         #endregion

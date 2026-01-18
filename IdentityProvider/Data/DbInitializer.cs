@@ -21,6 +21,20 @@ public class DbInitializer
     }
 
     /// <summary>
+    /// データベースに接続可能かどうかを確認します。
+    /// テスト時にオーバーライドして接続状態を制御できます。
+    /// </summary>
+    protected virtual async Task<bool> CanConnectAsync(EcAuthDbContext context)
+        => await context.Database.CanConnectAsync();
+
+    /// <summary>
+    /// 適用済みマイグレーションの一覧を取得します。
+    /// テスト時にオーバーライドしてマイグレーション状態を制御できます。
+    /// </summary>
+    protected virtual async Task<HashSet<string>> GetAppliedMigrationsAsync(EcAuthDbContext context)
+        => (await context.Database.GetAppliedMigrationsAsync()).ToHashSet();
+
+    /// <summary>
     /// データベースの初期化処理を実行します。
     /// マイグレーションバージョンを確認し、適用済みのマイグレーションに対応するシードデータのみを投入します。
     /// </summary>
@@ -31,16 +45,14 @@ public class DbInitializer
         IConfiguration configuration)
     {
         // データベース接続確認
-        if (!await context.Database.CanConnectAsync())
+        if (!await CanConnectAsync(context))
         {
             _logger.LogWarning("DbInitializer: Database is not available. Skipping seed.");
             return;
         }
 
         // 適用済みマイグレーションを取得
-        var appliedMigrations = (await context.Database
-            .GetAppliedMigrationsAsync())
-            .ToHashSet();
+        var appliedMigrations = await GetAppliedMigrationsAsync(context);
 
         _logger.LogInformation("DbInitializer: Found {Count} applied migrations", appliedMigrations.Count);
 
