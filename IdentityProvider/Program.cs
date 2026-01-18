@@ -67,8 +67,26 @@ using (var scope = app.Services.CreateScope())
     var dbInitializer = scope.ServiceProvider.GetRequiredService<DbInitializer>();
     var context = scope.ServiceProvider.GetRequiredService<EcAuthDbContext>();
     var configuration = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
-    await dbInitializer.InitializeAsync(context, configuration);
+    try
+    {
+        await dbInitializer.InitializeAsync(context, configuration);
+    }
+    catch (Exception ex)
+    {
+        if (app.Environment.IsDevelopment())
+        {
+            // 開発環境ではシード失敗時に起動を停止（問題を即座に検知）
+            logger.LogError(ex, "DbInitializer failed. Stopping application in Development environment.");
+            throw;
+        }
+        else
+        {
+            // 本番環境ではシード失敗時も起動を継続（サービス可用性を優先）
+            logger.LogError(ex, "DbInitializer failed. Continuing startup in Production environment.");
+        }
+    }
 }
 
 // Configure the HTTP request pipeline.
