@@ -11,11 +11,18 @@ namespace IdentityProvider.Test.Data
     {
         private readonly EcAuthDbContext _context;
         private readonly Mock<ILogger<DbInitializer>> _mockLogger;
+        private readonly Mock<ILoggerFactory> _mockLoggerFactory;
 
         public DbInitializerTests()
         {
             _context = TestDbContextHelper.CreateInMemoryContext();
             _mockLogger = new Mock<ILogger<DbInitializer>>();
+            _mockLoggerFactory = new Mock<ILoggerFactory>();
+
+            // ILoggerFactory がシーダー用ロガーを返すように設定
+            _mockLoggerFactory
+                .Setup(x => x.CreateLogger(It.IsAny<string>()))
+                .Returns(new Mock<ILogger>().Object);
         }
 
         #region Seeder Execution Order Tests
@@ -34,7 +41,7 @@ namespace IdentityProvider.Test.Data
             // TestableDbInitializer は DbInitializer を継承し、
             // CanConnectAsync と GetAppliedMigrationsAsync をオーバーライドして制御可能
             var seeders = new List<IDbSeeder> { seeder1, seeder2, seeder3 };
-            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, _mockLoggerFactory.Object, new HashSet<string> { "Migration1" });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -58,7 +65,7 @@ namespace IdentityProvider.Test.Data
             var seeder2 = new TestSeeder("Migration1", 100, () => executionOrder.Add("Second"));
 
             var seeders = new List<IDbSeeder> { seeder1, seeder2 };
-            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, _mockLoggerFactory.Object, new HashSet<string> { "Migration1" });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -83,7 +90,7 @@ namespace IdentityProvider.Test.Data
             var seeder = new TestSeeder("NonExistentMigration", 100, () => wasExecuted = true);
 
             var seeders = new List<IDbSeeder> { seeder };
-            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string>());
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, _mockLoggerFactory.Object, new HashSet<string>());
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -102,7 +109,7 @@ namespace IdentityProvider.Test.Data
             var seeder = new TestSeeder("AppliedMigration", 100, () => wasExecuted = true);
 
             var seeders = new List<IDbSeeder> { seeder };
-            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "AppliedMigration" });
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, _mockLoggerFactory.Object, new HashSet<string> { "AppliedMigration" });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -126,7 +133,7 @@ namespace IdentityProvider.Test.Data
             var seeders = new List<IDbSeeder> { seeder1, seeder2, seeder3 };
             // Only Migration1 and Migration3 are applied
             var appliedMigrations = new HashSet<string> { "Migration1", "Migration3" };
-            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, appliedMigrations);
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, _mockLoggerFactory.Object, appliedMigrations);
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -156,6 +163,7 @@ namespace IdentityProvider.Test.Data
             var initializer = new TestableDbInitializer(
                 seeders,
                 _mockLogger.Object,
+                _mockLoggerFactory.Object,
                 new HashSet<string> { "Migration1" },
                 canConnect: false);
 
@@ -179,7 +187,7 @@ namespace IdentityProvider.Test.Data
             var seeder = new TestSeeder("Migration1", 100, () => throw new InvalidOperationException("Test exception"));
 
             var seeders = new List<IDbSeeder> { seeder };
-            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, _mockLoggerFactory.Object, new HashSet<string> { "Migration1" });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -195,7 +203,7 @@ namespace IdentityProvider.Test.Data
             var seeder = new TestSeeder("Migration1", 100, () => throw new InvalidOperationException("Test exception"));
 
             var seeders = new List<IDbSeeder> { seeder };
-            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string> { "Migration1" });
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, _mockLoggerFactory.Object, new HashSet<string> { "Migration1" });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -229,7 +237,7 @@ namespace IdentityProvider.Test.Data
         {
             // Arrange
             var seeders = new List<IDbSeeder>();
-            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, new HashSet<string>());
+            var initializer = new TestableDbInitializer(seeders, _mockLogger.Object, _mockLoggerFactory.Object, new HashSet<string>());
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -282,8 +290,9 @@ namespace IdentityProvider.Test.Data
             public TestableDbInitializer(
                 IEnumerable<IDbSeeder> seeders,
                 ILogger<DbInitializer> logger,
+                ILoggerFactory loggerFactory,
                 HashSet<string> appliedMigrations,
-                bool canConnect = true) : base(seeders, logger)
+                bool canConnect = true) : base(seeders, logger, loggerFactory)
             {
                 _appliedMigrations = appliedMigrations;
                 _canConnect = canConnect;

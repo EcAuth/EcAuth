@@ -25,7 +25,7 @@ public class B2BPasskeySeeder : IDbSeeder
     {
         // 環境に応じた設定キーのプレフィックスを決定
         var prefix = GetEnvironmentPrefix(configuration);
-        logger.LogInformation("B2BPasskeySeeder: Using environment prefix {Prefix}", prefix);
+        logger.LogInformation("Using environment prefix {Prefix}", prefix);
 
         // 環境変数から値を取得
         var clientId = prefix == "DEV"
@@ -42,13 +42,13 @@ public class B2BPasskeySeeder : IDbSeeder
         // 必須パラメータのチェック
         if (string.IsNullOrEmpty(b2bUserSubject))
         {
-            logger.LogInformation("B2BPasskeySeeder: Skipped - {Prefix}_B2B_USER_SUBJECT not configured", prefix);
+            logger.LogInformation("Skipped - {Prefix}_B2B_USER_SUBJECT not configured", prefix);
             return;
         }
 
         if (string.IsNullOrEmpty(clientId))
         {
-            logger.LogWarning("B2BPasskeySeeder: Skipped - Client ID not configured for prefix {Prefix}", prefix);
+            logger.LogWarning("Skipped - Client ID not configured for prefix {Prefix}", prefix);
             return;
         }
 
@@ -59,7 +59,7 @@ public class B2BPasskeySeeder : IDbSeeder
 
         if (client == null)
         {
-            logger.LogWarning("B2BPasskeySeeder: Skipped - Client {ClientId} not found", clientId);
+            logger.LogWarning("Skipped - Client {ClientId} not found", clientId);
             return;
         }
 
@@ -77,11 +77,11 @@ public class B2BPasskeySeeder : IDbSeeder
         if (hasChanges)
         {
             await context.SaveChangesAsync();
-            logger.LogInformation("B2BPasskeySeeder: Seed data saved successfully");
+            logger.LogInformation("Seed data saved successfully");
         }
         else
         {
-            logger.LogInformation("B2BPasskeySeeder: No changes needed");
+            logger.LogInformation("No changes needed");
         }
     }
 
@@ -107,7 +107,7 @@ public class B2BPasskeySeeder : IDbSeeder
         client.AllowedRpIds = currentRpIds;
         client.UpdatedAt = DateTimeOffset.UtcNow;
 
-        logger.LogInformation("B2BPasskeySeeder: Added {RpId} to AllowedRpIds for client {ClientId}",
+        logger.LogInformation("Added {RpId} to AllowedRpIds for client {ClientId}",
             b2bAllowedRpIds, clientId);
 
         return true;
@@ -140,7 +140,7 @@ public class B2BPasskeySeeder : IDbSeeder
             ClientId = client.Id
         });
 
-        logger.LogInformation("B2BPasskeySeeder: Added RedirectUri {Uri} for client {ClientId}",
+        logger.LogInformation("Added RedirectUri {Uri} for client {ClientId}",
             b2bRedirectUri, clientId);
 
         return true;
@@ -168,7 +168,7 @@ public class B2BPasskeySeeder : IDbSeeder
 
         if (organization == null)
         {
-            logger.LogWarning("B2BPasskeySeeder: B2BUser creation skipped - Organization {OrgCode} not found",
+            logger.LogWarning("B2BUser creation skipped - Organization {OrgCode} not found",
                 organizationCode);
             return false;
         }
@@ -181,7 +181,7 @@ public class B2BPasskeySeeder : IDbSeeder
             OrganizationId = organization.Id
         });
 
-        logger.LogInformation("B2BPasskeySeeder: Created B2BUser {Subject} for organization {OrgCode}",
+        logger.LogInformation("Created B2BUser {Subject} for organization {OrgCode}",
             b2bUserSubject, organizationCode);
 
         return true;

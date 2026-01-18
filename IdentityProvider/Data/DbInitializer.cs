@@ -11,13 +11,16 @@ public class DbInitializer
 {
     private readonly IEnumerable<IDbSeeder> _seeders;
     private readonly ILogger<DbInitializer> _logger;
+    private readonly ILoggerFactory _loggerFactory;
 
     public DbInitializer(
         IEnumerable<IDbSeeder> seeders,
-        ILogger<DbInitializer> logger)
+        ILogger<DbInitializer> logger,
+        ILoggerFactory loggerFactory)
     {
         _seeders = seeders;
         _logger = logger;
+        _loggerFactory = loggerFactory;
     }
 
     /// <summary>
@@ -61,15 +64,19 @@ public class DbInitializer
 
         foreach (var seeder in orderedSeeders)
         {
-            var seederName = seeder.GetType().Name;
+            var seederType = seeder.GetType();
+            var seederName = seederType.Name;
 
             if (appliedMigrations.Contains(seeder.RequiredMigration))
             {
                 _logger.LogInformation("DbInitializer: Running {Seeder}", seederName);
 
+                // シーダー固有のロガーを作成
+                var seederLogger = _loggerFactory.CreateLogger(seederType);
+
                 try
                 {
-                    await seeder.SeedAsync(context, configuration, _logger);
+                    await seeder.SeedAsync(context, configuration, seederLogger);
                 }
                 catch (Exception ex)
                 {
