@@ -4,6 +4,7 @@ using IdentityProvider.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IdentityProvider.Migrations
 {
     [DbContext(typeof(EcAuthDbContext))]
-    partial class EcAuthDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260111034146_AddB2BPasskeyEntities")]
+    partial class AddB2BPasskeyEntities
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -113,11 +116,6 @@ namespace IdentityProvider.Migrations
                         .HasColumnType("nvarchar(255)")
                         .HasColumnName("code");
 
-                    b.Property<string>("B2BSubject")
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)")
-                        .HasColumnName("b2b_subject");
-
                     b.Property<int>("ClientId")
                         .HasColumnType("int")
                         .HasColumnName("client_id");
@@ -127,6 +125,7 @@ namespace IdentityProvider.Migrations
                         .HasColumnName("created_at");
 
                     b.Property<string>("EcAuthSubject")
+                        .IsRequired()
                         .HasMaxLength(255)
                         .HasColumnType("nvarchar(255)")
                         .HasColumnName("ecauth_subject");
@@ -160,8 +159,6 @@ namespace IdentityProvider.Migrations
                         .HasColumnName("used_at");
 
                     b.HasKey("Code");
-
-                    b.HasIndex("B2BSubject");
 
                     b.HasIndex("ClientId");
 
@@ -760,12 +757,6 @@ namespace IdentityProvider.Migrations
 
             modelBuilder.Entity("IdentityProvider.Models.AuthorizationCode", b =>
                 {
-                    b.HasOne("IdentityProvider.Models.B2BUser", "B2BUser")
-                        .WithMany("AuthorizationCodes")
-                        .HasForeignKey("B2BSubject")
-                        .HasPrincipalKey("Subject")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("IdentityProvider.Models.Client", "Client")
                         .WithMany()
                         .HasForeignKey("ClientId")
@@ -776,9 +767,8 @@ namespace IdentityProvider.Migrations
                         .WithMany("AuthorizationCodes")
                         .HasForeignKey("EcAuthSubject")
                         .HasPrincipalKey("Subject")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("B2BUser");
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.Navigation("Client");
 
@@ -907,8 +897,6 @@ namespace IdentityProvider.Migrations
 
             modelBuilder.Entity("IdentityProvider.Models.B2BUser", b =>
                 {
-                    b.Navigation("AuthorizationCodes");
-
                     b.Navigation("PasskeyCredentials");
                 });
 

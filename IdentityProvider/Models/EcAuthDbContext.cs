@@ -25,6 +25,9 @@ namespace IdentityProvider.Models
         public DbSet<AuthorizationCode> AuthorizationCodes { get; set; }
         public DbSet<AccessToken> AccessTokens { get; set; }
         public DbSet<ExternalIdpToken> ExternalIdpTokens { get; set; }
+        public DbSet<B2BUser> B2BUsers { get; set; }
+        public DbSet<B2BPasskeyCredential> B2BPasskeyCredentials { get; set; }
+        public DbSet<WebAuthnChallenge> WebAuthnChallenges { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -70,12 +73,23 @@ namespace IdentityProvider.Models
                 .HasPrincipalKey(u => u.Subject)
                 .OnDelete(DeleteBehavior.Cascade);
 
+            // B2C: EcAuthUser -> AuthorizationCode (optional)
             modelBuilder.Entity<EcAuthUser>()
                 .HasMany(u => u.AuthorizationCodes)
                 .WithOne(ac => ac.EcAuthUser)
                 .HasForeignKey(ac => ac.EcAuthSubject)
                 .HasPrincipalKey(u => u.Subject)
-                .OnDelete(DeleteBehavior.Cascade);
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // B2B: B2BUser -> AuthorizationCode (optional)
+            modelBuilder.Entity<B2BUser>()
+                .HasMany(u => u.AuthorizationCodes)
+                .WithOne(ac => ac.B2BUser)
+                .HasForeignKey(ac => ac.B2BSubject)
+                .HasPrincipalKey(u => u.Subject)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
 
             modelBuilder.Entity<EcAuthUser>()
                 .HasMany<AccessToken>()
@@ -134,6 +148,59 @@ namespace IdentityProvider.Models
 
             modelBuilder.Entity<ExternalIdpToken>()
                 .HasIndex(eit => eit.ExpiresAt);
+
+            // B2BUser テナントフィルター
+            modelBuilder.Entity<B2BUser>()
+                .HasQueryFilter(u => u.Organization != null && u.Organization.TenantName == _tenantService.TenantName);
+
+            // B2BPasskeyCredential テナントフィルター（B2BUser経由）
+            modelBuilder.Entity<B2BPasskeyCredential>()
+                .HasQueryFilter(c => c.B2BUser != null && c.B2BUser.Organization != null && c.B2BUser.Organization.TenantName == _tenantService.TenantName);
+
+            // WebAuthnChallenge テナントフィルター（Client経由）
+            modelBuilder.Entity<WebAuthnChallenge>()
+                .HasQueryFilter(wc => wc.Client != null && wc.Client.Organization != null && wc.Client.Organization.TenantName == _tenantService.TenantName);
+
+            // B2BUser 関連の設定
+            modelBuilder.Entity<B2BUser>()
+                .HasAlternateKey(u => u.Subject);
+
+            modelBuilder.Entity<B2BUser>()
+                .HasOne(u => u.Organization)
+                .WithMany()
+                .HasForeignKey(u => u.OrganizationId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<B2BUser>()
+                .HasMany(u => u.PasskeyCredentials)
+                .WithOne(c => c.B2BUser)
+                .HasForeignKey(c => c.B2BSubject)
+                .HasPrincipalKey(u => u.Subject)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<B2BUser>()
+                .HasIndex(u => new { u.OrganizationId, u.ExternalId })
+                .IsUnique()
+                .HasFilter("[external_id] IS NOT NULL");
+
+            // B2BPasskeyCredential 関連の設定
+            modelBuilder.Entity<B2BPasskeyCredential>()
+                .HasIndex(c => c.CredentialId)
+                .IsUnique();
+
+            // WebAuthnChallenge 関連の設定
+            modelBuilder.Entity<WebAuthnChallenge>()
+                .HasIndex(wc => wc.SessionId)
+                .IsUnique();
+
+            modelBuilder.Entity<WebAuthnChallenge>()
+                .HasIndex(wc => wc.ExpiresAt);
+
+            modelBuilder.Entity<WebAuthnChallenge>()
+                .HasOne(wc => wc.Client)
+                .WithMany()
+                .HasForeignKey(wc => wc.ClientId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             base.OnModelCreating(modelBuilder);
         }

@@ -10,7 +10,8 @@ namespace IdentityProvider.Test.Models
             var authCode = new AuthorizationCode();
 
             Assert.Equal(string.Empty, authCode.Code);
-            Assert.Equal(string.Empty, authCode.EcAuthSubject);
+            Assert.Null(authCode.EcAuthSubject);  // nullable化された
+            Assert.Null(authCode.B2BSubject);     // B2B用のSubject
             Assert.Equal(0, authCode.ClientId);
             Assert.Equal(string.Empty, authCode.RedirectUri);
             Assert.Null(authCode.Scope);
@@ -20,6 +21,7 @@ namespace IdentityProvider.Test.Models
             Assert.True(authCode.CreatedAt <= DateTimeOffset.UtcNow);
             Assert.Null(authCode.UsedAt);
             Assert.Null(authCode.EcAuthUser);
+            Assert.Null(authCode.B2BUser);        // B2B用のナビゲーションプロパティ
             Assert.Null(authCode.Client);
         }
 
