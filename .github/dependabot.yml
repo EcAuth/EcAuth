@@ -55,6 +55,20 @@ updates:
     # GitHub Packages の認証設定を参照
     registries:
       - github-packages
+    # .NET 10 へのメジャーバージョンアップグレードを無視
+    # プロジェクトが net9.0 をターゲットにしているため、ランタイムに含まれる
+    # パッケージは同じメジャーバージョンを維持する
+    ignore:
+      - dependency-name: "System.Text.Json"
+        versions: [">= 10.0.0"]
+      - dependency-name: "Microsoft.EntityFrameworkCore*"
+        versions: [">= 10.0.0"]
+      - dependency-name: "Microsoft.AspNetCore*"
+        versions: [">= 10.0.0"]
+      - dependency-name: "Microsoft.Extensions*"
+        versions: [">= 10.0.0"]
+      - dependency-name: "dotnet-ef"
+        versions: [">= 10.0.0"]
 
   # E2ETests の npm パッケージの自動更新
   - package-ecosystem: "npm"
