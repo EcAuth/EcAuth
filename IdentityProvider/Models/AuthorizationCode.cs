@@ -26,6 +26,20 @@ namespace IdentityProvider.Models
         [MaxLength(255)]
         public string? B2BSubject { get; set; }
 
+        /// <summary>
+        /// 統一Subject（B2C/B2B/Account共通）
+        /// 既存のecauth_subject/b2b_subjectカラムとの衝突を回避するためsubject_newとする
+        /// </summary>
+        [Column("subject_new")]
+        [MaxLength(255)]
+        public string? Subject { get; set; }
+
+        /// <summary>
+        /// Subjectの種別（B2C=0, B2B=1, Account=2）
+        /// </summary>
+        [Column("subject_type")]
+        public SubjectType? SubjectType { get; set; }
+
         [Column("client_id")]
         [Required]
         public int ClientId { get; set; }

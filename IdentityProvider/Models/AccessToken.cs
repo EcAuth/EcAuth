@@ -35,6 +35,19 @@ namespace IdentityProvider.Models
         [ForeignKey(nameof(EcAuthSubject))]
         public EcAuthUser EcAuthUser { get; set; } = null!;
 
+        /// <summary>
+        /// 統一Subject（B2C/B2B/Account共通）
+        /// </summary>
+        [Column("subject")]
+        [MaxLength(255)]
+        public string? Subject { get; set; }
+
+        /// <summary>
+        /// Subjectの種類（B2C=0, B2B=1, Account=2）
+        /// </summary>
+        [Column("subject_type")]
+        public SubjectType? SubjectType { get; set; }
+
         [Column("created_at")]
         [Required]
         public DateTime CreatedAt { get; set; }
