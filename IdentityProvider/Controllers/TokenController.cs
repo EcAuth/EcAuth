@@ -16,6 +16,7 @@ namespace IdentityProvider.Controllers
         private readonly IHostEnvironment _environment;
         private readonly ITokenService _tokenService;
         private readonly IUserService _userService;
+        private readonly IB2BUserService _b2bUserService;
         private readonly ILogger<TokenController> _logger;
         private readonly IConfiguration _configuration;
 
@@ -24,6 +25,7 @@ namespace IdentityProvider.Controllers
             IHostEnvironment environment,
             ITokenService tokenService,
             IUserService userService,
+            IB2BUserService b2bUserService,
             ILogger<TokenController> logger,
             IConfiguration configuration)
         {
@@ -31,6 +33,7 @@ namespace IdentityProvider.Controllers
             _environment = environment;
             _tokenService = tokenService;
             _userService = userService;
+            _b2bUserService = b2bUserService;
             _logger = logger;
             _configuration = configuration;
         }
@@ -211,51 +214,90 @@ namespace IdentityProvider.Controllers
                 authorizationCode.UsedAt = DateTimeOffset.UtcNow;
                 await _context.SaveChangesAsync();
 
-                // 11. ユーザー情報の取得
-                _logger.LogInformation("Fetching user for subject: {Subject}", authorizationCode.EcAuthSubject);
-                var user = await _userService.GetUserBySubjectAsync(authorizationCode.EcAuthSubject);
-                if (user == null)
-                {
-                    _logger.LogError("User not found for subject: {Subject}", authorizationCode.EcAuthSubject);
+                // 11. SubjectType に応じたユーザー情報の取得
+                var subjectType = authorizationCode.SubjectType ?? SubjectType.B2C;
+                var subject = authorizationCode.Subject
+                    ?? (subjectType == SubjectType.B2B ? authorizationCode.B2BSubject : authorizationCode.EcAuthSubject);
 
-                    // デバッグ用: EcAuthUsersテーブルの全件を表示
-                    var allUsers = await _context.EcAuthUsers.Select(u => new { u.Subject, u.OrganizationId }).ToListAsync();
-                    _logger.LogError("All users in database: {Users}",
-                        string.Join(", ", allUsers.Select(u => $"Subject={u.Subject}, OrgId={u.OrganizationId}")));
-
-                    return BadRequest(new
-                    {
-                        error = "invalid_grant",
-                        error_description = "ユーザーが見つかりません。"
-                    });
-                }
+                _logger.LogInformation("Fetching user for subject: {Subject}, SubjectType: {SubjectType}", subject, subjectType);
 
                 // 12. トークン生成リクエストの構築
                 var scopes = string.IsNullOrEmpty(authorizationCode.Scope)
                     ? null
                     : authorizationCode.Scope.Split(' ');
 
-                var tokenRequest = new ITokenService.TokenRequest
-                {
-                    User = user,
-                    Client = client,
-                    RequestedScopes = scopes
-                };
+                ITokenService.TokenRequest tokenRequest;
 
-                _logger.LogInformation("Token request created for user: {Subject}, client: {ClientId}, scopes: {Scopes}",
-                    user.Subject, client.ClientId, string.Join(", ", scopes ?? new[] { "none" }));
+                if (subjectType == SubjectType.B2B)
+                {
+                    // B2B認証の場合: B2BUserを取得
+                    var b2bUser = await _b2bUserService.GetBySubjectAsync(subject!);
+                    if (b2bUser == null)
+                    {
+                        _logger.LogError("B2B user not found for subject: {Subject}", subject);
+                        return BadRequest(new
+                        {
+                            error = "invalid_grant",
+                            error_description = "B2Bユーザーが見つかりません。"
+                        });
+                    }
+
+                    tokenRequest = new ITokenService.TokenRequest
+                    {
+                        User = null!, // B2B認証では使用しない
+                        Client = client,
+                        RequestedScopes = scopes,
+                        SubjectType = SubjectType.B2B,
+                        B2BSubject = b2bUser.Subject
+                    };
+
+                    _logger.LogInformation("Token request created for B2B user: {Subject}, client: {ClientId}, scopes: {Scopes}",
+                        b2bUser.Subject, client.ClientId, string.Join(", ", scopes ?? new[] { "none" }));
+                }
+                else
+                {
+                    // B2C認証の場合: EcAuthUserを取得（従来の処理）
+                    var user = await _userService.GetUserBySubjectAsync(subject);
+                    if (user == null)
+                    {
+                        _logger.LogError("User not found for subject: {Subject}", subject);
+
+                        // デバッグ用: EcAuthUsersテーブルの全件を表示
+                        var allUsers = await _context.EcAuthUsers.Select(u => new { u.Subject, u.OrganizationId }).ToListAsync();
+                        _logger.LogError("All users in database: {Users}",
+                            string.Join(", ", allUsers.Select(u => $"Subject={u.Subject}, OrgId={u.OrganizationId}")));
+
+                        return BadRequest(new
+                        {
+                            error = "invalid_grant",
+                            error_description = "ユーザーが見つかりません。"
+                        });
+                    }
+
+                    tokenRequest = new ITokenService.TokenRequest
+                    {
+                        User = user,
+                        Client = client,
+                        RequestedScopes = scopes,
+                        SubjectType = SubjectType.B2C
+                    };
+
+                    _logger.LogInformation("Token request created for user: {Subject}, client: {ClientId}, scopes: {Scopes}",
+                        user.Subject, client.ClientId, string.Join(", ", scopes ?? new[] { "none" }));
+                }
 
                 // 13. トークンの生成
                 ITokenService.TokenResponse tokenResponse;
                 try
                 {
                     tokenResponse = await _tokenService.GenerateTokensAsync(tokenRequest);
-                    _logger.LogInformation("Tokens generated successfully for user: {Subject}, client: {ClientId}",
-                        user.Subject, client_id);
+                    _logger.LogInformation("Tokens generated successfully for subject: {Subject}, SubjectType: {SubjectType}, client: {ClientId}",
+                        subject, subjectType, client_id);
                 }
                 catch (Exception tokenEx)
                 {
-                    _logger.LogError(tokenEx, "Failed to generate tokens for user: {Subject}", user.Subject);
+                    _logger.LogError(tokenEx, "Failed to generate tokens for subject: {Subject}, SubjectType: {SubjectType}",
+                        subject, subjectType);
                     throw;
                 }
 

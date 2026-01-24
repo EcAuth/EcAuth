@@ -18,6 +18,7 @@ namespace IdentityProvider.Test.Controllers
         private readonly Mock<IHostEnvironment> _mockEnvironment;
         private readonly Mock<ITokenService> _mockTokenService;
         private readonly Mock<IUserService> _mockUserService;
+        private readonly Mock<IB2BUserService> _mockB2BUserService;
         private readonly Mock<ILogger<TokenController>> _mockLogger;
         private readonly Mock<IConfiguration> _mockConfiguration;
         private readonly TokenController _controller;
@@ -28,6 +29,7 @@ namespace IdentityProvider.Test.Controllers
             _mockEnvironment = new Mock<IHostEnvironment>();
             _mockTokenService = new Mock<ITokenService>();
             _mockUserService = new Mock<IUserService>();
+            _mockB2BUserService = new Mock<IB2BUserService>();
             _mockLogger = new Mock<ILogger<TokenController>>();
             _mockConfiguration = new Mock<IConfiguration>();
 
@@ -36,6 +38,7 @@ namespace IdentityProvider.Test.Controllers
                 _mockEnvironment.Object,
                 _mockTokenService.Object,
                 _mockUserService.Object,
+                _mockB2BUserService.Object,
                 _mockLogger.Object,
                 _mockConfiguration.Object);
         }
