@@ -141,7 +141,8 @@ namespace IdentityProvider.Controllers
                     RedirectUri = stateData.RedirectUri,
                     Scope = stateData.Scope,
                     State = state,
-                    ExpirationMinutes = 10
+                    ExpirationMinutes = 10,
+                    IsB2B = false  // B2C認証（外部IdPフェデレーション）のため明示的にfalseを設定
                 };
 
                 var authorizationCode = await _authorizationCodeService.GenerateAuthorizationCodeAsync(authCodeRequest);
