@@ -1,3 +1,4 @@
+using IdentityProvider.Models;
 using IdentityProvider.Services;
 using Microsoft.AspNetCore.Mvc;
 using System.Net.Http.Headers;
@@ -10,15 +11,18 @@ namespace IdentityProvider.Controllers
     {
         private readonly ITokenService _tokenService;
         private readonly IUserService _userService;
+        private readonly IB2BUserService _b2bUserService;
         private readonly ILogger<UserinfoController> _logger;
 
         public UserinfoController(
             ITokenService tokenService,
             IUserService userService,
+            IB2BUserService b2bUserService,
             ILogger<UserinfoController> logger)
         {
             _tokenService = tokenService;
             _userService = userService;
+            _b2bUserService = b2bUserService;
             _logger = logger;
         }
 
@@ -104,11 +108,11 @@ namespace IdentityProvider.Controllers
                     });
                 }
 
-                // 3. アクセストークンの検証
+                // 3. アクセストークンの検証（SubjectType を含む詳細な結果を取得）
                 _logger.LogInformation("Validating access token");
-                var subject = await _tokenService.ValidateAccessTokenAsync(accessToken);
+                var validationResult = await _tokenService.ValidateAccessTokenWithTypeAsync(accessToken);
 
-                if (subject == null)
+                if (!validationResult.IsValid || validationResult.Subject == null)
                 {
                     _logger.LogWarning("Invalid or expired access token");
                     return Unauthorized(new
@@ -118,13 +122,36 @@ namespace IdentityProvider.Controllers
                     });
                 }
 
-                // 4. ユーザー情報の取得
-                _logger.LogInformation("Fetching user info for subject: {Subject}", subject);
-                var user = await _userService.GetUserBySubjectAsync(subject);
+                var subject = validationResult.Subject;
+                var subjectType = validationResult.SubjectType ?? SubjectType.B2C;
 
-                if (user == null)
+                // 4. SubjectType に応じたユーザー情報の取得
+                _logger.LogInformation("Fetching user info for subject: {Subject}, SubjectType: {SubjectType}", subject, subjectType);
+
+                string? userSubject = null;
+                switch (subjectType)
                 {
-                    _logger.LogError("User not found for subject: {Subject}", subject);
+                    case SubjectType.B2B:
+                        var b2bUser = await _b2bUserService.GetBySubjectAsync(subject);
+                        if (b2bUser != null)
+                        {
+                            userSubject = b2bUser.Subject;
+                        }
+                        break;
+
+                    case SubjectType.B2C:
+                    default:
+                        var ecAuthUser = await _userService.GetUserBySubjectAsync(subject);
+                        if (ecAuthUser != null)
+                        {
+                            userSubject = ecAuthUser.Subject;
+                        }
+                        break;
+                }
+
+                if (userSubject == null)
+                {
+                    _logger.LogError("User not found for subject: {Subject}, SubjectType: {SubjectType}", subject, subjectType);
                     return Unauthorized(new
                     {
                         error = "invalid_token",
@@ -133,8 +160,8 @@ namespace IdentityProvider.Controllers
                 }
 
                 // 5. OpenID Connect準拠のレスポンス（個人情報保護法準拠）
-                _logger.LogInformation("UserInfo request processed successfully for subject: {Subject}", subject);
-                return Ok(new { sub = user.Subject });
+                _logger.LogInformation("UserInfo request processed successfully for subject: {Subject}, SubjectType: {SubjectType}", subject, subjectType);
+                return Ok(new { sub = userSubject });
             }
             catch (Exception ex)
             {

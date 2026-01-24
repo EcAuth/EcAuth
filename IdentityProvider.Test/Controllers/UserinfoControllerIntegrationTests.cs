@@ -15,6 +15,7 @@ namespace IdentityProvider.Test.Controllers
         private readonly EcAuthDbContext _context;
         private readonly ITokenService _tokenService;
         private readonly IUserService _userService;
+        private readonly Mock<IB2BUserService> _mockB2BUserService;
         private readonly Mock<ILogger<UserinfoController>> _mockLogger;
         private readonly UserinfoController _controller;
         private readonly MockTenantService _mockTenantService;
@@ -30,12 +31,14 @@ namespace IdentityProvider.Test.Controllers
 
             _tokenService = new TokenService(_context, mockLogger.Object);
             _userService = new UserService(_context, mockUserLogger.Object);
+            _mockB2BUserService = new Mock<IB2BUserService>();
 
             _mockLogger = new Mock<ILogger<UserinfoController>>();
 
             _controller = new UserinfoController(
                 _tokenService,
                 _userService,
+                _mockB2BUserService.Object,
                 _mockLogger.Object);
 
             // HttpContext のセットアップ
@@ -61,6 +64,8 @@ namespace IdentityProvider.Test.Controllers
                 ExpiresAt = DateTime.UtcNow.AddHours(1),
                 ClientId = 1,
                 EcAuthSubject = subject,
+                Subject = subject,
+                SubjectType = SubjectType.B2C,
                 CreatedAt = DateTime.UtcNow,
                 Scopes = "openid profile"
             };
@@ -97,6 +102,8 @@ namespace IdentityProvider.Test.Controllers
                 ExpiresAt = DateTime.UtcNow.AddHours(-1), // 期限切れ
                 ClientId = 1,
                 EcAuthSubject = subject,
+                Subject = subject,
+                SubjectType = SubjectType.B2C,
                 CreatedAt = DateTime.UtcNow.AddHours(-2),
                 Scopes = "openid profile"
             };
@@ -133,6 +140,8 @@ namespace IdentityProvider.Test.Controllers
                 ExpiresAt = DateTime.UtcNow.AddHours(1),
                 ClientId = 1, // Tenant1のクライアント
                 EcAuthSubject = subject,
+                Subject = subject,
+                SubjectType = SubjectType.B2C,
                 CreatedAt = DateTime.UtcNow,
                 Scopes = "openid profile"
             };
@@ -172,6 +181,8 @@ namespace IdentityProvider.Test.Controllers
                 ExpiresAt = DateTime.UtcNow.AddHours(1),
                 ClientId = 1, // Tenant1のクライアント
                 EcAuthSubject = subject,
+                Subject = subject,
+                SubjectType = SubjectType.B2C,
                 CreatedAt = DateTime.UtcNow,
                 Scopes = "openid profile"
             };
@@ -211,6 +222,8 @@ namespace IdentityProvider.Test.Controllers
                 ExpiresAt = DateTime.UtcNow.AddHours(1),
                 ClientId = 1,
                 EcAuthSubject = subject,
+                Subject = subject,
+                SubjectType = SubjectType.B2C,
                 CreatedAt = DateTime.UtcNow,
                 Scopes = "openid profile"
             };
