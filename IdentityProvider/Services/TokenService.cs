@@ -36,10 +36,23 @@ namespace IdentityProvider.Services
 
         public async Task<string> GenerateIdTokenAsync(ITokenService.TokenRequest request)
         {
-            if (request.User == null)
-                throw new ArgumentException("User cannot be null.", nameof(request.User));
             if (request.Client == null)
                 throw new ArgumentException("Client cannot be null.", nameof(request.Client));
+
+            // B2B認証の場合はB2BSubjectを使用、それ以外はUser.Subjectを使用
+            string subject;
+            if (request.SubjectType == SubjectType.B2B)
+            {
+                if (string.IsNullOrEmpty(request.B2BSubject))
+                    throw new ArgumentException("B2BSubject is required for B2B authentication.", nameof(request.B2BSubject));
+                subject = request.B2BSubject;
+            }
+            else
+            {
+                if (request.User == null)
+                    throw new ArgumentException("User cannot be null for B2C authentication.", nameof(request.User));
+                subject = request.User.Subject;
+            }
 
             // RSA鍵ペアを取得
             var rsaKeyPair = await _context.RsaKeyPairs
@@ -70,7 +83,7 @@ namespace IdentityProvider.Services
 
                 var claims = new List<Claim>
                 {
-                    new(JwtRegisteredClaimNames.Sub, request.User.Subject),
+                    new(JwtRegisteredClaimNames.Sub, subject),
                     new(JwtRegisteredClaimNames.Iss, GetIssuer()),
                     new(JwtRegisteredClaimNames.Aud, request.Client.ClientId),
                     new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
@@ -112,10 +125,23 @@ namespace IdentityProvider.Services
 
         public async Task<string> GenerateAccessTokenAsync(ITokenService.TokenRequest request)
         {
-            if (request.User == null)
-                throw new ArgumentException("User cannot be null.", nameof(request.User));
             if (request.Client == null)
                 throw new ArgumentException("Client cannot be null.", nameof(request.Client));
+
+            // B2B認証の場合はB2BSubjectを使用、それ以外はUser.Subjectを使用
+            string subject;
+            if (request.SubjectType == SubjectType.B2B)
+            {
+                if (string.IsNullOrEmpty(request.B2BSubject))
+                    throw new ArgumentException("B2BSubject is required for B2B authentication.", nameof(request.B2BSubject));
+                subject = request.B2BSubject;
+            }
+            else
+            {
+                if (request.User == null)
+                    throw new ArgumentException("User cannot be null for B2C authentication.", nameof(request.User));
+                subject = request.User.Subject;
+            }
 
             // アクセストークンは簡単なランダム文字列として生成
             var accessToken = RandomUtil.GenerateRandomBytes(32);
@@ -127,7 +153,11 @@ namespace IdentityProvider.Services
                 Token = accessToken,
                 ExpiresAt = expiresAt,
                 ClientId = request.Client.Id,
-                EcAuthSubject = request.User.Subject,
+                // 統一Subject/SubjectType を設定
+                Subject = subject,
+                SubjectType = request.SubjectType,
+                // 後方互換性: B2Cの場合はEcAuthSubjectにも設定
+                EcAuthSubject = request.SubjectType == SubjectType.B2C ? subject : subject,
                 CreatedAt = DateTime.UtcNow,
                 Scopes = request.RequestedScopes != null ? string.Join(" ", request.RequestedScopes) : null
             };
@@ -135,8 +165,8 @@ namespace IdentityProvider.Services
             _context.AccessTokens.Add(accessTokenEntity);
             await _context.SaveChangesAsync();
 
-            _logger.LogInformation("Access token generated for user {Subject} and client {ClientId}",
-                request.User.Subject, request.Client.Id);
+            _logger.LogInformation("Access token generated for subject {Subject} (type: {SubjectType}) and client {ClientId}",
+                subject, request.SubjectType, request.Client.Id);
 
             return accessToken;
         }
@@ -214,32 +244,49 @@ namespace IdentityProvider.Services
 
         public async Task<string?> ValidateAccessTokenAsync(string token)
         {
+            var result = await ValidateAccessTokenWithTypeAsync(token);
+            return result.IsValid ? result.Subject : null;
+        }
+
+        public async Task<ITokenService.AccessTokenValidationResult> ValidateAccessTokenWithTypeAsync(string token)
+        {
             try
             {
                 var accessToken = await _context.AccessTokens
-                    .Include(at => at.EcAuthUser)
-                        .ThenInclude(u => u.Organization)
+                    .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(at => at.Token == token);
 
                 if (accessToken == null)
                 {
                     _logger.LogWarning("Access token not found: {Token}", token.Substring(0, Math.Min(8, token.Length)) + "...");
-                    return null;
+                    return new ITokenService.AccessTokenValidationResult { IsValid = false };
                 }
 
                 if (accessToken.IsExpired)
                 {
                     _logger.LogWarning("Access token expired: {Token}", token.Substring(0, Math.Min(8, token.Length)) + "...");
-                    return null;
+                    return new ITokenService.AccessTokenValidationResult { IsValid = false };
                 }
 
-                _logger.LogDebug("Access token validated successfully for user {Subject}", accessToken.EcAuthSubject);
-                return accessToken.EcAuthSubject;
+                // 新しいSubjectフィールドを優先、なければEcAuthSubjectにフォールバック
+                var subject = accessToken.Subject ?? accessToken.EcAuthSubject;
+                var subjectType = accessToken.SubjectType ?? SubjectType.B2C;
+
+                _logger.LogDebug("Access token validated successfully for subject {Subject} (type: {SubjectType})",
+                    subject, subjectType);
+
+                return new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = true,
+                    Subject = subject,
+                    SubjectType = subjectType,
+                    EcAuthSubject = accessToken.EcAuthSubject
+                };
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Access token validation failed");
-                return null;
+                return new ITokenService.AccessTokenValidationResult { IsValid = false };
             }
         }
 
