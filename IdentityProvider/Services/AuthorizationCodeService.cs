@@ -80,13 +80,19 @@ namespace IdentityProvider.Services
                 }
             } while (await CodeExistsAsync(code));
 
+            // SubjectType を決定（IsB2B フラグから推測）
+            var subjectType = request.IsB2B ? Models.SubjectType.B2B : Models.SubjectType.B2C;
+
             // 認可コードエンティティ作成
             var authorizationCode = new AuthorizationCode
             {
                 Code = code,
-                // B2B認証の場合はB2BSubjectを設定、B2C認証の場合はEcAuthSubjectを設定
+                // B2B認証の場合はB2BSubjectを設定、B2C認証の場合はEcAuthSubjectを設定（後方互換性のため維持）
                 EcAuthSubject = request.IsB2B ? null : request.Subject,
                 B2BSubject = request.IsB2B ? request.Subject : null,
+                // 統一Subject と SubjectType を設定
+                Subject = request.Subject,
+                SubjectType = subjectType,
                 ClientId = request.ClientId,
                 RedirectUri = request.RedirectUri,
                 Scope = request.Scope,
@@ -101,8 +107,8 @@ namespace IdentityProvider.Services
             await _context.SaveChangesAsync();
 
             _logger.LogInformation(
-                "認可コード生成: Subject={Subject}, ClientId={ClientId}, ExpiresAt={ExpiresAt}",
-                request.Subject, request.ClientId, authorizationCode.ExpiresAt);
+                "認可コード生成: Subject={Subject}, SubjectType={SubjectType}, ClientId={ClientId}, ExpiresAt={ExpiresAt}",
+                request.Subject, subjectType, request.ClientId, authorizationCode.ExpiresAt);
 
             return authorizationCode;
         }
