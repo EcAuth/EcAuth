@@ -341,6 +341,29 @@ namespace IdentityProvider.Test.Controllers
             Assert.Equal("invalid_client", error);
         }
 
+        [Fact]
+        public async Task IntegrationTest_RegisterMultiplePasskeys_ForSameUser_ShouldSucceed()
+        {
+            // Arrange
+            var testUser = await CreateTestB2BUserAsync("multi-passkey-subject", "multipasskey@example.com");
+
+            // Act: 1つ目のパスキー登録
+            await RegisterPasskeyForUserAsync(testUser, "MacBook Pro", "1");
+
+            // Act: 2つ目のパスキー登録
+            await RegisterPasskeyForUserAsync(testUser, "iPhone", "2");
+
+            // Assert: 2つのパスキーが登録されていることを確認
+            var credentials = await _context.B2BPasskeyCredentials
+                .IgnoreQueryFilters()
+                .Where(c => c.B2BSubject == testUser.Subject)
+                .ToListAsync();
+
+            Assert.Equal(2, credentials.Count);
+            Assert.Contains(credentials, c => c.DeviceName == "MacBook Pro");
+            Assert.Contains(credentials, c => c.DeviceName == "iPhone");
+        }
+
         #endregion
 
         #region Authentication Flow Integration Tests
@@ -886,6 +909,79 @@ namespace IdentityProvider.Test.Controllers
             _context.B2BUsers.Add(user);
             await _context.SaveChangesAsync();
             return user;
+        }
+
+        private async Task RegisterPasskeyForUserAsync(B2BUser user, string deviceName, string credentialIdSuffix)
+        {
+            var credentialIdBytes = Encoding.UTF8.GetBytes($"credential-{credentialIdSuffix}");
+
+            // Fido2モックセットアップ
+            var credentialCreateOptions = new CredentialCreateOptions
+            {
+                Challenge = Encoding.UTF8.GetBytes($"challenge-{credentialIdSuffix}"),
+                Rp = new PublicKeyCredentialRpEntity("shop.example.com", "テスト組織"),
+                User = new Fido2User
+                {
+                    Id = Encoding.UTF8.GetBytes(user.Subject),
+                    Name = user.ExternalId,
+                    DisplayName = "テスト管理者"
+                },
+                PubKeyCredParams = PubKeyCredParam.Defaults
+            };
+            _mockFido2.Setup(x => x.RequestNewCredential(It.IsAny<RequestNewCredentialParams>()))
+                .Returns(credentialCreateOptions);
+
+            var makeCredentialResult = new RegisteredPublicKeyCredential
+            {
+                Id = credentialIdBytes,
+                PublicKey = Encoding.UTF8.GetBytes($"public-key-{credentialIdSuffix}"),
+                SignCount = 0,
+                AaGuid = Guid.NewGuid(),
+                AttestationObject = Encoding.UTF8.GetBytes("attestation"),
+                AttestationClientDataJson = Encoding.UTF8.GetBytes("client-data")
+            };
+            _mockFido2.Setup(x => x.MakeNewCredentialAsync(
+                It.IsAny<MakeNewCredentialParams>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(makeCredentialResult);
+
+            // RegisterOptions
+            var optionsRequest = new B2BPasskeyController.RegisterOptionsRequest
+            {
+                ClientId = _client.ClientId,
+                ClientSecret = _client.ClientSecret!,
+                RpId = "shop.example.com",
+                B2BSubject = user.Subject,
+                DisplayName = "テスト管理者",
+                DeviceName = deviceName
+            };
+
+            var optionsResult = await _controller.RegisterOptions(optionsRequest);
+            var okOptionsResult = Assert.IsType<OkObjectResult>(optionsResult);
+            var sessionId = okOptionsResult.Value?.GetType().GetProperty("session_id")?.GetValue(okOptionsResult.Value)?.ToString();
+
+            // RegisterVerify
+            var verifyRequest = new B2BPasskeyController.RegisterVerifyRequest
+            {
+                ClientId = _client.ClientId,
+                ClientSecret = _client.ClientSecret!,
+                SessionId = sessionId!,
+                Response = new AuthenticatorAttestationRawResponse
+                {
+                    Id = WebEncoders.Base64UrlEncode(credentialIdBytes),
+                    RawId = credentialIdBytes,
+                    Type = PublicKeyCredentialType.PublicKey,
+                    Response = new AuthenticatorAttestationRawResponse.AttestationResponse
+                    {
+                        AttestationObject = Encoding.UTF8.GetBytes("attestation"),
+                        ClientDataJson = Encoding.UTF8.GetBytes("client-data")
+                    }
+                },
+                DeviceName = deviceName
+            };
+
+            var verifyResult = await _controller.RegisterVerify(verifyRequest);
+            Assert.IsType<OkObjectResult>(verifyResult);
         }
 
         #endregion
