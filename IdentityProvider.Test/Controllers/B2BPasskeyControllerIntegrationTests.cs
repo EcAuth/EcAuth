@@ -314,6 +314,33 @@ namespace IdentityProvider.Test.Controllers
             Assert.Equal("invalid_request", error);
         }
 
+        [Fact]
+        public async Task IntegrationTest_RegisterOptions_InvalidClientSecret_ReturnsUnauthorized()
+        {
+            // Arrange
+            var testUser = await CreateTestB2BUserAsync("auth-fail-subject", "authfail@example.com");
+
+            var request = new B2BPasskeyController.RegisterOptionsRequest
+            {
+                ClientId = _client.ClientId,
+                ClientSecret = "wrong-secret", // 誤ったシークレット
+                RpId = "shop.example.com",
+                B2BSubject = testUser.Subject,
+                DisplayName = "テスト管理者"
+            };
+
+            // Act
+            var result = await _controller.RegisterOptions(request);
+
+            // Assert
+            var unauthorizedResult = Assert.IsType<UnauthorizedObjectResult>(result);
+            var response = unauthorizedResult.Value;
+            Assert.NotNull(response);
+
+            var error = response.GetType().GetProperty("error")?.GetValue(response);
+            Assert.Equal("invalid_client", error);
+        }
+
         #endregion
 
         #region Authentication Flow Integration Tests
