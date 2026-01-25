@@ -156,8 +156,6 @@ namespace IdentityProvider.Services
                 // 統一Subject/SubjectType を設定
                 Subject = subject,
                 SubjectType = request.SubjectType,
-                // 後方互換性: B2Cの場合はEcAuthSubjectにも設定
-                EcAuthSubject = request.SubjectType == SubjectType.B2C ? subject : subject,
                 CreatedAt = DateTime.UtcNow,
                 Scopes = request.RequestedScopes != null ? string.Join(" ", request.RequestedScopes) : null
             };
@@ -268,19 +266,14 @@ namespace IdentityProvider.Services
                     return new ITokenService.AccessTokenValidationResult { IsValid = false };
                 }
 
-                // 新しいSubjectフィールドを優先、なければEcAuthSubjectにフォールバック
-                var subject = accessToken.Subject ?? accessToken.EcAuthSubject;
-                var subjectType = accessToken.SubjectType ?? SubjectType.B2C;
-
                 _logger.LogDebug("Access token validated successfully for subject {Subject} (type: {SubjectType})",
-                    subject, subjectType);
+                    accessToken.Subject, accessToken.SubjectType);
 
                 return new ITokenService.AccessTokenValidationResult
                 {
                     IsValid = true,
-                    Subject = subject,
-                    SubjectType = subjectType,
-                    EcAuthSubject = accessToken.EcAuthSubject
+                    Subject = accessToken.Subject,
+                    SubjectType = accessToken.SubjectType
                 };
             }
             catch (Exception ex)
@@ -295,8 +288,8 @@ namespace IdentityProvider.Services
             try
             {
                 var accessToken = await _context.AccessTokens
-                    .Include(at => at.EcAuthUser)
-                        .ThenInclude(u => u.Organization)
+                    .Include(at => at.Client)
+                        .ThenInclude(c => c.Organization)
                     .FirstOrDefaultAsync(at => at.Token == token);
 
                 if (accessToken == null)

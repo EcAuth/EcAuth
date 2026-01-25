@@ -215,9 +215,8 @@ namespace IdentityProvider.Controllers
                 await _context.SaveChangesAsync();
 
                 // 11. SubjectType に応じたユーザー情報の取得
-                var subjectType = authorizationCode.SubjectType ?? SubjectType.B2C;
-                var subject = authorizationCode.Subject
-                    ?? (subjectType == SubjectType.B2B ? authorizationCode.B2BSubject : authorizationCode.EcAuthSubject);
+                var subjectType = authorizationCode.SubjectType;
+                var subject = authorizationCode.Subject;
 
                 _logger.LogInformation("Fetching user for subject: {Subject}, SubjectType: {SubjectType}", subject, subjectType);
 

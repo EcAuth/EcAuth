@@ -33,6 +33,5 @@ namespace IdentityProvider.Models
 
         public Organization? Organization { get; set; }
         public ICollection<ExternalIdpMapping> ExternalIdpMappings { get; } = new List<ExternalIdpMapping>();
-        public ICollection<AuthorizationCode> AuthorizationCodes { get; } = new List<AuthorizationCode>();
     }
 }

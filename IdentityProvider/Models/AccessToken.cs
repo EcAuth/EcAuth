@@ -27,26 +27,20 @@ namespace IdentityProvider.Models
         [ForeignKey(nameof(ClientId))]
         public Client Client { get; set; } = null!;
 
-        [Column("ecauth_subject")]
-        [Required]
-        [MaxLength(255)]
-        public string EcAuthSubject { get; set; } = string.Empty;
-
-        [ForeignKey(nameof(EcAuthSubject))]
-        public EcAuthUser EcAuthUser { get; set; } = null!;
-
         /// <summary>
         /// 統一Subject（B2C/B2B/Account共通）
         /// </summary>
         [Column("subject")]
+        [Required]
         [MaxLength(255)]
-        public string? Subject { get; set; }
+        public string Subject { get; set; } = string.Empty;
 
         /// <summary>
         /// Subjectの種類（B2C=0, B2B=1, Account=2）
         /// </summary>
         [Column("subject_type")]
-        public SubjectType? SubjectType { get; set; }
+        [Required]
+        public SubjectType SubjectType { get; set; }
 
         [Column("created_at")]
         [Required]

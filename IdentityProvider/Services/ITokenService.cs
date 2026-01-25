@@ -47,11 +47,6 @@ namespace IdentityProvider.Services
             public bool IsValid { get; set; }
             public string? Subject { get; set; }
             public SubjectType? SubjectType { get; set; }
-
-            /// <summary>
-            /// 後方互換性のためのEcAuthSubject（B2Cの場合のみ）
-            /// </summary>
-            public string? EcAuthSubject { get; set; }
         }
 
         /// <summary>

@@ -87,9 +87,6 @@ namespace IdentityProvider.Services
             var authorizationCode = new AuthorizationCode
             {
                 Code = code,
-                // B2B認証の場合はB2BSubjectを設定、B2C認証の場合はEcAuthSubjectを設定（後方互換性のため維持）
-                EcAuthSubject = request.IsB2B ? null : request.Subject,
-                B2BSubject = request.IsB2B ? request.Subject : null,
                 // 統一Subject と SubjectType を設定
                 Subject = request.Subject,
                 SubjectType = subjectType,
@@ -119,8 +116,8 @@ namespace IdentityProvider.Services
                 return null;
 
             var authorizationCode = await _context.AuthorizationCodes
-                .Include(ac => ac.EcAuthUser)
-                    .ThenInclude(u => u.Organization)
+                .Include(ac => ac.Client)
+                    .ThenInclude(c => c!.Organization)
                 .FirstOrDefaultAsync(ac => ac.Code == code);
 
             if (authorizationCode == null)
@@ -156,8 +153,8 @@ namespace IdentityProvider.Services
                 return false;
 
             var authorizationCode = await _context.AuthorizationCodes
-                .Include(ac => ac.EcAuthUser)
-                    .ThenInclude(u => u.Organization)
+                .Include(ac => ac.Client)
+                    .ThenInclude(c => c!.Organization)
                 .FirstOrDefaultAsync(ac => ac.Code == code);
 
             if (authorizationCode == null)
@@ -189,8 +186,8 @@ namespace IdentityProvider.Services
         public async Task<int> CleanupExpiredCodesAsync()
         {
             var expiredCodes = await _context.AuthorizationCodes
-                .Include(ac => ac.EcAuthUser)
-                    .ThenInclude(u => u.Organization)
+                .Include(ac => ac.Client)
+                    .ThenInclude(c => c!.Organization)
                 .Where(ac => ac.ExpiresAt <= DateTimeOffset.UtcNow)
                 .ToListAsync();
 
