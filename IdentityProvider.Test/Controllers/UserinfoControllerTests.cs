@@ -57,8 +57,7 @@ namespace IdentityProvider.Test.Controllers
                 {
                     IsValid = true,
                     Subject = subject,
-                    SubjectType = SubjectType.B2C,
-                    EcAuthSubject = subject
+                    SubjectType = SubjectType.B2C
                 });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
@@ -96,8 +95,7 @@ namespace IdentityProvider.Test.Controllers
                 {
                     IsValid = true,
                     Subject = subject,
-                    SubjectType = SubjectType.B2C,
-                    EcAuthSubject = subject
+                    SubjectType = SubjectType.B2C
                 });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
@@ -199,8 +197,7 @@ namespace IdentityProvider.Test.Controllers
                 {
                     IsValid = false,
                     Subject = null,
-                    SubjectType = null,
-                    EcAuthSubject = null
+                    SubjectType = null
                 });
 
             // Act
@@ -227,8 +224,7 @@ namespace IdentityProvider.Test.Controllers
                 {
                     IsValid = false, // 期限切れの場合はIsValid=false
                     Subject = null,
-                    SubjectType = null,
-                    EcAuthSubject = null
+                    SubjectType = null
                 });
 
             // Act
@@ -257,8 +253,7 @@ namespace IdentityProvider.Test.Controllers
                 {
                     IsValid = true,
                     Subject = subject,
-                    SubjectType = SubjectType.B2C,
-                    EcAuthSubject = subject
+                    SubjectType = SubjectType.B2C
                 });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
@@ -314,8 +309,7 @@ namespace IdentityProvider.Test.Controllers
                 {
                     IsValid = true,
                     Subject = subject,
-                    SubjectType = SubjectType.B2C,
-                    EcAuthSubject = subject
+                    SubjectType = SubjectType.B2C
                 });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
@@ -357,8 +351,7 @@ namespace IdentityProvider.Test.Controllers
                 {
                     IsValid = true,
                     Subject = subject,
-                    SubjectType = SubjectType.B2C,
-                    EcAuthSubject = subject
+                    SubjectType = SubjectType.B2C
                 });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
@@ -396,8 +389,7 @@ namespace IdentityProvider.Test.Controllers
                 {
                     IsValid = true,
                     Subject = subject,
-                    SubjectType = SubjectType.B2C,
-                    EcAuthSubject = subject
+                    SubjectType = SubjectType.B2C
                 });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))

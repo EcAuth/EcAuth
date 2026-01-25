@@ -79,7 +79,7 @@ namespace IdentityProvider.Test.Controllers
             var authCode = new AuthorizationCode
             {
                 Code = "test-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 Scope = "openid profile",
@@ -274,7 +274,7 @@ namespace IdentityProvider.Test.Controllers
             var authCode = new AuthorizationCode
             {
                 Code = "expired-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 Scope = "openid profile",
@@ -334,7 +334,7 @@ namespace IdentityProvider.Test.Controllers
             var authCode = new AuthorizationCode
             {
                 Code = "used-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 Scope = "openid profile",
@@ -395,7 +395,7 @@ namespace IdentityProvider.Test.Controllers
             var authCode = new AuthorizationCode
             {
                 Code = "test-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://original.com/callback",
                 Scope = "openid profile",
@@ -465,7 +465,7 @@ namespace IdentityProvider.Test.Controllers
             var authCode = new AuthorizationCode
             {
                 Code = "test-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1, // client1用のコード
                 RedirectUri = "https://example.com/callback",
                 Scope = "openid profile",
@@ -517,7 +517,7 @@ namespace IdentityProvider.Test.Controllers
             var authCode = new AuthorizationCode
             {
                 Code = "test-code",
-                EcAuthSubject = "nonexistent-subject",
+                Subject = "nonexistent-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 Scope = "openid profile",

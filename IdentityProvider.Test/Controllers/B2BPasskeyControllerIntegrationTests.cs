@@ -459,12 +459,15 @@ namespace IdentityProvider.Test.Controllers
             Assert.Equal(6u, updatedCredential.SignCount);
             Assert.NotNull(updatedCredential.LastUsedAt);
 
-            // 認可コードがDBに保存されていることを確認（B2B認証はB2BSubjectに設定される）
+            // 認可コードがDBに保存されていることを確認
             var savedAuthCode = await _context.AuthorizationCodes
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(c => c.B2BSubject == testUser.Subject);
+                .FirstOrDefaultAsync(c => c.Subject == testUser.Subject && c.SubjectType == SubjectType.B2B);
             Assert.NotNull(savedAuthCode);
-            Assert.NotNull(savedAuthCode.B2BSubject);
+
+            // SubjectType が B2B として正しく設定されていることを確認
+            Assert.Equal(SubjectType.B2B, savedAuthCode.SubjectType);
+            Assert.Equal(testUser.Subject, savedAuthCode.Subject);
         }
 
         [Fact]
@@ -548,6 +551,175 @@ namespace IdentityProvider.Test.Controllers
 
             var error = response.GetType().GetProperty("error")?.GetValue(response);
             Assert.Equal("invalid_request", error);
+        }
+
+        #endregion
+
+        #region SubjectType Integration Tests
+
+        /// <summary>
+        /// B2B認証フローで AuthorizationCode に SubjectType.B2B が正しく設定されることを確認
+        /// </summary>
+        [Fact]
+        public async Task IntegrationTest_AuthenticateVerify_ShouldSetSubjectTypeB2B()
+        {
+            // Arrange
+            var testUser = await CreateTestB2BUserAsync("subjecttype-test-subject", "subjecttype@example.com");
+            var credentialIdBytes = Encoding.UTF8.GetBytes("subjecttype-credential-id");
+
+            // パスキーを事前登録
+            var credential = new B2BPasskeyCredential
+            {
+                B2BSubject = testUser.Subject,
+                CredentialId = credentialIdBytes,
+                PublicKey = Encoding.UTF8.GetBytes("public-key"),
+                SignCount = 0,
+                DeviceName = "Test Device",
+                AaGuid = Guid.NewGuid(),
+                Transports = new[] { "internal" },
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+            _context.B2BPasskeyCredentials.Add(credential);
+            await _context.SaveChangesAsync();
+
+            // AuthenticateOptionsを実行してセッションIDを取得
+            var authenticateOptionsRequest = new B2BPasskeyController.AuthenticateOptionsRequest
+            {
+                ClientId = _client.ClientId,
+                RpId = "shop.example.com",
+                B2BSubject = testUser.Subject
+            };
+
+            var optionsResult = await _controller.AuthenticateOptions(authenticateOptionsRequest);
+            var okOptionsResult = Assert.IsType<OkObjectResult>(optionsResult);
+            var sessionId = okOptionsResult.Value?.GetType().GetProperty("session_id")?.GetValue(okOptionsResult.Value)?.ToString();
+            Assert.NotNull(sessionId);
+
+            // AuthenticateVerifyを実行
+            var assertionResponse = new AuthenticatorAssertionRawResponse
+            {
+                Id = WebEncoders.Base64UrlEncode(credentialIdBytes),
+                RawId = credentialIdBytes,
+                Type = PublicKeyCredentialType.PublicKey,
+                Response = new AuthenticatorAssertionRawResponse.AssertionResponse
+                {
+                    AuthenticatorData = Encoding.UTF8.GetBytes("auth-data"),
+                    ClientDataJson = Encoding.UTF8.GetBytes("client-data"),
+                    Signature = Encoding.UTF8.GetBytes("signature")
+                }
+            };
+
+            var verifyAssertionResult = new VerifyAssertionResult { SignCount = 1 };
+            _mockFido2.Setup(x => x.MakeAssertionAsync(
+                It.IsAny<MakeAssertionParams>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(verifyAssertionResult);
+
+            var authenticateVerifyRequest = new B2BPasskeyController.AuthenticateVerifyRequest
+            {
+                ClientId = _client.ClientId,
+                SessionId = sessionId,
+                RedirectUri = "https://shop.example.com/admin/ecauth/callback",
+                State = "test-state",
+                Response = assertionResponse
+            };
+
+            // Act
+            var verifyResult = await _controller.AuthenticateVerify(authenticateVerifyRequest);
+
+            // Assert
+            var okVerifyResult = Assert.IsType<OkObjectResult>(verifyResult);
+
+            // 認可コードのSubjectTypeを検証
+            var savedAuthCode = await _context.AuthorizationCodes
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.Subject == testUser.Subject && c.SubjectType == SubjectType.B2B);
+
+            Assert.NotNull(savedAuthCode);
+            // SubjectType が B2B に設定されていることを確認
+            Assert.Equal(SubjectType.B2B, savedAuthCode.SubjectType);
+            // 統一Subjectが設定されていることを確認
+            Assert.Equal(testUser.Subject, savedAuthCode.Subject);
+        }
+
+        /// <summary>
+        /// 認可コードの Subject と SubjectType が IsB2B フラグによって正しく設定されることを確認
+        /// </summary>
+        [Fact]
+        public async Task IntegrationTest_AuthorizationCode_SubjectTypeSetBasedOnIsB2BFlag()
+        {
+            // Arrange
+            var testUser = await CreateTestB2BUserAsync("authcode-subjecttype-subject", "authcode-subjecttype@example.com");
+
+            // B2B認証のための認可コードを直接生成
+            var authCodeRequest = new IAuthorizationCodeService.AuthorizationCodeRequest
+            {
+                Subject = testUser.Subject,
+                ClientId = _client.Id,
+                RedirectUri = "https://shop.example.com/admin/ecauth/callback",
+                Scope = "openid profile",
+                State = "test-state",
+                ExpirationMinutes = 10,
+                IsB2B = true  // B2B認証フラグ
+            };
+
+            // Act
+            var authCode = await _authCodeService.GenerateAuthorizationCodeAsync(authCodeRequest);
+
+            // Assert
+            Assert.NotNull(authCode);
+            // SubjectType が B2B に設定されていることを確認
+            Assert.Equal(SubjectType.B2B, authCode.SubjectType);
+            // 統一Subjectが設定されていることを確認
+            Assert.Equal(testUser.Subject, authCode.Subject);
+        }
+
+        /// <summary>
+        /// B2B認証でトークン発行時に Subject と SubjectType が正しく伝播されることを確認
+        /// （TokenControllerの統合テストはモックが必要なため、ここではサービス層のテスト）
+        /// </summary>
+        [Fact]
+        public async Task IntegrationTest_TokenService_SubjectTypeB2B_ShouldBePropagated()
+        {
+            // Arrange
+            var testB2BUser = await CreateTestB2BUserAsync("token-subjecttype-subject", "token-subjecttype@example.com");
+
+            // B2B用のダミーEcAuthUser（TokenRequestに必要）
+            var dummyUser = new EcAuthUser
+            {
+                Subject = testB2BUser.Subject,
+                EmailHash = "dummy-hash",
+                OrganizationId = 1,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+
+            // アクセストークンを生成
+            var tokenRequest = new ITokenService.TokenRequest
+            {
+                User = dummyUser,
+                Client = _client,
+                B2BSubject = testB2BUser.Subject,
+                RequestedScopes = new[] { "openid", "profile" },
+                SubjectType = SubjectType.B2B
+            };
+
+            // Act
+            var accessToken = await _tokenService.GenerateAccessTokenAsync(tokenRequest);
+
+            // Assert
+            Assert.NotNull(accessToken);
+
+            // DBに保存されたアクセストークンを取得
+            var savedToken = await _context.AccessTokens
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(t => t.Token == accessToken);
+
+            Assert.NotNull(savedToken);
+            // SubjectType が B2B に設定されていることを確認
+            Assert.Equal(SubjectType.B2B, savedToken.SubjectType);
+            // 統一Subjectが設定されていることを確認（B2B認証なのでB2BSubjectが使用される）
+            Assert.Equal(testB2BUser.Subject, savedToken.Subject);
         }
 
         #endregion

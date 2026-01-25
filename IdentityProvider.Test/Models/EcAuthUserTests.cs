@@ -16,7 +16,6 @@ namespace IdentityProvider.Test.Models
             Assert.True(user.CreatedAt <= DateTimeOffset.UtcNow);
             Assert.True(user.UpdatedAt <= DateTimeOffset.UtcNow);
             Assert.NotNull(user.ExternalIdpMappings);
-            Assert.NotNull(user.AuthorizationCodes);
         }
 
         [Fact]
@@ -53,7 +52,6 @@ namespace IdentityProvider.Test.Models
             var user = new EcAuthUser();
 
             Assert.Empty(user.ExternalIdpMappings);
-            Assert.Empty(user.AuthorizationCodes);
         }
 
         [Theory]

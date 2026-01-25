@@ -85,7 +85,7 @@ namespace IdentityProvider.Test.Models
         }
 
         [Fact]
-        public async Task AuthorizationCode_WithEcAuthUserAndClient_ShouldSaveCorrectly()
+        public async Task AuthorizationCode_WithClient_ShouldSaveCorrectly()
         {
             var organization = new Organization
             {
@@ -103,40 +103,30 @@ namespace IdentityProvider.Test.Models
                 Organization = organization
             };
 
-            var user = new EcAuthUser
-            {
-                Subject = "test-subject-123",
-                EmailHash = "ABCD1234",
-                OrganizationId = organization.Id,
-                Organization = organization
-            };
-
             var authCode = new AuthorizationCode
             {
                 Code = "auth-code-123",
-                EcAuthSubject = user.Subject,
+                Subject = "test-subject-123",
+                SubjectType = SubjectType.B2C,
                 ClientId = client.Id,
                 RedirectUri = "https://example.com/callback",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
-                EcAuthUser = user,
                 Client = client
             };
 
             _context.Organizations.Add(organization);
             _context.Clients.Add(client);
-            _context.EcAuthUsers.Add(user);
             _context.AuthorizationCodes.Add(authCode);
             await _context.SaveChangesAsync();
 
             var savedAuthCode = await _context.AuthorizationCodes
-                .Include(ac => ac.EcAuthUser)
                 .Include(ac => ac.Client)
                 .FirstOrDefaultAsync(ac => ac.Code == "auth-code-123");
 
             Assert.NotNull(savedAuthCode);
-            Assert.NotNull(savedAuthCode.EcAuthUser);
             Assert.NotNull(savedAuthCode.Client);
-            Assert.Equal("test-subject-123", savedAuthCode.EcAuthUser.Subject);
+            Assert.Equal("test-subject-123", savedAuthCode.Subject);
+            Assert.Equal(SubjectType.B2C, savedAuthCode.SubjectType);
             Assert.Equal("test-client", savedAuthCode.Client.ClientId);
         }
 
