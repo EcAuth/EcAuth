@@ -9,16 +9,15 @@ namespace IdentityProvider.Services
         /// </summary>
         public class TokenRequest
         {
-            public EcAuthUser User { get; set; } = null!;
+            /// <summary>
+            /// ユーザー情報（EcAuthUser または B2BUser）
+            /// ISubjectProvider インターフェイスを実装したエンティティを渡す
+            /// </summary>
+            public ISubjectProvider User { get; set; } = null!;
+
             public Client Client { get; set; } = null!;
             public string[]? RequestedScopes { get; set; }
             public string? Nonce { get; set; }
-
-            /// <summary>
-            /// B2B認証時のSubject（B2BUser.Subject）
-            /// B2B認証の場合に設定される
-            /// </summary>
-            public string? B2BSubject { get; set; }
 
             /// <summary>
             /// Subjectの種別（B2C=0, B2B=1, Account=2）

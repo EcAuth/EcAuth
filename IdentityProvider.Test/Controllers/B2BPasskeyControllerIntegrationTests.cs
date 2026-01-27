@@ -684,22 +684,12 @@ namespace IdentityProvider.Test.Controllers
             // Arrange
             var testB2BUser = await CreateTestB2BUserAsync("token-subjecttype-subject", "token-subjecttype@example.com");
 
-            // B2B用のダミーEcAuthUser（TokenRequestに必要）
-            var dummyUser = new EcAuthUser
-            {
-                Subject = testB2BUser.Subject,
-                EmailHash = "dummy-hash",
-                OrganizationId = 1,
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow
-            };
-
             // アクセストークンを生成
+            // ISubjectProvider 導入により、B2BUser を直接渡せるようになった
             var tokenRequest = new ITokenService.TokenRequest
             {
-                User = dummyUser,
+                User = testB2BUser,
                 Client = _client,
-                B2BSubject = testB2BUser.Subject,
                 RequestedScopes = new[] { "openid", "profile" },
                 SubjectType = SubjectType.B2B
             };
@@ -718,7 +708,7 @@ namespace IdentityProvider.Test.Controllers
             Assert.NotNull(savedToken);
             // SubjectType が B2B に設定されていることを確認
             Assert.Equal(SubjectType.B2B, savedToken.SubjectType);
-            // 統一Subjectが設定されていることを確認（B2B認証なのでB2BSubjectが使用される）
+            // 統一Subjectが設定されていることを確認（B2B認証なのでB2BUser.Subjectが使用される）
             Assert.Equal(testB2BUser.Subject, savedToken.Subject);
         }
 

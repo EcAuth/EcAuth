@@ -243,11 +243,10 @@ namespace IdentityProvider.Controllers
 
                     tokenRequest = new ITokenService.TokenRequest
                     {
-                        User = null!, // B2B認証では使用しない
+                        User = b2bUser,
                         Client = client,
                         RequestedScopes = scopes,
-                        SubjectType = SubjectType.B2B,
-                        B2BSubject = b2bUser.Subject
+                        SubjectType = SubjectType.B2B
                     };
 
                     _logger.LogInformation("Token request created for B2B user: {Subject}, client: {ClientId}, scopes: {Scopes}",

@@ -39,20 +39,11 @@ namespace IdentityProvider.Services
             if (request.Client == null)
                 throw new ArgumentException("Client cannot be null.", nameof(request.Client));
 
-            // B2B認証の場合はB2BSubjectを使用、それ以外はUser.Subjectを使用
-            string subject;
-            if (request.SubjectType == SubjectType.B2B)
-            {
-                if (string.IsNullOrEmpty(request.B2BSubject))
-                    throw new ArgumentException("B2BSubject is required for B2B authentication.", nameof(request.B2BSubject));
-                subject = request.B2BSubject;
-            }
-            else
-            {
-                if (request.User == null)
-                    throw new ArgumentException("User cannot be null for B2C authentication.", nameof(request.User));
-                subject = request.User.Subject;
-            }
+            if (request.User == null)
+                throw new ArgumentException("User cannot be null.", nameof(request.User));
+
+            // ISubjectProvider から Subject を取得（B2C/B2B 共通）
+            var subject = request.User.Subject;
 
             // RSA鍵ペアを取得
             var rsaKeyPair = await _context.RsaKeyPairs
@@ -128,20 +119,11 @@ namespace IdentityProvider.Services
             if (request.Client == null)
                 throw new ArgumentException("Client cannot be null.", nameof(request.Client));
 
-            // B2B認証の場合はB2BSubjectを使用、それ以外はUser.Subjectを使用
-            string subject;
-            if (request.SubjectType == SubjectType.B2B)
-            {
-                if (string.IsNullOrEmpty(request.B2BSubject))
-                    throw new ArgumentException("B2BSubject is required for B2B authentication.", nameof(request.B2BSubject));
-                subject = request.B2BSubject;
-            }
-            else
-            {
-                if (request.User == null)
-                    throw new ArgumentException("User cannot be null for B2C authentication.", nameof(request.User));
-                subject = request.User.Subject;
-            }
+            if (request.User == null)
+                throw new ArgumentException("User cannot be null.", nameof(request.User));
+
+            // ISubjectProvider から Subject を取得（B2C/B2B 共通）
+            var subject = request.User.Subject;
 
             // アクセストークンは簡単なランダム文字列として生成
             var accessToken = RandomUtil.GenerateRandomBytes(32);

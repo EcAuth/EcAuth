@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace IdentityProvider.Models
 {
     [Table("ecauth_user")]
-    public class EcAuthUser
+    public class EcAuthUser : ISubjectProvider
     {
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
