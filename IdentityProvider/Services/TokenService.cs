@@ -42,6 +42,9 @@ namespace IdentityProvider.Services
             if (request.User == null)
                 throw new ArgumentException("User cannot be null.", nameof(request.User));
 
+            if (request.SubjectType != SubjectType.B2C && request.SubjectType != SubjectType.B2B)
+                throw new ArgumentException($"Unsupported SubjectType: {request.SubjectType}", nameof(request.SubjectType));
+
             // ISubjectProvider から Subject を取得（B2C/B2B 共通）
             var subject = request.User.Subject;
 
@@ -121,6 +124,9 @@ namespace IdentityProvider.Services
 
             if (request.User == null)
                 throw new ArgumentException("User cannot be null.", nameof(request.User));
+
+            if (request.SubjectType != SubjectType.B2C && request.SubjectType != SubjectType.B2B)
+                throw new ArgumentException($"Unsupported SubjectType: {request.SubjectType}", nameof(request.SubjectType));
 
             // ISubjectProvider から Subject を取得（B2C/B2B 共通）
             var subject = request.User.Subject;
@@ -233,7 +239,6 @@ namespace IdentityProvider.Services
             try
             {
                 var accessToken = await _context.AccessTokens
-                    .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(at => at.Token == token);
 
                 if (accessToken == null)
