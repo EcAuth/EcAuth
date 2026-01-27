@@ -44,12 +44,14 @@ namespace IdentityProvider.Models
                 .HasQueryFilter(m => m.EcAuthUser != null && m.EcAuthUser.Organization != null && m.EcAuthUser.Organization.TenantName == _tenantService.TenantName);
 
             // AuthorizationCodeにもグローバルクエリフィルターを適用
+            // 注: 旧外部キー削除後はClient経由でテナントフィルターを適用
             modelBuilder.Entity<AuthorizationCode>()
-                .HasQueryFilter(ac => ac.EcAuthUser != null && ac.EcAuthUser.Organization != null && ac.EcAuthUser.Organization.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(ac => ac.Client != null && ac.Client.Organization != null && ac.Client.Organization.TenantName == _tenantService.TenantName);
 
             // AccessTokenにもグローバルクエリフィルターを適用
+            // 注: 旧外部キー削除後はClient経由でテナントフィルターを適用
             modelBuilder.Entity<AccessToken>()
-                .HasQueryFilter(at => at.EcAuthUser != null && at.EcAuthUser.Organization != null && at.EcAuthUser.Organization.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(at => at.Client != null && at.Client.Organization != null && at.Client.Organization.TenantName == _tenantService.TenantName);
 
             // ExternalIdpTokenにもグローバルクエリフィルターを適用
             modelBuilder.Entity<ExternalIdpToken>()
@@ -70,31 +72,6 @@ namespace IdentityProvider.Models
                 .HasMany(u => u.ExternalIdpMappings)
                 .WithOne(m => m.EcAuthUser)
                 .HasForeignKey(m => m.EcAuthSubject)
-                .HasPrincipalKey(u => u.Subject)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            // B2C: EcAuthUser -> AuthorizationCode (optional)
-            modelBuilder.Entity<EcAuthUser>()
-                .HasMany(u => u.AuthorizationCodes)
-                .WithOne(ac => ac.EcAuthUser)
-                .HasForeignKey(ac => ac.EcAuthSubject)
-                .HasPrincipalKey(u => u.Subject)
-                .IsRequired(false)
-                .OnDelete(DeleteBehavior.SetNull);
-
-            // B2B: B2BUser -> AuthorizationCode (optional)
-            modelBuilder.Entity<B2BUser>()
-                .HasMany(u => u.AuthorizationCodes)
-                .WithOne(ac => ac.B2BUser)
-                .HasForeignKey(ac => ac.B2BSubject)
-                .HasPrincipalKey(u => u.Subject)
-                .IsRequired(false)
-                .OnDelete(DeleteBehavior.SetNull);
-
-            modelBuilder.Entity<EcAuthUser>()
-                .HasMany<AccessToken>()
-                .WithOne(at => at.EcAuthUser)
-                .HasForeignKey(at => at.EcAuthSubject)
                 .HasPrincipalKey(u => u.Subject)
                 .OnDelete(DeleteBehavior.Cascade);
 

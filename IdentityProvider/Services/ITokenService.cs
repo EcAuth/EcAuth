@@ -9,10 +9,21 @@ namespace IdentityProvider.Services
         /// </summary>
         public class TokenRequest
         {
-            public EcAuthUser User { get; set; } = null!;
+            /// <summary>
+            /// ユーザー情報（EcAuthUser または B2BUser）
+            /// ISubjectProvider インターフェイスを実装したエンティティを渡す
+            /// </summary>
+            public ISubjectProvider User { get; set; } = null!;
+
             public Client Client { get; set; } = null!;
             public string[]? RequestedScopes { get; set; }
             public string? Nonce { get; set; }
+
+            /// <summary>
+            /// Subjectの種別（B2C=0, B2B=1, Account=2）
+            /// 指定しない場合はB2C（デフォルト）として扱う
+            /// </summary>
+            public SubjectType SubjectType { get; set; } = SubjectType.B2C;
         }
 
         /// <summary>
@@ -25,6 +36,16 @@ namespace IdentityProvider.Services
             public int ExpiresIn { get; set; }
             public string TokenType { get; set; } = "Bearer";
             public string? RefreshToken { get; set; }
+        }
+
+        /// <summary>
+        /// アクセストークン検証結果
+        /// </summary>
+        public class AccessTokenValidationResult
+        {
+            public bool IsValid { get; set; }
+            public string? Subject { get; set; }
+            public SubjectType? SubjectType { get; set; }
         }
 
         /// <summary>
@@ -62,6 +83,13 @@ namespace IdentityProvider.Services
         /// <param name="token">検証するアクセストークン</param>
         /// <returns>検証に成功した場合、ユーザーのSubject</returns>
         Task<string?> ValidateAccessTokenAsync(string token);
+
+        /// <summary>
+        /// アクセストークンを検証し、SubjectTypeを含む詳細な結果を返す
+        /// </summary>
+        /// <param name="token">検証するアクセストークン</param>
+        /// <returns>検証結果（Subject、SubjectType を含む）</returns>
+        Task<AccessTokenValidationResult> ValidateAccessTokenWithTypeAsync(string token);
 
         /// <summary>
         /// アクセストークンを無効化する（リボケーション）

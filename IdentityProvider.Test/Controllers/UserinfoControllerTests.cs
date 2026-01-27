@@ -13,6 +13,7 @@ namespace IdentityProvider.Test.Controllers
     {
         private readonly Mock<ITokenService> _mockTokenService;
         private readonly Mock<IUserService> _mockUserService;
+        private readonly Mock<IB2BUserService> _mockB2BUserService;
         private readonly Mock<ILogger<UserinfoController>> _mockLogger;
         private readonly UserinfoController _controller;
 
@@ -20,11 +21,13 @@ namespace IdentityProvider.Test.Controllers
         {
             _mockTokenService = new Mock<ITokenService>();
             _mockUserService = new Mock<IUserService>();
+            _mockB2BUserService = new Mock<IB2BUserService>();
             _mockLogger = new Mock<ILogger<UserinfoController>>();
 
             _controller = new UserinfoController(
                 _mockTokenService.Object,
                 _mockUserService.Object,
+                _mockB2BUserService.Object,
                 _mockLogger.Object);
 
             // HttpContext のセットアップ
@@ -49,8 +52,13 @@ namespace IdentityProvider.Test.Controllers
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
-            _mockTokenService.Setup(x => x.ValidateAccessTokenAsync(accessToken))
-                .ReturnsAsync(subject);
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = true,
+                    Subject = subject,
+                    SubjectType = SubjectType.B2C
+                });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
                 .ReturnsAsync(user);
@@ -82,8 +90,13 @@ namespace IdentityProvider.Test.Controllers
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
-            _mockTokenService.Setup(x => x.ValidateAccessTokenAsync(accessToken))
-                .ReturnsAsync(subject);
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = true,
+                    Subject = subject,
+                    SubjectType = SubjectType.B2C
+                });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
                 .ReturnsAsync(user);
@@ -179,8 +192,13 @@ namespace IdentityProvider.Test.Controllers
             var accessToken = "invalid-access-token";
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
-            _mockTokenService.Setup(x => x.ValidateAccessTokenAsync(accessToken))
-                .ReturnsAsync((string?)null);
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = false,
+                    Subject = null,
+                    SubjectType = null
+                });
 
             // Act
             var result = await _controller.Get();
@@ -201,8 +219,13 @@ namespace IdentityProvider.Test.Controllers
             var accessToken = "expired-access-token";
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
-            _mockTokenService.Setup(x => x.ValidateAccessTokenAsync(accessToken))
-                .ReturnsAsync((string?)null); // 期限切れの場合はnullが返される
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = false, // 期限切れの場合はIsValid=false
+                    Subject = null,
+                    SubjectType = null
+                });
 
             // Act
             var result = await _controller.Get();
@@ -225,8 +248,13 @@ namespace IdentityProvider.Test.Controllers
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
-            _mockTokenService.Setup(x => x.ValidateAccessTokenAsync(accessToken))
-                .ReturnsAsync(subject);
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = true,
+                    Subject = subject,
+                    SubjectType = SubjectType.B2C
+                });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
                 .ReturnsAsync((EcAuthUser?)null);
@@ -250,7 +278,7 @@ namespace IdentityProvider.Test.Controllers
             var accessToken = "valid-access-token";
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
-            _mockTokenService.Setup(x => x.ValidateAccessTokenAsync(accessToken))
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
                 .ThrowsAsync(new Exception("Database connection failed"));
 
             // Act
@@ -276,8 +304,13 @@ namespace IdentityProvider.Test.Controllers
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
-            _mockTokenService.Setup(x => x.ValidateAccessTokenAsync(accessToken))
-                .ReturnsAsync(subject);
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = true,
+                    Subject = subject,
+                    SubjectType = SubjectType.B2C
+                });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
                 .ThrowsAsync(new Exception("User service failed"));
@@ -313,8 +346,13 @@ namespace IdentityProvider.Test.Controllers
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
-            _mockTokenService.Setup(x => x.ValidateAccessTokenAsync(accessToken))
-                .ReturnsAsync(subject);
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = true,
+                    Subject = subject,
+                    SubjectType = SubjectType.B2C
+                });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
                 .ReturnsAsync(user);
@@ -346,8 +384,13 @@ namespace IdentityProvider.Test.Controllers
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
-            _mockTokenService.Setup(x => x.ValidateAccessTokenAsync(accessToken))
-                .ReturnsAsync(subject);
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = true,
+                    Subject = subject,
+                    SubjectType = SubjectType.B2C
+                });
 
             _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
                 .ReturnsAsync(user);

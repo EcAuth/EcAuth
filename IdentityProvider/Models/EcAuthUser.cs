@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace IdentityProvider.Models
 {
     [Table("ecauth_user")]
-    public class EcAuthUser
+    public class EcAuthUser : ISubjectProvider
     {
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
@@ -33,6 +33,5 @@ namespace IdentityProvider.Models
 
         public Organization? Organization { get; set; }
         public ICollection<ExternalIdpMapping> ExternalIdpMappings { get; } = new List<ExternalIdpMapping>();
-        public ICollection<AuthorizationCode> AuthorizationCodes { get; } = new List<AuthorizationCode>();
     }
 }

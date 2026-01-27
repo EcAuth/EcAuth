@@ -10,8 +10,8 @@ namespace IdentityProvider.Test.Models
             var authCode = new AuthorizationCode();
 
             Assert.Equal(string.Empty, authCode.Code);
-            Assert.Null(authCode.EcAuthSubject);  // nullable化された
-            Assert.Null(authCode.B2BSubject);     // B2B用のSubject
+            Assert.Equal(string.Empty, authCode.Subject);
+            Assert.Equal(default(SubjectType), authCode.SubjectType);
             Assert.Equal(0, authCode.ClientId);
             Assert.Equal(string.Empty, authCode.RedirectUri);
             Assert.Null(authCode.Scope);
@@ -20,8 +20,6 @@ namespace IdentityProvider.Test.Models
             Assert.False(authCode.IsUsed);
             Assert.True(authCode.CreatedAt <= DateTimeOffset.UtcNow);
             Assert.Null(authCode.UsedAt);
-            Assert.Null(authCode.EcAuthUser);
-            Assert.Null(authCode.B2BUser);        // B2B用のナビゲーションプロパティ
             Assert.Null(authCode.Client);
         }
 
@@ -42,7 +40,8 @@ namespace IdentityProvider.Test.Models
             var authCode = new AuthorizationCode
             {
                 Code = code,
-                EcAuthSubject = subject,
+                Subject = subject,
+                SubjectType = SubjectType.B2C,
                 ClientId = clientId,
                 RedirectUri = redirectUri,
                 Scope = scope,
@@ -54,7 +53,8 @@ namespace IdentityProvider.Test.Models
             };
 
             Assert.Equal(code, authCode.Code);
-            Assert.Equal(subject, authCode.EcAuthSubject);
+            Assert.Equal(subject, authCode.Subject);
+            Assert.Equal(SubjectType.B2C, authCode.SubjectType);
             Assert.Equal(clientId, authCode.ClientId);
             Assert.Equal(redirectUri, authCode.RedirectUri);
             Assert.Equal(scope, authCode.Scope);
@@ -72,7 +72,7 @@ namespace IdentityProvider.Test.Models
         public void AuthorizationCode_Code_ShouldAcceptValidValues(string code)
         {
             var authCode = new AuthorizationCode { Code = code };
-            
+
             Assert.Equal(code, authCode.Code);
         }
 
@@ -83,7 +83,7 @@ namespace IdentityProvider.Test.Models
         public void AuthorizationCode_RedirectUri_ShouldAcceptValidUris(string redirectUri)
         {
             var authCode = new AuthorizationCode { RedirectUri = redirectUri };
-            
+
             Assert.Equal(redirectUri, authCode.RedirectUri);
         }
 
@@ -95,21 +95,21 @@ namespace IdentityProvider.Test.Models
         public void AuthorizationCode_Scope_ShouldAcceptValidValues(string? scope)
         {
             var authCode = new AuthorizationCode { Scope = scope };
-            
+
             Assert.Equal(scope, authCode.Scope);
         }
 
         [Fact]
         public void AuthorizationCode_IsExpired_ShouldWorkCorrectly()
         {
-            var expiredCode = new AuthorizationCode 
-            { 
-                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1) 
+            var expiredCode = new AuthorizationCode
+            {
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1)
             };
-            
-            var validCode = new AuthorizationCode 
-            { 
-                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10) 
+
+            var validCode = new AuthorizationCode
+            {
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10)
             };
 
             Assert.True(expiredCode.ExpiresAt < DateTimeOffset.UtcNow);
@@ -120,13 +120,13 @@ namespace IdentityProvider.Test.Models
         public void AuthorizationCode_UsageTracking_ShouldWork()
         {
             var authCode = new AuthorizationCode();
-            
+
             Assert.False(authCode.IsUsed);
             Assert.Null(authCode.UsedAt);
-            
+
             authCode.IsUsed = true;
             authCode.UsedAt = DateTimeOffset.UtcNow;
-            
+
             Assert.True(authCode.IsUsed);
             Assert.NotNull(authCode.UsedAt);
             Assert.True(authCode.UsedAt <= DateTimeOffset.UtcNow);
@@ -135,17 +135,27 @@ namespace IdentityProvider.Test.Models
         [Fact]
         public void AuthorizationCode_Relations_ShouldWork()
         {
-            var user = new EcAuthUser { Subject = "test-subject" };
             var client = new Client { Id = 1, ClientId = "test-client" };
-            var authCode = new AuthorizationCode 
-            { 
-                EcAuthUser = user,
+            var authCode = new AuthorizationCode
+            {
+                Subject = "test-subject",
+                SubjectType = SubjectType.B2C,
                 Client = client,
                 ClientId = 1
             };
-            
-            Assert.Equal(user, authCode.EcAuthUser);
+
             Assert.Equal(client, authCode.Client);
+        }
+
+        [Theory]
+        [InlineData(SubjectType.B2C)]
+        [InlineData(SubjectType.B2B)]
+        [InlineData(SubjectType.Account)]
+        public void AuthorizationCode_SubjectType_ShouldAcceptValidValues(SubjectType subjectType)
+        {
+            var authCode = new AuthorizationCode { SubjectType = subjectType };
+
+            Assert.Equal(subjectType, authCode.SubjectType);
         }
     }
 }

@@ -366,7 +366,8 @@ namespace IdentityProvider.Test.Controllers
             var authCode = new AuthorizationCode
             {
                 Code = "test-auth-code",
-                EcAuthSubject = "test-b2b-subject",
+                Subject = "test-b2b-subject",
+                SubjectType = SubjectType.B2B,
                 ClientId = client.Id,
                 RedirectUri = request.RedirectUri,
                 State = request.State,

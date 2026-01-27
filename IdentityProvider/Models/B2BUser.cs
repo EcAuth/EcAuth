@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace IdentityProvider.Models
 {
     [Table("b2b_user")]
-    public class B2BUser
+    public class B2BUser : ISubjectProvider
     {
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
@@ -37,6 +37,5 @@ namespace IdentityProvider.Models
 
         public Organization? Organization { get; set; }
         public ICollection<B2BPasskeyCredential> PasskeyCredentials { get; } = new List<B2BPasskeyCredential>();
-        public ICollection<AuthorizationCode> AuthorizationCodes { get; } = new List<AuthorizationCode>();
     }
 }

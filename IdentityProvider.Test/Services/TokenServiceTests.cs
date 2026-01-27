@@ -409,7 +409,7 @@ namespace IdentityProvider.Test.Services
                 Token = "expired-token",
                 ExpiresAt = DateTime.UtcNow.AddHours(-1), // Expired 1 hour ago
                 ClientId = client.Id,
-                EcAuthSubject = user.Subject,
+                Subject = user.Subject,
                 CreatedAt = DateTime.UtcNow.AddHours(-2)
             };
             context.AccessTokens.Add(expiredToken);
@@ -485,7 +485,7 @@ namespace IdentityProvider.Test.Services
             // Assert
             var savedToken = await context.AccessTokens.FirstOrDefaultAsync(at => at.Token == accessToken);
             Assert.NotNull(savedToken);
-            Assert.Equal(user.Subject, savedToken.EcAuthSubject);
+            Assert.Equal(user.Subject, savedToken.Subject);
             Assert.Equal(client.Id, savedToken.ClientId);
             Assert.Equal("openid email", savedToken.Scopes);
             Assert.False(savedToken.IsExpired);

@@ -77,7 +77,7 @@ namespace IdentityProvider.Test.Services
             Assert.NotNull(result);
             Assert.NotEmpty(result.Code);
             Assert.True(result.Code.Length >= 32); // Base64URLエンコード後の最小長
-            Assert.Equal(request.Subject, result.EcAuthSubject);
+            Assert.Equal(request.Subject, result.Subject);
             Assert.Equal(request.ClientId, result.ClientId);
             Assert.Equal(request.RedirectUri, result.RedirectUri);
             Assert.Equal(request.Scope, result.Scope);
@@ -184,7 +184,7 @@ namespace IdentityProvider.Test.Services
             var authorizationCode = new AuthorizationCode
             {
                 Code = "expired-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1), // 既に期限切れ
@@ -208,7 +208,7 @@ namespace IdentityProvider.Test.Services
             var authorizationCode = new AuthorizationCode
             {
                 Code = "used-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
@@ -268,7 +268,7 @@ namespace IdentityProvider.Test.Services
             var authorizationCode = new AuthorizationCode
             {
                 Code = "already-used-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
@@ -303,7 +303,7 @@ namespace IdentityProvider.Test.Services
             var expiredCode1 = new AuthorizationCode
             {
                 Code = "expired-code-1",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-10),
@@ -314,7 +314,7 @@ namespace IdentityProvider.Test.Services
             var expiredCode2 = new AuthorizationCode
             {
                 Code = "expired-code-2",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-5),
@@ -325,7 +325,7 @@ namespace IdentityProvider.Test.Services
             var validCode = new AuthorizationCode
             {
                 Code = "valid-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
@@ -354,7 +354,7 @@ namespace IdentityProvider.Test.Services
             var activeCode = new AuthorizationCode
             {
                 Code = "active-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
@@ -365,7 +365,7 @@ namespace IdentityProvider.Test.Services
             var usedCode = new AuthorizationCode
             {
                 Code = "used-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
@@ -377,7 +377,7 @@ namespace IdentityProvider.Test.Services
             var expiredCode = new AuthorizationCode
             {
                 Code = "expired-code",
-                EcAuthSubject = "test-subject",
+                Subject = "test-subject",
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-5),
