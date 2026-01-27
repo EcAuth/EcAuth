@@ -259,12 +259,6 @@ namespace IdentityProvider.Controllers
                     if (user == null)
                     {
                         _logger.LogError("User not found for subject: {Subject}", subject);
-
-                        // デバッグ用: EcAuthUsersテーブルの全件を表示
-                        var allUsers = await _context.EcAuthUsers.Select(u => new { u.Subject, u.OrganizationId }).ToListAsync();
-                        _logger.LogError("All users in database: {Users}",
-                            string.Join(", ", allUsers.Select(u => $"Subject={u.Subject}, OrgId={u.OrganizationId}")));
-
                         return BadRequest(new
                         {
                             error = "invalid_grant",
