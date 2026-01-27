@@ -1,7 +1,0 @@
-source https://www.nuget.org/api/v2
-
-nuget BCrypt.Net-Next
-nuget ConsoleAppFramework
-nuget EntityFrameworkCore.FSharp
-nuget FSharp.Core
-nuget Microsoft.EntityFrameworkCore.SqlServer
