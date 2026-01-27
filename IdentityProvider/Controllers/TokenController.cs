@@ -252,7 +252,7 @@ namespace IdentityProvider.Controllers
                     _logger.LogInformation("Token request created for B2B user: {Subject}, client: {ClientId}, scopes: {Scopes}",
                         b2bUser.Subject, client.ClientId, string.Join(", ", scopes ?? new[] { "none" }));
                 }
-                else
+                else if (subjectType == SubjectType.B2C)
                 {
                     // B2C認証の場合: EcAuthUserを取得（従来の処理）
                     var user = await _userService.GetUserBySubjectAsync(subject);
@@ -276,6 +276,16 @@ namespace IdentityProvider.Controllers
 
                     _logger.LogInformation("Token request created for user: {Subject}, client: {ClientId}, scopes: {Scopes}",
                         user.Subject, client.ClientId, string.Join(", ", scopes ?? new[] { "none" }));
+                }
+                else
+                {
+                    // Account等のサポートされていないSubjectType
+                    _logger.LogError("Unsupported SubjectType: {SubjectType}", subjectType);
+                    return BadRequest(new
+                    {
+                        error = "invalid_grant",
+                        error_description = "サポートされていないSubjectTypeです。"
+                    });
                 }
 
                 // 13. トークンの生成
