@@ -47,6 +47,8 @@ namespace IdentityProvider.Services
 
             // ISubjectProvider から Subject を取得（B2C/B2B 共通）
             var subject = request.User.Subject;
+            if (string.IsNullOrWhiteSpace(subject))
+                throw new ArgumentException("Subject cannot be null or empty.", nameof(request.User));
 
             // RSA鍵ペアを取得
             var rsaKeyPair = await _context.RsaKeyPairs
@@ -130,6 +132,8 @@ namespace IdentityProvider.Services
 
             // ISubjectProvider から Subject を取得（B2C/B2B 共通）
             var subject = request.User.Subject;
+            if (string.IsNullOrWhiteSpace(subject))
+                throw new ArgumentException("Subject cannot be null or empty.", nameof(request.User));
 
             // アクセストークンは簡単なランダム文字列として生成
             var accessToken = RandomUtil.GenerateRandomBytes(32);
