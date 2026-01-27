@@ -218,6 +218,16 @@ namespace IdentityProvider.Controllers
                 var subjectType = authorizationCode.SubjectType;
                 var subject = authorizationCode.Subject;
 
+                if (string.IsNullOrWhiteSpace(subject))
+                {
+                    _logger.LogError("Authorization code has empty subject. SubjectType: {SubjectType}", subjectType);
+                    return BadRequest(new
+                    {
+                        error = "invalid_grant",
+                        error_description = "認可コードのSubjectが不正です。"
+                    });
+                }
+
                 _logger.LogInformation("Fetching user for subject: {Subject}, SubjectType: {SubjectType}", subject, subjectType);
 
                 // 12. トークン生成リクエストの構築
@@ -230,7 +240,7 @@ namespace IdentityProvider.Controllers
                 if (subjectType == SubjectType.B2B)
                 {
                     // B2B認証の場合: B2BUserを取得
-                    var b2bUser = await _b2bUserService.GetBySubjectAsync(subject!);
+                    var b2bUser = await _b2bUserService.GetBySubjectAsync(subject);
                     if (b2bUser == null)
                     {
                         _logger.LogError("B2B user not found for subject: {Subject}", subject);
