@@ -126,7 +126,6 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
     console.log('Authentication result:', resultText);
 
     // レスポンスJSONからredirect_urlを抽出
-    const resultHtml = await authenticateResult.innerHTML();
     const preContent = await authenticateResult.locator('pre').textContent();
     expect(preContent).toBeTruthy();
 
