@@ -1,4 +1,4 @@
-import { test, expect, BrowserContext, Page, CDPSession, request } from '@playwright/test';
+import { test, expect, BrowserContext, Page, CDPSession, APIRequestContext, request } from '@playwright/test';
 
 test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   const baseUrl = process.env.E2E_BASE_URL || 'https://localhost:8081';
@@ -19,6 +19,7 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   let credentialId: string;
 
   let authenticatorId: string;
+  let apiContext: APIRequestContext;
 
   test.beforeAll(async ({ browser }) => {
     context = await browser.newContext({
@@ -46,9 +47,14 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
     authenticatorId = result.authenticatorId;
 
     console.log('Virtual Authenticator configured, id:', authenticatorId);
+
+    apiContext = await request.newContext({
+      ignoreHTTPSErrors: true,
+    });
   });
 
   test.afterAll(async () => {
+    await apiContext?.dispose();
     await cdpSession?.detach();
     await context?.close();
   });
@@ -141,11 +147,7 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   test('トークン交換', async () => {
     expect(authorizationCode).toBeTruthy();
 
-    const tokenRequest = await request.newContext({
-      ignoreHTTPSErrors: true,
-    });
-
-    const response = await tokenRequest.post(tokenEndpoint, {
+    const response = await apiContext.post(tokenEndpoint, {
       form: {
         client_id: clientId,
         client_secret: clientSecret,
@@ -172,10 +174,6 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   test('UserInfoエンドポイント検証', async () => {
     expect(accessToken).toBeTruthy();
 
-    const apiContext = await request.newContext({
-      ignoreHTTPSErrors: true,
-    });
-
     const response = await apiContext.get(`${baseUrl}/userinfo`, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -192,10 +190,6 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
 
   test('パスキー一覧取得', async () => {
     expect(accessToken).toBeTruthy();
-
-    const apiContext = await request.newContext({
-      ignoreHTTPSErrors: true,
-    });
 
     const response = await apiContext.get(`${baseUrl}/b2b/passkey/list`, {
       headers: {
@@ -220,10 +214,6 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
     expect(accessToken).toBeTruthy();
     expect(credentialId).toBeTruthy();
 
-    const apiContext = await request.newContext({
-      ignoreHTTPSErrors: true,
-    });
-
     const response = await apiContext.delete(
       `${baseUrl}/b2b/passkey/${encodeURIComponent(credentialId)}`,
       {
@@ -239,10 +229,6 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
 
   test('削除後の一覧確認', async () => {
     expect(accessToken).toBeTruthy();
-
-    const apiContext = await request.newContext({
-      ignoreHTTPSErrors: true,
-    });
 
     const response = await apiContext.get(`${baseUrl}/b2b/passkey/list`, {
       headers: {
