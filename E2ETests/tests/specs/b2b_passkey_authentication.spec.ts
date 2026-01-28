@@ -55,6 +55,11 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
 
   test.afterAll(async () => {
     await apiContext?.dispose();
+    if (authenticatorId) {
+      await cdpSession?.send('WebAuthn.removeVirtualAuthenticator', {
+        authenticatorId,
+      });
+    }
     await cdpSession?.detach();
     await context?.close();
   });
