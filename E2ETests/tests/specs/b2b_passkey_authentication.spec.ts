@@ -3,11 +3,11 @@ import { test, expect, BrowserContext, Page, CDPSession, request } from '@playwr
 test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   const baseUrl = process.env.E2E_BASE_URL || 'https://localhost:8081';
   const tokenEndpoint = process.env.E2E_TOKEN_ENDPOINT || `${baseUrl}/token`;
-  const clientId = 'client_id';
-  const clientSecret = 'client_secret';
-  const rpId = 'localhost';
-  const b2bSubject = '3f7c0ab4-b004-4102-b6ed-a730369dd237';
-  const redirectUri = 'https://localhost:8081/admin/ecauth/callback';
+  const clientId = process.env.DEFAULT_CLIENT_ID || 'client_id';
+  const clientSecret = process.env.DEFAULT_CLIENT_SECRET || 'client_secret';
+  const rpId = process.env.DEV_B2B_ALLOWED_RP_IDS || 'localhost';
+  const b2bSubject = process.env.DEV_B2B_USER_SUBJECT || '3f7c0ab4-b004-4102-b6ed-a730369dd237';
+  const redirectUri = process.env.DEV_B2B_REDIRECT_URI || 'https://localhost:8081/admin/ecauth/callback';
 
   let context: BrowserContext;
   let page: Page;
