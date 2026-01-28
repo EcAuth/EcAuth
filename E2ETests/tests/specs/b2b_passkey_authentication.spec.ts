@@ -165,7 +165,11 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
 
     console.log('Token response status:', response.status());
     const responseBody = await response.json();
-    console.log('Token response:', JSON.stringify(responseBody, null, 2));
+    console.log('Token response: access_token:', responseBody.access_token?.substring(0, 10) + '...');
+    if (responseBody.id_token) {
+      const payload = JSON.parse(Buffer.from(responseBody.id_token.split('.')[1], 'base64url').toString());
+      console.log('id_token payload:', JSON.stringify(payload, null, 2));
+    }
 
     expect(response.status()).toBe(200);
     expect(responseBody.access_token).toBeTruthy();
