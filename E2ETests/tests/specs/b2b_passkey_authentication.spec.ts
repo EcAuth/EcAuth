@@ -170,6 +170,27 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
     console.log('Access token obtained');
   });
 
+  test('UserInfoエンドポイント検証', async () => {
+    expect(accessToken).toBeTruthy();
+
+    const apiContext = await request.newContext({
+      ignoreHTTPSErrors: true,
+    });
+
+    const response = await apiContext.get(`${baseUrl}/userinfo`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    console.log('UserInfo response status:', response.status());
+    const responseBody = await response.json();
+    console.log('UserInfo response:', JSON.stringify(responseBody, null, 2));
+
+    expect(response.status()).toBe(200);
+    expect(responseBody.sub).toBe(b2bSubject);
+  });
+
   test('パスキー一覧取得', async () => {
     expect(accessToken).toBeTruthy();
 
