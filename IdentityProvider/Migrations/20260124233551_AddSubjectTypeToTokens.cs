@@ -41,10 +41,12 @@ namespace IdentityProvider.Migrations
             // バッチコンパイルエラーを回避（subject カラムの遅延名前解決）
             // IF EXISTS で RemoveLegacySubjectColumns 適用済みの場合にも対応
             migrationBuilder.Sql(@"
-                IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
-                           WHERE TABLE_NAME = 'access_token' AND COLUMN_NAME = 'ecauth_subject')
+                IF EXISTS (SELECT 1
+                           FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'dbo.access_token')
+                             AND name = 'ecauth_subject')
                 BEGIN
-                    EXEC(N'UPDATE access_token
+                    EXEC(N'UPDATE dbo.access_token
                     SET subject = ecauth_subject, subject_type = 0
                     WHERE ecauth_subject IS NOT NULL;');
                 END
@@ -52,10 +54,12 @@ namespace IdentityProvider.Migrations
 
             // 既存データの変換: AuthorizationCode (B2C)
             migrationBuilder.Sql(@"
-                IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
-                           WHERE TABLE_NAME = 'authorization_code' AND COLUMN_NAME = 'ecauth_subject')
+                IF EXISTS (SELECT 1
+                           FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'dbo.authorization_code')
+                             AND name = 'ecauth_subject')
                 BEGIN
-                    EXEC(N'UPDATE authorization_code
+                    EXEC(N'UPDATE dbo.authorization_code
                     SET subject_new = ecauth_subject, subject_type = 0
                     WHERE ecauth_subject IS NOT NULL;');
                 END
@@ -63,10 +67,12 @@ namespace IdentityProvider.Migrations
 
             // 既存データの変換: AuthorizationCode (B2B)
             migrationBuilder.Sql(@"
-                IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
-                           WHERE TABLE_NAME = 'authorization_code' AND COLUMN_NAME = 'b2b_subject')
+                IF EXISTS (SELECT 1
+                           FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'dbo.authorization_code')
+                             AND name = 'b2b_subject')
                 BEGIN
-                    EXEC(N'UPDATE authorization_code
+                    EXEC(N'UPDATE dbo.authorization_code
                     SET subject_new = b2b_subject, subject_type = 1
                     WHERE b2b_subject IS NOT NULL;');
                 END

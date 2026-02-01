@@ -35,3 +35,4 @@ cd E2ETests && yarn install && npx playwright test
   - `EXEC()` でラップすることで名前解決を実行時まで遅延させる
 - 破壊的変更（カラム削除・リネーム）を伴うマイグレーションのデータ移行 SQL には `IF EXISTS` でカラム存在チェックを追加すること
   - これにより、関連するカラムを削除する後続のマイグレーションが既に適用されている環境でも、冪等スクリプトがエラーなく実行できるようになります。
+- カラム存在チェックには `INFORMATION_SCHEMA.COLUMNS` ではなく `sys.columns` + `OBJECT_ID(N'dbo.table_name')` を使用し、DML でもスキーマ修飾（`dbo.`）を明示すること
