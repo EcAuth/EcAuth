@@ -269,21 +269,6 @@ namespace IdentityProvider.Test.Services
             _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
                 .ReturnsAsync(challengeResult);
 
-            var credentialCreateOptions = new CredentialCreateOptions
-            {
-                Challenge = Encoding.UTF8.GetBytes("test-challenge"),
-                Rp = new PublicKeyCredentialRpEntity("Shop.Example.COM", "テスト組織"),
-                User = new Fido2User
-                {
-                    Id = Encoding.UTF8.GetBytes("test-b2b-subject"),
-                    Name = "admin@example.com",
-                    DisplayName = "テスト管理者"
-                },
-                PubKeyCredParams = PubKeyCredParam.Defaults
-            };
-            _mockFido2.Setup(x => x.RequestNewCredential(It.IsAny<RequestNewCredentialParams>()))
-                .Returns(credentialCreateOptions);
-
             // Act
             var result = await _service.CreateRegistrationOptionsAsync(request);
 
