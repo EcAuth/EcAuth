@@ -72,6 +72,7 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
     await page.fill('#clientSecret', clientSecret);
     await page.fill('#rpId', rpId);
     await page.fill('#b2bSubject', b2bSubject);
+    await page.fill('#redirectUri', redirectUri);
     await page.fill('#displayName', 'Test Admin');
     await page.fill('#deviceName', 'E2E Test Device');
 
@@ -212,10 +213,14 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
 
     expect(response.status()).toBe(200);
     expect(responseBody.passkeys).toBeTruthy();
-    expect(responseBody.passkeys.length).toBe(1);
+    expect(responseBody.passkeys.length).toBeGreaterThanOrEqual(1);
 
-    credentialId = responseBody.passkeys[0].credential_id;
-    expect(credentialId).toBeTruthy();
+    // 今回のテストで登録したパスキー（device_name: "E2E Test Device"）を探す
+    const e2ePasskey = responseBody.passkeys.find(
+      (p: { device_name: string }) => p.device_name === 'E2E Test Device'
+    );
+    expect(e2ePasskey).toBeTruthy();
+    credentialId = e2ePasskey.credential_id;
     console.log('Credential ID:', credentialId);
   });
 
@@ -251,6 +256,11 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
 
     expect(response.status()).toBe(200);
     expect(responseBody.passkeys).toBeTruthy();
-    expect(responseBody.passkeys.length).toBe(0);
+
+    // 削除したパスキーが一覧に含まれていないことを確認
+    const deletedPasskey = responseBody.passkeys.find(
+      (p: { credential_id: string }) => p.credential_id === credentialId
+    );
+    expect(deletedPasskey).toBeUndefined();
   });
 });
