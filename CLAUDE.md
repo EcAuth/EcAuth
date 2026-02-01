@@ -27,6 +27,21 @@ cd E2ETests && yarn install && npx playwright test
 - docs/ は EcAuthDocs リポジトリを clone したものです
 - 起動時に docs/ の内容を最新の main ブランチに更新してください
 
+### 環境変数の配線ルール
+
+環境変数の値は 1Password で一元管理されているが、1Password から各ランタイムへの **配線（マッピング）** は以下の4箇所に分散している。新しい環境変数を追加・変更する場合は、**必ず全箇所を確認**すること。
+
+| 配線先 | ファイル | 用途 |
+|--------|----------|------|
+| ローカル開発 | `.env.dev.tpl`, `.env.staging.tpl` | `op inject` でローカル `.env` を生成 |
+| CI（マイグレーション） | `.github/workflows/migrate-staging.yml` | `1password/load-secrets-action` で CI 環境変数に展開 |
+| CI（デプロイ） | `.github/workflows/deploy-staging.yml` | 同上 |
+| Azure ランタイム | `ecauth-infrastructure/environments/staging/main.tf` | Terraform `onepassword_item` → `app_settings` |
+
+**特に注意が必要なケース:**
+- DbInitializer / シーダーが参照する環境変数は **Azure ランタイム（Terraform `app_settings`）** に設定が必要。CI ワークフローに定義があっても、Terraform に漏れているとアプリ起動時にシーダーがスキップされる
+- B2BPasskeySeeder は DEV 環境では `DEFAULT_*` を、Staging/Production では `STAGING_*` / `PROD_*` プレフィックスの変数を参照する分岐がある。シーダーのコード（`B2BPasskeySeeder.cs`）で実際に参照される全変数名を確認すること
+
 ### マイグレーション設計ルール
 
 - `migrationBuilder.Sql()` でカラムを参照する UPDATE/INSERT 文を書く場合、`EXEC()` 動的 SQL でラップすること
