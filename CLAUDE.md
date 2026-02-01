@@ -26,3 +26,11 @@ cd E2ETests && yarn install && npx playwright test
 - 日本語で回答してください
 - docs/ は EcAuthDocs リポジトリを clone したものです
 - 起動時に docs/ の内容を最新の main ブランチに更新してください
+
+### マイグレーション設計ルール
+
+- `migrationBuilder.Sql()` でカラムを参照する UPDATE/INSERT 文を書く場合、`EXEC()` 動的 SQL でラップすること
+  - CI/CD の `dotnet ef migrations script --idempotent` で生成されるスクリプトは全マイグレーションが 1 バッチにまとめられる
+  - SQL Server はバッチ全体をコンパイル時に検証するため、同一マイグレーション内で追加したカラムを参照する DML はコンパイルエラーになる
+  - `EXEC()` でラップすることで名前解決を実行時まで遅延させる
+- 破壊的変更（カラム削除・リネーム）を伴うマイグレーションのデータ移行 SQL には `IF EXISTS` でカラム存在チェックを追加すること
