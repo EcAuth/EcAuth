@@ -99,10 +99,12 @@ jobs:
           echo "Health check failed after 10 attempts"
           exit 1
 
-      - name: Checkout code for verification script
+      - name: Checkout code for verification
         uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            E2ETests
 
       - name: Load secrets from 1Password
         uses: 1password/load-secrets-action@v3
@@ -114,6 +116,8 @@ jobs:
           MOCK_PASS: op://EcAuth/mockidp-staging/default_user_password
           CLIENT_ID: op://EcAuth/ecauth-staging-app/client_id
           CLIENT_SECRET: op://EcAuth/ecauth-staging-app/client_secret
+          B2B_USER_SUBJECT: op://EcAuth/ecauth-staging-app/b2b_user_subject
+          B2B_REDIRECT_URI: op://EcAuth/ecauth-staging-app/b2b_redirect_uri
 
       - name: Federation authentication verification
         id: federation_verify
@@ -129,4 +133,43 @@ jobs:
             echo "✅ User subject: ${{ steps.federation_verify.outputs.user_sub }}"
           else
             echo "❌ Failed at step: ${{ steps.federation_verify.outputs.failed_step }}"
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install Playwright
+        working-directory: E2ETests
+        run: |
+          yarn install --frozen-lockfile
+          yarn playwright install --with-deps chromium
+
+      - name: B2B passkey E2E verification
+        id: b2b_verify
+        working-directory: E2ETests
+        env:
+          E2E_BASE_URL: https://ecauth-staging-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
+          DEFAULT_CLIENT_ID: ${{ env.CLIENT_ID }}
+          DEFAULT_CLIENT_SECRET: ${{ env.CLIENT_SECRET }}
+          DEV_B2B_ALLOWED_RP_IDS: ecauth-staging-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
+          DEV_B2B_USER_SUBJECT: ${{ env.B2B_USER_SUBJECT }}
+          DEV_B2B_REDIRECT_URI: ${{ env.B2B_REDIRECT_URI }}
+        run: yarn playwright test tests/specs/b2b_passkey_authentication.spec.ts --reporter=list
+
+      - name: Upload E2E test results
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: b2b-e2e-test-results
+          path: E2ETests/test-results/
+
+      - name: B2B verification result
+        if: always()
+        run: |
+          if [ "${{ steps.b2b_verify.outcome }}" = "success" ]; then
+            echo "✅ B2B passkey E2E verification passed"
+          else
+            echo "❌ B2B passkey E2E verification failed"
           fi
