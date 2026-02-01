@@ -61,8 +61,8 @@ namespace IdentityProvider.Services
             if (client == null)
                 throw new InvalidOperationException($"Client not found: {request.ClientId}");
 
-            // RP ID検証
-            if (!client.AllowedRpIds.Contains(request.RpId))
+            // RP ID検証（ドメイン名は大文字小文字を区別しない: RFC 4343）
+            if (!client.AllowedRpIds.Contains(request.RpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {request.RpId}");
 
             // B2Bユーザー取得
@@ -285,8 +285,8 @@ namespace IdentityProvider.Services
             if (client == null)
                 throw new InvalidOperationException($"Client not found: {request.ClientId}");
 
-            // RP ID検証
-            if (!client.AllowedRpIds.Contains(request.RpId))
+            // RP ID検証（ドメイン名は大文字小文字を区別しない: RFC 4343）
+            if (!client.AllowedRpIds.Contains(request.RpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {request.RpId}");
 
             // 許可されるクレデンシャルを取得

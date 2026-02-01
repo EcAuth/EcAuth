@@ -98,7 +98,7 @@ public class B2BPasskeySeeder : IDbSeeder
         }
 
         var currentRpIds = client.AllowedRpIds;
-        if (currentRpIds.Contains(b2bAllowedRpIds))
+        if (currentRpIds.Contains(b2bAllowedRpIds, StringComparer.OrdinalIgnoreCase))
         {
             return Task.FromResult(false);
         }
