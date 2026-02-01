@@ -49,6 +49,10 @@ namespace IdentityProvider.Services
                 throw new ArgumentException("ClientId is required", nameof(request));
             if (string.IsNullOrWhiteSpace(request.RpId))
                 throw new ArgumentException("RpId is required", nameof(request));
+            // RP ID正規化（ドメイン名は大文字小文字を区別しない: RFC 4343）
+            // ブラウザの window.location.hostname は小文字を返すため、
+            // WebAuthn API の RP ID 検証で不一致にならないよう正規化する
+            var rpId = request.RpId.ToLowerInvariant();
             if (string.IsNullOrWhiteSpace(request.B2BSubject))
                 throw new ArgumentException("B2BSubject is required", nameof(request));
 
@@ -62,8 +66,8 @@ namespace IdentityProvider.Services
                 throw new InvalidOperationException($"Client not found: {request.ClientId}");
 
             // RP ID検証（ドメイン名は大文字小文字を区別しない: RFC 4343）
-            if (!client.AllowedRpIds.Contains(request.RpId, StringComparer.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"RpId is not allowed for this client: {request.RpId}");
+            if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");
 
             // B2Bユーザー取得
             var user = await _userService.GetBySubjectAsync(request.B2BSubject);
@@ -84,7 +88,7 @@ namespace IdentityProvider.Services
                     Type = "registration",
                     UserType = "b2b",
                     Subject = request.B2BSubject,
-                    RpId = request.RpId,
+                    RpId = rpId,
                     ClientId = client.Id
                 });
 
@@ -109,7 +113,7 @@ namespace IdentityProvider.Services
             // _challengeServiceで生成したチャレンジと一致させるため、手動でCredentialCreateOptionsを構築
             var options = new CredentialCreateOptions
             {
-                Rp = new PublicKeyCredentialRpEntity(request.RpId, client.Organization?.Name ?? "EcAuth"),
+                Rp = new PublicKeyCredentialRpEntity(rpId, client.Organization?.Name ?? "EcAuth"),
                 User = fido2User,
                 Challenge = WebEncoders.Base64UrlDecode(challengeResult.Challenge),
                 PubKeyCredParams = PubKeyCredParam.Defaults,
@@ -276,6 +280,8 @@ namespace IdentityProvider.Services
                 throw new ArgumentException("ClientId is required", nameof(request));
             if (string.IsNullOrWhiteSpace(request.RpId))
                 throw new ArgumentException("RpId is required", nameof(request));
+            // RP ID正規化（ドメイン名は大文字小文字を区別しない: RFC 4343）
+            var rpId = request.RpId.ToLowerInvariant();
 
             // クライアント取得
             var client = await _context.Clients
@@ -286,8 +292,8 @@ namespace IdentityProvider.Services
                 throw new InvalidOperationException($"Client not found: {request.ClientId}");
 
             // RP ID検証（ドメイン名は大文字小文字を区別しない: RFC 4343）
-            if (!client.AllowedRpIds.Contains(request.RpId, StringComparer.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"RpId is not allowed for this client: {request.RpId}");
+            if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");
 
             // 許可されるクレデンシャルを取得
             IQueryable<B2BPasskeyCredential> credentialQuery = _context.B2BPasskeyCredentials
@@ -324,7 +330,7 @@ namespace IdentityProvider.Services
                     Type = "authentication",
                     UserType = "b2b",
                     Subject = request.B2BSubject,
-                    RpId = request.RpId,
+                    RpId = rpId,
                     ClientId = client.Id
                 });
 
@@ -334,7 +340,7 @@ namespace IdentityProvider.Services
             var options = new AssertionOptions
             {
                 Challenge = WebEncoders.Base64UrlDecode(challengeResult.Challenge),
-                RpId = request.RpId,
+                RpId = rpId,
                 AllowCredentials = allowCredentials,
                 UserVerification = UserVerificationRequirement.Preferred
             };

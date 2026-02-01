@@ -277,6 +277,53 @@ namespace IdentityProvider.Test.Services
             Assert.Equal("session-123", result.SessionId);
         }
 
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_MixedCaseRpId_ShouldNormalizeToLowercase()
+        {
+            // Arrange: Azure Web Appsドメインのように混在ケースのRP IDを送信
+            // ブラウザの window.location.hostname は常に小文字を返すため、
+            // WebAuthn APIのRP ID検証で不一致になる不具合の再現テスト
+            //
+            // AllowedRpIdsには "shop.example.com" が登録されているが、
+            // リクエストでは "Shop.EXAMPLE.Com" を送信する
+            var mixedCaseRpId = "Shop.EXAMPLE.Com";
+            var expectedLowercaseRpId = "shop.example.com";
+
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = mixedCaseRpId,
+                B2BSubject = "test-b2b-subject",
+                DisplayName = "テスト管理者",
+                DeviceName = "E2E Test Device"
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync("test-b2b-subject"))
+                .ReturnsAsync(_testUser);
+
+            IWebAuthnChallengeService.ChallengeRequest? capturedChallengeRequest = null;
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "session-rp-normalize",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .Callback<IWebAuthnChallengeService.ChallengeRequest>(req => capturedChallengeRequest = req)
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert: 返却されるRP IDが小文字に正規化されていること
+            Assert.NotNull(result);
+            Assert.Equal(expectedLowercaseRpId, result.Options.Rp.Id);
+
+            // チャレンジに保存されるRP IDも小文字であること
+            Assert.NotNull(capturedChallengeRequest);
+            Assert.Equal(expectedLowercaseRpId, capturedChallengeRequest.RpId);
+        }
+
         #endregion
 
         #region VerifyRegistrationAsync Tests
@@ -640,6 +687,61 @@ namespace IdentityProvider.Test.Services
             Assert.NotNull(result);
             Assert.Equal("auth-session-123", result.SessionId);
             Assert.NotNull(result.Options);
+        }
+
+        [Fact]
+        public async Task CreateAuthenticationOptionsAsync_MixedCaseRpId_ShouldNormalizeToLowercase()
+        {
+            // Arrange: Azure Web Appsドメインのように混在ケースのRP IDを送信
+            // ブラウザの window.location.hostname は常に小文字を返すため、
+            // WebAuthn APIのRP ID検証で不一致になる不具合の再現テスト
+            //
+            // AllowedRpIdsには "shop.example.com" が登録されているが、
+            // リクエストでは "Shop.EXAMPLE.Com" を送信する
+            var mixedCaseRpId = "Shop.EXAMPLE.Com";
+            var expectedLowercaseRpId = "shop.example.com";
+
+            var credential = new B2BPasskeyCredential
+            {
+                B2BSubject = "test-b2b-subject",
+                CredentialId = Encoding.UTF8.GetBytes("credential-for-normalize"),
+                PublicKey = Encoding.UTF8.GetBytes("public-key"),
+                SignCount = 0,
+                DeviceName = "MacBook Pro",
+                AaGuid = Guid.NewGuid(),
+                Transports = new[] { "internal" }
+            };
+            _context.B2BPasskeyCredentials.Add(credential);
+            await _context.SaveChangesAsync();
+
+            var request = new IB2BPasskeyService.AuthenticationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = mixedCaseRpId,
+                B2BSubject = "test-b2b-subject"
+            };
+
+            IWebAuthnChallengeService.ChallengeRequest? capturedChallengeRequest = null;
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "auth-session-rp-normalize",
+                Challenge = "YXV0aC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .Callback<IWebAuthnChallengeService.ChallengeRequest>(req => capturedChallengeRequest = req)
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateAuthenticationOptionsAsync(request);
+
+            // Assert: 返却されるRP IDが小文字に正規化されていること
+            Assert.NotNull(result);
+            Assert.Equal(expectedLowercaseRpId, result.Options.RpId);
+
+            // チャレンジに保存されるRP IDも小文字であること
+            Assert.NotNull(capturedChallengeRequest);
+            Assert.Equal(expectedLowercaseRpId, capturedChallengeRequest.RpId);
         }
 
         #endregion
