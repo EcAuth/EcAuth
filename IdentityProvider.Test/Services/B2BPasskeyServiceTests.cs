@@ -599,6 +599,49 @@ namespace IdentityProvider.Test.Services
             Assert.Empty(result.Options.AllowCredentials!);
         }
 
+        [Fact]
+        public async Task CreateAuthenticationOptionsAsync_RpIdCaseInsensitive_ShouldReturnOptions()
+        {
+            // Arrange: AllowedRpIdsには "shop.example.com" が登録されているが、
+            // リクエストでは大文字を含む "Shop.Example.COM" を送信
+            var credential = new B2BPasskeyCredential
+            {
+                B2BSubject = "test-b2b-subject",
+                CredentialId = Encoding.UTF8.GetBytes("credential-id"),
+                PublicKey = Encoding.UTF8.GetBytes("public-key"),
+                SignCount = 0,
+                DeviceName = "MacBook Pro",
+                AaGuid = Guid.NewGuid(),
+                Transports = new[] { "internal" }
+            };
+            _context.B2BPasskeyCredentials.Add(credential);
+            await _context.SaveChangesAsync();
+
+            var request = new IB2BPasskeyService.AuthenticationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "Shop.Example.COM",
+                B2BSubject = "test-b2b-subject"
+            };
+
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "auth-session-123",
+                Challenge = "YXV0aC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateAuthenticationOptionsAsync(request);
+
+            // Assert: 大文字小文字が異なっても正常に処理される（RFC 4343）
+            Assert.NotNull(result);
+            Assert.Equal("auth-session-123", result.SessionId);
+            Assert.NotNull(result.Options);
+        }
+
         #endregion
 
         #region VerifyAuthenticationAsync Tests
