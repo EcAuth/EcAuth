@@ -243,6 +243,55 @@ namespace IdentityProvider.Test.Services
             Assert.Contains("RpId", ex.Message);
         }
 
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_RpIdCaseInsensitive_ShouldReturnOptions()
+        {
+            // Arrange: AllowedRpIdsには "shop.example.com" が登録されているが、
+            // リクエストでは大文字を含む "Shop.Example.COM" を送信
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "Shop.Example.COM",
+                B2BSubject = "test-b2b-subject",
+                DisplayName = "テスト管理者",
+                DeviceName = "MacBook Pro"
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync("test-b2b-subject"))
+                .ReturnsAsync(_testUser);
+
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "session-123",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(challengeResult);
+
+            var credentialCreateOptions = new CredentialCreateOptions
+            {
+                Challenge = Encoding.UTF8.GetBytes("test-challenge"),
+                Rp = new PublicKeyCredentialRpEntity("Shop.Example.COM", "テスト組織"),
+                User = new Fido2User
+                {
+                    Id = Encoding.UTF8.GetBytes("test-b2b-subject"),
+                    Name = "admin@example.com",
+                    DisplayName = "テスト管理者"
+                },
+                PubKeyCredParams = PubKeyCredParam.Defaults
+            };
+            _mockFido2.Setup(x => x.RequestNewCredential(It.IsAny<RequestNewCredentialParams>()))
+                .Returns(credentialCreateOptions);
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert: 大文字小文字が異なっても正常に処理される（RFC 4343）
+            Assert.NotNull(result);
+            Assert.Equal("session-123", result.SessionId);
+        }
+
         #endregion
 
         #region VerifyRegistrationAsync Tests
