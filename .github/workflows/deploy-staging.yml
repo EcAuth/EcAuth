@@ -156,7 +156,9 @@ jobs:
           DEV_B2B_ALLOWED_RP_IDS: ecauth-staging-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
           DEV_B2B_USER_SUBJECT: ${{ env.B2B_USER_SUBJECT }}
           DEV_B2B_REDIRECT_URI: ${{ env.B2B_REDIRECT_URI }}
-        run: yarn playwright test tests/specs/b2b_passkey_authentication.spec.ts --reporter=list
+        run: |
+          set -o pipefail
+          yarn playwright test tests/specs/b2b_passkey_authentication.spec.ts --reporter=list 2>&1 | tee playwright-output.txt
 
       - name: Upload E2E test results
         if: failure()
@@ -168,8 +170,18 @@ jobs:
       - name: B2B verification result
         if: always()
         run: |
+          echo "### B2B Passkey E2E Verification" >> $GITHUB_STEP_SUMMARY
           if [ "${{ steps.b2b_verify.outcome }}" = "success" ]; then
-            echo "✅ B2B passkey E2E verification passed"
+            echo "✅ B2B passkey E2E verification passed" | tee -a $GITHUB_STEP_SUMMARY
           else
-            echo "❌ B2B passkey E2E verification failed"
+            echo "❌ B2B passkey E2E verification failed" | tee -a $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f E2ETests/playwright-output.txt ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat E2ETests/playwright-output.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "--- Playwright Output ---"
+            cat E2ETests/playwright-output.txt
           fi
