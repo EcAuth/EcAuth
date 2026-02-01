@@ -37,24 +37,39 @@ namespace IdentityProvider.Migrations
                 nullable: true);
 
             // 既存データの変換: AccessToken (B2C)
+            // EXEC() で動的SQLにすることで、idempotent スクリプト生成時の
+            // バッチコンパイルエラーを回避（subject カラムの遅延名前解決）
+            // IF EXISTS で RemoveLegacySubjectColumns 適用済みの場合にも対応
             migrationBuilder.Sql(@"
-                UPDATE access_token
-                SET subject = ecauth_subject, subject_type = 0
-                WHERE ecauth_subject IS NOT NULL;
+                IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                           WHERE TABLE_NAME = 'access_token' AND COLUMN_NAME = 'ecauth_subject')
+                BEGIN
+                    EXEC(N'UPDATE access_token
+                    SET subject = ecauth_subject, subject_type = 0
+                    WHERE ecauth_subject IS NOT NULL;');
+                END
             ");
 
             // 既存データの変換: AuthorizationCode (B2C)
             migrationBuilder.Sql(@"
-                UPDATE authorization_code
-                SET subject_new = ecauth_subject, subject_type = 0
-                WHERE ecauth_subject IS NOT NULL;
+                IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                           WHERE TABLE_NAME = 'authorization_code' AND COLUMN_NAME = 'ecauth_subject')
+                BEGIN
+                    EXEC(N'UPDATE authorization_code
+                    SET subject_new = ecauth_subject, subject_type = 0
+                    WHERE ecauth_subject IS NOT NULL;');
+                END
             ");
 
             // 既存データの変換: AuthorizationCode (B2B)
             migrationBuilder.Sql(@"
-                UPDATE authorization_code
-                SET subject_new = b2b_subject, subject_type = 1
-                WHERE b2b_subject IS NOT NULL;
+                IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                           WHERE TABLE_NAME = 'authorization_code' AND COLUMN_NAME = 'b2b_subject')
+                BEGIN
+                    EXEC(N'UPDATE authorization_code
+                    SET subject_new = b2b_subject, subject_type = 1
+                    WHERE b2b_subject IS NOT NULL;');
+                END
             ");
         }
 
