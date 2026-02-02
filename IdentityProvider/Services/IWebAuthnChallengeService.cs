@@ -23,7 +23,7 @@ namespace IdentityProvider.Services
             public string UserType { get; set; } = string.Empty;
 
             /// <summary>
-            /// ユーザーSubject（B2Bでは必須、B2C認証でも必須、B2C登録ではnull許容）
+            /// ユーザーSubject（B2B登録・B2C認証では必須、B2B認証・B2C登録ではnull許容）
             /// </summary>
             public string? Subject { get; set; }
 

@@ -614,6 +614,54 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
+        public async Task CreateAuthenticationOptionsAsync_WithoutSubject_ShouldPassNullSubjectToChallengeService()
+        {
+            // Arrange: B2BSubject = null の場合、ChallengeService に Subject = null が渡されることを検証。
+            // この経路は Discoverable Credentials 対応のため重要。
+            // WebAuthnChallengeService の ValidateRequest が B2B 認証で null Subject を
+            // 拒否していた不具合のリグレッション防止。
+            var credential = new B2BPasskeyCredential
+            {
+                B2BSubject = "test-b2b-subject",
+                CredentialId = Encoding.UTF8.GetBytes("credential-for-null-subject"),
+                PublicKey = Encoding.UTF8.GetBytes("public-key"),
+                SignCount = 0,
+                AaGuid = Guid.NewGuid()
+            };
+            _context.B2BPasskeyCredentials.Add(credential);
+            await _context.SaveChangesAsync();
+
+            var request = new IB2BPasskeyService.AuthenticationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = null
+            };
+
+            IWebAuthnChallengeService.ChallengeRequest? capturedRequest = null;
+            var challengeBytes = Encoding.UTF8.GetBytes("auth-challenge");
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "null-subject-session",
+                Challenge = WebEncoders.Base64UrlEncode(challengeBytes),
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .Callback<IWebAuthnChallengeService.ChallengeRequest>(req => capturedRequest = req)
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateAuthenticationOptionsAsync(request);
+
+            // Assert: ChallengeService に渡された Subject が null であること
+            Assert.NotNull(capturedRequest);
+            Assert.Null(capturedRequest.Subject);
+            Assert.Equal("authentication", capturedRequest.Type);
+            Assert.Equal("b2b", capturedRequest.UserType);
+            Assert.Equal("shop.example.com", capturedRequest.RpId);
+        }
+
+        [Fact]
         public async Task CreateAuthenticationOptionsAsync_NoCredentials_ShouldReturnEmptyAllowCredentials()
         {
             // Arrange
@@ -899,6 +947,91 @@ namespace IdentityProvider.Test.Services
             // Assert
             Assert.False(result.Success);
             Assert.Contains("Credential", result.ErrorMessage);
+        }
+
+        [Fact]
+        public async Task VerifyAuthenticationAsync_NullSubjectChallenge_ShouldIdentifyUserByCredentialId()
+        {
+            // Arrange: Discoverable Credentials フロー
+            // authenticate/options で B2BSubject を指定しなかった場合、
+            // challenge.Subject は null になる。
+            // VerifyAuthenticationAsync は CredentialId からユーザーを特定する。
+            var credentialIdBytes = Encoding.UTF8.GetBytes("discoverable-credential-id");
+            var credential = new B2BPasskeyCredential
+            {
+                B2BSubject = "test-b2b-subject",
+                CredentialId = credentialIdBytes,
+                PublicKey = Encoding.UTF8.GetBytes("public-key"),
+                SignCount = 3,
+                DeviceName = "MacBook Pro",
+                AaGuid = Guid.NewGuid()
+            };
+            _context.B2BPasskeyCredentials.Add(credential);
+            await _context.SaveChangesAsync();
+
+            var challenge = new WebAuthnChallenge
+            {
+                SessionId = "discoverable-session",
+                Challenge = "ZGlzY292ZXJhYmxl", // Base64URL of "discoverable"
+                Type = "authentication",
+                UserType = "b2b",
+                Subject = null, // Discoverable Credentials: Subject なし
+                RpId = "shop.example.com",
+                ClientId = 1,
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+
+            _mockChallengeService.Setup(x => x.GetChallengeBySessionIdAsync("discoverable-session"))
+                .ReturnsAsync(challenge);
+
+            var assertionResponse = new AuthenticatorAssertionRawResponse
+            {
+                Id = WebEncoders.Base64UrlEncode(credentialIdBytes),
+                RawId = credentialIdBytes,
+                Type = PublicKeyCredentialType.PublicKey,
+                Response = new AuthenticatorAssertionRawResponse.AssertionResponse
+                {
+                    AuthenticatorData = Encoding.UTF8.GetBytes("auth-data"),
+                    ClientDataJson = Encoding.UTF8.GetBytes("client-data"),
+                    Signature = Encoding.UTF8.GetBytes("signature")
+                }
+            };
+
+            var request = new IB2BPasskeyService.AuthenticationVerifyRequest
+            {
+                SessionId = "discoverable-session",
+                ClientId = "test-client-id",
+                AssertionResponse = assertionResponse
+            };
+
+            var verifyResult = new VerifyAssertionResult
+            {
+                SignCount = 4
+            };
+
+            _mockFido2.Setup(x => x.MakeAssertionAsync(
+                It.IsAny<MakeAssertionParams>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(verifyResult);
+
+            _mockChallengeService.Setup(x => x.ConsumeChallengeAsync("discoverable-session"))
+                .ReturnsAsync(true);
+
+            // Act
+            var result = await _service.VerifyAuthenticationAsync(request);
+
+            // Assert: challenge.Subject が null でも CredentialId からユーザーを特定できる
+            Assert.NotNull(result);
+            Assert.True(result.Success);
+            Assert.Equal("test-b2b-subject", result.B2BSubject);
+            Assert.NotNull(result.CredentialId);
+
+            // SignCount が更新されていること
+            var updated = await _context.B2BPasskeyCredentials
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.CredentialId == credentialIdBytes);
+            Assert.NotNull(updated);
+            Assert.Equal(4u, updated.SignCount);
         }
 
         [Fact]
