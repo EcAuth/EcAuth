@@ -189,11 +189,12 @@ namespace IdentityProvider.Services
             }
 
             // Subject検証（条件付き）
-            // B2Bでは登録・認証ともにSubject必須
+            // B2B登録ではSubject必須（パスキーを紐付けるユーザーが必要）
+            // B2B認証ではSubject省略可（Discoverable Credentials対応）
             // B2C認証ではSubject必須、B2C登録ではnull許容
-            if (request.UserType == "b2b" && string.IsNullOrWhiteSpace(request.Subject))
+            if (request.UserType == "b2b" && request.Type == "registration" && string.IsNullOrWhiteSpace(request.Subject))
             {
-                throw new ArgumentException("B2Bの場合、Subject は必須です。", nameof(request));
+                throw new ArgumentException("B2B登録の場合、Subject は必須です。", nameof(request));
             }
 
             if (request.UserType == "b2c" && request.Type == "authentication" && string.IsNullOrWhiteSpace(request.Subject))

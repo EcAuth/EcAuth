@@ -105,14 +105,14 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
-        public async Task GenerateChallengeAsync_B2BWithoutSubject_ShouldThrowArgumentException()
+        public async Task GenerateChallengeAsync_B2BRegistrationWithoutSubject_ShouldThrowArgumentException()
         {
             // Arrange
             var request = new IWebAuthnChallengeService.ChallengeRequest
             {
                 Type = "registration",
                 UserType = "b2b",
-                Subject = null, // B2Bでは必須
+                Subject = null, // B2B登録では必須
                 RpId = "shop.example.com",
                 ClientId = 1
             };
@@ -121,6 +121,28 @@ namespace IdentityProvider.Test.Services
             var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
                 _service.GenerateChallengeAsync(request));
             Assert.Contains("Subject", ex.Message);
+        }
+
+        [Fact]
+        public async Task GenerateChallengeAsync_B2BAuthenticationWithoutSubject_ShouldCreateChallenge()
+        {
+            // Arrange - B2B認証ではSubject省略可（Discoverable Credentials対応）
+            var request = new IWebAuthnChallengeService.ChallengeRequest
+            {
+                Type = "authentication",
+                UserType = "b2b",
+                Subject = null,
+                RpId = "shop.example.com",
+                ClientId = 1
+            };
+
+            // Act
+            var result = await _service.GenerateChallengeAsync(request);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.NotEmpty(result.SessionId);
+            Assert.NotEmpty(result.Challenge);
         }
 
         [Fact]
