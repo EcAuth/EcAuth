@@ -119,6 +119,11 @@ namespace IdentityProvider.Models
             modelBuilder.Entity<AccessToken>()
                 .HasIndex(at => at.ExpiresAt);
 
+            // Client.ClientId のグローバルユニーク制約
+            modelBuilder.Entity<Client>()
+                .HasIndex(c => c.ClientId)
+                .IsUnique();
+
             modelBuilder.Entity<ExternalIdpToken>()
                 .HasIndex(eit => new { eit.EcAuthSubject, eit.ExternalProvider })
                 .IsUnique();

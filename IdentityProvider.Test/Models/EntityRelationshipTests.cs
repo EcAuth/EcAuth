@@ -179,6 +179,37 @@ namespace IdentityProvider.Test.Models
             Assert.Contains(savedUser.ExternalIdpMappings, m => m.ExternalProvider == "line");
         }
 
+        [Fact]
+        public void Client_ClientId_ShouldHaveUniqueIndex()
+        {
+            var entityType = _context.Model.FindEntityType(typeof(Client));
+            var index = entityType?.GetIndexes()
+                .FirstOrDefault(i => i.Properties.Any(p => p.Name == "ClientId"));
+
+            Assert.NotNull(index);
+            Assert.True(index.IsUnique);
+        }
+
+        [Fact]
+        public void Client_ClientId_ShouldHaveMaxLength512()
+        {
+            var entityType = _context.Model.FindEntityType(typeof(Client));
+            var property = entityType?.FindProperty("ClientId");
+
+            Assert.NotNull(property);
+            Assert.Equal(512, property.GetMaxLength());
+        }
+
+        [Fact]
+        public void Client_ClientId_ShouldBeNonUnicode()
+        {
+            var entityType = _context.Model.FindEntityType(typeof(Client));
+            var property = entityType?.FindProperty("ClientId");
+
+            Assert.NotNull(property);
+            Assert.False(property.IsUnicode());
+        }
+
         public void Dispose()
         {
             _context.Dispose();

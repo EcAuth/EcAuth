@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 
 namespace IdentityProvider.Models
 {
@@ -12,6 +13,8 @@ namespace IdentityProvider.Models
         [Column("id")]
         public int Id { get; set; }
         [Column("client_id")]
+        [MaxLength(512)]
+        [Unicode(false)]
         public string ClientId { get; set; }
         [Column("client_secret")]
         public string ClientSecret { get; set; }
