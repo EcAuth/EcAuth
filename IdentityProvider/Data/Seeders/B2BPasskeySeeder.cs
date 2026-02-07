@@ -97,20 +97,33 @@ public class B2BPasskeySeeder : IDbSeeder
             return Task.FromResult(false);
         }
 
+        // カンマ区切りの文字列を分割し、空白をトリムして空文字を除外
+        var rpIdsToAdd = b2bAllowedRpIds
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
         var currentRpIds = client.AllowedRpIds;
-        if (currentRpIds.Contains(b2bAllowedRpIds, StringComparer.OrdinalIgnoreCase))
+        var hasChanges = false;
+
+        foreach (var rpId in rpIdsToAdd)
         {
-            return Task.FromResult(false);
+            if (currentRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            currentRpIds.Add(rpId);
+            logger.LogInformation("Added {RpId} to AllowedRpIds for client {ClientId}",
+                rpId, clientId);
+            hasChanges = true;
         }
 
-        currentRpIds.Add(b2bAllowedRpIds);
-        client.AllowedRpIds = currentRpIds;
-        client.UpdatedAt = DateTimeOffset.UtcNow;
+        if (hasChanges)
+        {
+            client.AllowedRpIds = currentRpIds;
+            client.UpdatedAt = DateTimeOffset.UtcNow;
+        }
 
-        logger.LogInformation("Added {RpId} to AllowedRpIds for client {ClientId}",
-            b2bAllowedRpIds, clientId);
-
-        return Task.FromResult(true);
+        return Task.FromResult(hasChanges);
     }
 
     private static async Task<bool> SeedRedirectUriAsync(
