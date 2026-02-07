@@ -123,6 +123,103 @@ namespace IdentityProvider.Test.Data.Seeders
             Assert.Single(updatedClient.AllowedRpIds, r => r == "localhost");
         }
 
+        [Fact]
+        public async Task SeedAsync_ShouldAddMultipleAllowedRpIds_WhenCommaSeparated()
+        {
+            // Arrange
+            var configuration = CreateDevConfiguration(new Dictionary<string, string?>
+            {
+                ["DEV_B2B_USER_SUBJECT"] = "test-subject-uuid",
+                ["DEV_B2B_ALLOWED_RP_IDS"] = "staging-domain.azurewebsites.net,localhost"
+            });
+
+            // Act
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert
+            var updatedClient = await _context.Clients
+                .IgnoreQueryFilters()
+                .FirstAsync(c => c.ClientId == TestClientId);
+
+            Assert.Contains("staging-domain.azurewebsites.net", updatedClient.AllowedRpIds);
+            Assert.Contains("localhost", updatedClient.AllowedRpIds);
+            Assert.Equal(2, updatedClient.AllowedRpIds.Count);
+        }
+
+        [Fact]
+        public async Task SeedAsync_ShouldTrimWhitespace_WhenCommaSeparatedAllowedRpIds()
+        {
+            // Arrange
+            var configuration = CreateDevConfiguration(new Dictionary<string, string?>
+            {
+                ["DEV_B2B_USER_SUBJECT"] = "test-subject-uuid",
+                ["DEV_B2B_ALLOWED_RP_IDS"] = " staging-domain.azurewebsites.net , localhost "
+            });
+
+            // Act
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert
+            var updatedClient = await _context.Clients
+                .IgnoreQueryFilters()
+                .FirstAsync(c => c.ClientId == TestClientId);
+
+            Assert.Contains("staging-domain.azurewebsites.net", updatedClient.AllowedRpIds);
+            Assert.Contains("localhost", updatedClient.AllowedRpIds);
+            Assert.Equal(2, updatedClient.AllowedRpIds.Count);
+        }
+
+        [Fact]
+        public async Task SeedAsync_ShouldAddOnlyNewRpIds_WhenSomeAlreadyExist()
+        {
+            // Arrange
+            _client.AllowedRpIds = new List<string> { "staging-domain.azurewebsites.net" };
+            await _context.SaveChangesAsync();
+
+            var configuration = CreateDevConfiguration(new Dictionary<string, string?>
+            {
+                ["DEV_B2B_USER_SUBJECT"] = "test-subject-uuid",
+                ["DEV_B2B_ALLOWED_RP_IDS"] = "staging-domain.azurewebsites.net,localhost"
+            });
+
+            // Act
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert
+            var updatedClient = await _context.Clients
+                .IgnoreQueryFilters()
+                .FirstAsync(c => c.ClientId == TestClientId);
+
+            Assert.Contains("staging-domain.azurewebsites.net", updatedClient.AllowedRpIds);
+            Assert.Contains("localhost", updatedClient.AllowedRpIds);
+            Assert.Equal(2, updatedClient.AllowedRpIds.Count);
+        }
+
+        [Fact]
+        public async Task SeedAsync_CalledMultipleTimes_ShouldBeIdempotent_WithCommaSeparatedRpIds()
+        {
+            // Arrange
+            var configuration = CreateDevConfiguration(new Dictionary<string, string?>
+            {
+                ["DEV_B2B_USER_SUBJECT"] = "idempotent-subject-2",
+                ["DEV_B2B_USER_EXTERNAL_ID"] = "idempotent-admin-2",
+                ["DEV_B2B_ALLOWED_RP_IDS"] = "staging-domain.azurewebsites.net,localhost"
+            });
+
+            // Act - 3回実行
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert
+            var client = await _context.Clients
+                .IgnoreQueryFilters()
+                .FirstAsync(c => c.ClientId == TestClientId);
+            Assert.Equal(2, client.AllowedRpIds.Count);
+            Assert.Contains("staging-domain.azurewebsites.net", client.AllowedRpIds);
+            Assert.Contains("localhost", client.AllowedRpIds);
+        }
+
         #endregion
 
         #region RedirectUri Tests
