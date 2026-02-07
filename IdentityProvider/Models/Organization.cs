@@ -16,6 +16,8 @@ namespace IdentityProvider.Models
         public string Name { get; set; }
         [Column("tenant_name")]
         public string? TenantName { get; set; }
+        [Column("is_sandbox")]
+        public bool IsSandbox { get; set; } = false;
         [Column("created_at")]
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
         [Column("updated_at")]
