@@ -46,6 +46,10 @@ namespace IdentityProvider.Services
             public bool IsValid { get; set; }
             public string? Subject { get; set; }
             public SubjectType? SubjectType { get; set; }
+            public string? ClientId { get; set; }
+            public int? OrganizationId { get; set; }
+            public string? Jti { get; set; }
+            public string? Scopes { get; set; }
         }
 
         /// <summary>

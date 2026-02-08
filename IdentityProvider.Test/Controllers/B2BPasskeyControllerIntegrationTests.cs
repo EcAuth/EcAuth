@@ -136,6 +136,24 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.RedirectUris.Add(redirectUri);
 
+            // RSA鍵ペアを追加（JWT ベースの AccessToken 生成に必要）
+            string publicKey, privateKey;
+            using (var rsa = System.Security.Cryptography.RSA.Create(2048))
+            {
+                publicKey = Convert.ToBase64String(rsa.ExportRSAPublicKey());
+                privateKey = Convert.ToBase64String(rsa.ExportRSAPrivateKey());
+            }
+
+            var rsaKeyPair = new RsaKeyPair
+            {
+                Id = 1,
+                ClientId = _client.Id,
+                PublicKey = publicKey,
+                PrivateKey = privateKey,
+                Client = _client
+            };
+            _context.RsaKeyPairs.Add(rsaKeyPair);
+
             _context.SaveChanges();
         }
 
@@ -700,10 +718,15 @@ namespace IdentityProvider.Test.Controllers
             // Assert
             Assert.NotNull(accessToken);
 
-            // DBに保存されたアクセストークンを取得
+            // JWT から jti を取得
+            var handler = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler();
+            var jwtToken = handler.ReadJwtToken(accessToken);
+            var jti = jwtToken.Claims.FirstOrDefault(c => c.Type == System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti)?.Value;
+
+            // DBに保存されたアクセストークンを取得（Token カラムには jti が保存される）
             var savedToken = await _context.AccessTokens
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(t => t.Token == accessToken);
+                .FirstOrDefaultAsync(t => t.Token == jti);
 
             Assert.NotNull(savedToken);
             // SubjectType が B2B に設定されていることを確認

@@ -1,5 +1,4 @@
 using IdentityProvider.Models;
-using IdpUtilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
@@ -135,21 +134,73 @@ namespace IdentityProvider.Services
             if (string.IsNullOrWhiteSpace(subject))
                 throw new ArgumentException("Subject cannot be null or empty.", nameof(request.User));
 
-            // アクセストークンは簡単なランダム文字列として生成
-            var accessToken = RandomUtil.GenerateRandomBytes(32);
-            var expiresAt = DateTime.UtcNow.AddHours(1); // 1時間後に期限切れ
+            // RSA鍵ペアを取得
+            var rsaKeyPair = await _context.RsaKeyPairs
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(k => k.ClientId == request.Client.Id);
 
-            // アクセストークンをデータベースに保存
+            if (rsaKeyPair == null)
+                throw new InvalidOperationException($"RSA key pair not found for client {request.Client.Id}");
+
+            var jti = Guid.NewGuid().ToString();
+            var now = DateTime.UtcNow;
+            var expiresAt = now.AddHours(1);
+            var scopes = request.RequestedScopes != null ? string.Join(" ", request.RequestedScopes) : null;
+
+            // JWT を生成
+            string accessTokenJwt;
+            using (var rsa = RSA.Create())
+            {
+                rsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPair.PrivateKey), out _);
+
+                var signingCredentials = new SigningCredentials(new RsaSecurityKey(rsa), SecurityAlgorithms.RsaSha256)
+                {
+                    CryptoProviderFactory = new CryptoProviderFactory { CacheSignatureProviders = false }
+                };
+
+                var subjectTypeString = request.SubjectType == SubjectType.B2B ? "b2b" : "b2c";
+
+                var claims = new List<Claim>
+                {
+                    new(JwtRegisteredClaimNames.Sub, subject),
+                    new("sub_type", subjectTypeString),
+                    new("org_id", request.Client.OrganizationId.ToString(), ClaimValueTypes.Integer32),
+                    new("client_id", request.Client.ClientId),
+                    new(JwtRegisteredClaimNames.Iss, GetIssuer()),
+                    new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                    new(JwtRegisteredClaimNames.Exp, new DateTimeOffset(expiresAt).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                    new(JwtRegisteredClaimNames.Jti, jti)
+                };
+
+                if (!string.IsNullOrEmpty(scopes))
+                {
+                    claims.Add(new Claim("scope", scopes));
+                }
+
+                var tokenDescriptor = new SecurityTokenDescriptor
+                {
+                    Subject = new ClaimsIdentity(claims),
+                    Expires = expiresAt,
+                    NotBefore = now,
+                    IssuedAt = now,
+                    SigningCredentials = signingCredentials
+                };
+
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var token = tokenHandler.CreateToken(tokenDescriptor);
+                accessTokenJwt = tokenHandler.WriteToken(token);
+            }
+
+            // メタデータをデータベースに保存（Token カラムには jti のみ）
             var accessTokenEntity = new AccessToken
             {
-                Token = accessToken,
+                Token = jti,
                 ExpiresAt = expiresAt,
                 ClientId = request.Client.Id,
-                // 統一Subject/SubjectType を設定
                 Subject = subject,
                 SubjectType = request.SubjectType,
-                CreatedAt = DateTime.UtcNow,
-                Scopes = request.RequestedScopes != null ? string.Join(" ", request.RequestedScopes) : null
+                CreatedAt = now,
+                Scopes = scopes
             };
 
             _context.AccessTokens.Add(accessTokenEntity);
@@ -158,7 +209,7 @@ namespace IdentityProvider.Services
             _logger.LogInformation("Access token generated for subject {Subject} (type: {SubjectType}) and client {ClientId}",
                 subject, request.SubjectType, request.Client.Id);
 
-            return accessToken;
+            return accessTokenJwt;
         }
 
         public async Task<string?> ValidateTokenAsync(string token, int clientId)
@@ -242,29 +293,126 @@ namespace IdentityProvider.Services
         {
             try
             {
-                var accessToken = await _context.AccessTokens
-                    .FirstOrDefaultAsync(at => at.Token == token);
-
-                if (accessToken == null)
+                // 1. JWT をデコードして client_id を取得
+                var tokenHandler = new JwtSecurityTokenHandler();
+                JwtSecurityToken jwtToken;
+                try
                 {
-                    _logger.LogWarning("Access token not found: {Token}", token.Substring(0, Math.Min(8, token.Length)) + "...");
+                    jwtToken = tokenHandler.ReadJwtToken(token);
+                }
+                catch (Exception)
+                {
+                    _logger.LogWarning("Access token is not a valid JWT");
                     return new ITokenService.AccessTokenValidationResult { IsValid = false };
                 }
 
-                if (accessToken.IsExpired)
+                var clientIdClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == "client_id")?.Value;
+                if (string.IsNullOrEmpty(clientIdClaim))
                 {
-                    _logger.LogWarning("Access token expired: {Token}", token.Substring(0, Math.Min(8, token.Length)) + "...");
+                    _logger.LogWarning("Access token does not contain client_id claim");
                     return new ITokenService.AccessTokenValidationResult { IsValid = false };
                 }
+
+                // 2. Client を検索
+                var client = await _context.Clients
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(c => c.ClientId == clientIdClaim);
+
+                if (client == null)
+                {
+                    _logger.LogWarning("Client not found for client_id: {ClientId}", clientIdClaim);
+                    return new ITokenService.AccessTokenValidationResult { IsValid = false };
+                }
+
+                // 3. RSA 公開鍵を取得
+                var rsaKeyPair = await _context.RsaKeyPairs
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(k => k.ClientId == client.Id);
+
+                if (rsaKeyPair == null)
+                {
+                    _logger.LogWarning("RSA key pair not found for client {ClientId}", client.Id);
+                    return new ITokenService.AccessTokenValidationResult { IsValid = false };
+                }
+
+                // 4. JWT 署名検証 + exp チェック
+                using (var rsa = RSA.Create())
+                {
+                    try
+                    {
+                        rsa.ImportRSAPublicKey(Convert.FromBase64String(rsaKeyPair.PublicKey), out _);
+                    }
+                    catch (Exception)
+                    {
+                        try
+                        {
+                            rsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPair.PrivateKey), out _);
+                        }
+                        catch (Exception ex2)
+                        {
+                            _logger.LogWarning(ex2, "Failed to import RSA keys for client {ClientId}", client.Id);
+                            return new ITokenService.AccessTokenValidationResult { IsValid = false };
+                        }
+                    }
+
+                    var validationParameters = new TokenValidationParameters
+                    {
+                        ValidateIssuerSigningKey = true,
+                        IssuerSigningKey = new RsaSecurityKey(rsa),
+                        ValidateIssuer = true,
+                        ValidIssuer = GetIssuer(),
+                        ValidateAudience = false,
+                        ValidateLifetime = true,
+                        ClockSkew = TimeSpan.FromMinutes(5),
+                        CryptoProviderFactory = new CryptoProviderFactory { CacheSignatureProviders = false }
+                    };
+
+                    try
+                    {
+                        tokenHandler.ValidateToken(token, validationParameters, out SecurityToken validatedToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Access token JWT validation failed");
+                        return new ITokenService.AccessTokenValidationResult { IsValid = false };
+                    }
+                }
+
+                // 5. jti 失効チェック
+                var jti = jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Jti)?.Value;
+                if (!string.IsNullOrEmpty(jti))
+                {
+                    var isRevoked = await _context.AccessTokens
+                        .IgnoreQueryFilters()
+                        .AnyAsync(at => at.Token == jti && at.IsRevoked);
+
+                    if (isRevoked)
+                    {
+                        _logger.LogWarning("Access token has been revoked: jti={Jti}", jti);
+                        return new ITokenService.AccessTokenValidationResult { IsValid = false };
+                    }
+                }
+
+                // 6. Claims から情報を抽出
+                var subject = jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Sub)?.Value;
+                var subTypeClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == "sub_type")?.Value;
+                var scopeClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == "scope")?.Value;
+                var orgIdClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == "org_id")?.Value;
+
+                SubjectType subjectType = subTypeClaim == "b2b" ? SubjectType.B2B : SubjectType.B2C;
 
                 _logger.LogDebug("Access token validated successfully for subject {Subject} (type: {SubjectType})",
-                    accessToken.Subject, accessToken.SubjectType);
+                    subject, subjectType);
 
                 return new ITokenService.AccessTokenValidationResult
                 {
                     IsValid = true,
-                    Subject = accessToken.Subject,
-                    SubjectType = accessToken.SubjectType
+                    Subject = subject,
+                    SubjectType = subjectType,
+                    ClientId = clientIdClaim,
+                    OrganizationId = int.TryParse(orgIdClaim, out var orgId) ? orgId : null,
+                    Jti = jti,
+                    Scopes = scopeClaim
                 };
             }
             catch (Exception ex)
@@ -278,21 +426,44 @@ namespace IdentityProvider.Services
         {
             try
             {
-                var accessToken = await _context.AccessTokens
-                    .Include(at => at.Client)
-                        .ThenInclude(c => c.Organization)
-                    .FirstOrDefaultAsync(at => at.Token == token);
-
-                if (accessToken == null)
+                // JWT をデコードして jti を取得
+                string jti;
+                try
                 {
-                    _logger.LogWarning("Access token not found for revocation: {Token}", token.Substring(0, Math.Min(8, token.Length)) + "...");
+                    var tokenHandler = new JwtSecurityTokenHandler();
+                    var jwtToken = tokenHandler.ReadJwtToken(token);
+                    jti = jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Jti)?.Value
+                        ?? string.Empty;
+                }
+                catch (Exception)
+                {
+                    _logger.LogWarning("Failed to decode JWT for revocation");
                     return false;
                 }
 
-                _context.AccessTokens.Remove(accessToken);
+                if (string.IsNullOrEmpty(jti))
+                {
+                    _logger.LogWarning("JWT does not contain jti claim for revocation");
+                    return false;
+                }
+
+                // jti で AccessToken レコードを検索
+                var accessToken = await _context.AccessTokens
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(at => at.Token == jti);
+
+                if (accessToken == null)
+                {
+                    _logger.LogWarning("Access token not found for revocation: jti={Jti}", jti);
+                    return false;
+                }
+
+                // 論理削除（IsRevoked フラグを設定）
+                accessToken.IsRevoked = true;
+                accessToken.RevokedAt = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
 
-                _logger.LogInformation("Access token revoked successfully: {Token}", token.Substring(0, Math.Min(8, token.Length)) + "...");
+                _logger.LogInformation("Access token revoked successfully: jti={Jti}", jti);
                 return true;
             }
             catch (Exception ex)
