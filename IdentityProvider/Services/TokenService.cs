@@ -236,12 +236,15 @@ namespace IdentityProvider.Services
                         // 検証では公開鍵を使用
                         rsa.ImportRSAPublicKey(Convert.FromBase64String(rsaKeyPair.PublicKey), out _);
                     }
-                    catch (Exception ex)
+                    catch (Exception)
                     {
-                        // 公開鍵のインポートに失敗した場合、プライベートキーから公開鍵を取得
+                        // 公開鍵のインポートに失敗した場合、秘密鍵から公開コンポーネントのみを抽出
                         try
                         {
-                            rsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPair.PrivateKey), out _);
+                            using var privateRsa = RSA.Create();
+                            privateRsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPair.PrivateKey), out _);
+                            var publicParameters = privateRsa.ExportParameters(false);
+                            rsa.ImportParameters(publicParameters);
                         }
                         catch (Exception ex2)
                         {
@@ -344,9 +347,13 @@ namespace IdentityProvider.Services
                     }
                     catch (Exception)
                     {
+                        // 公開鍵のインポートに失敗した場合、秘密鍵から公開コンポーネントのみを抽出
                         try
                         {
-                            rsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPair.PrivateKey), out _);
+                            using var privateRsa = RSA.Create();
+                            privateRsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPair.PrivateKey), out _);
+                            var publicParameters = privateRsa.ExportParameters(false);
+                            rsa.ImportParameters(publicParameters);
                         }
                         catch (Exception ex2)
                         {
