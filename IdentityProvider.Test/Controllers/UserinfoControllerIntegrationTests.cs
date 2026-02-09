@@ -4,8 +4,13 @@ using IdentityProvider.Services;
 using IdentityProvider.Test.TestHelpers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.Tokens;
 using Moq;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using Xunit;
 
 namespace IdentityProvider.Test.Controllers
@@ -29,7 +34,12 @@ namespace IdentityProvider.Test.Controllers
             var mockLogger = new Mock<ILogger<TokenService>>();
             var mockUserLogger = new Mock<ILogger<UserService>>();
 
-            _tokenService = new TokenService(_context, mockLogger.Object);
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Scheme = "https";
+            httpContext.Request.Host = new HostString("test.ec-cube.io");
+            var httpContextAccessor = new HttpContextAccessor { HttpContext = httpContext };
+
+            _tokenService = new TokenService(_context, mockLogger.Object, httpContextAccessor);
             _userService = new UserService(_context, mockUserLogger.Object);
             _mockB2BUserService = new Mock<IB2BUserService>();
 
@@ -52,24 +62,17 @@ namespace IdentityProvider.Test.Controllers
         public async Task IntegrationTest_FullWorkflow_ValidAccessToken_ReturnsUserInfo()
         {
             // Arrange
-            await SeedTestDataAsync();
+            var (client, rsaKeyPair) = await SeedTestDataAsync();
 
-            var accessToken = "integration-test-token";
-            var subject = "integration-test-subject";
-
-            // アクセストークンをデータベースに直接挿入
-            var tokenEntity = new AccessToken
+            var user = await _context.EcAuthUsers.FirstAsync(u => u.Subject == "integration-test-subject");
+            var request = new ITokenService.TokenRequest
             {
-                Token = accessToken,
-                ExpiresAt = DateTime.UtcNow.AddHours(1),
-                ClientId = 1,
-                Subject = subject,
-                SubjectType = SubjectType.B2C,
-                CreatedAt = DateTime.UtcNow,
-                Scopes = "openid profile"
+                User = user,
+                Client = client,
+                RequestedScopes = new[] { "openid", "profile" },
+                SubjectType = SubjectType.B2C
             };
-            _context.AccessTokens.Add(tokenEntity);
-            await _context.SaveChangesAsync();
+            var accessToken = await _tokenService.GenerateAccessTokenAsync(request);
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
@@ -82,33 +85,69 @@ namespace IdentityProvider.Test.Controllers
 
             Assert.NotNull(response);
             var subProperty = response.GetType().GetProperty("sub")?.GetValue(response);
-            Assert.Equal(subject, subProperty);
+            Assert.Equal("integration-test-subject", subProperty);
         }
 
         [Fact]
         public async Task IntegrationTest_ExpiredAccessToken_ReturnsUnauthorized()
         {
             // Arrange
-            await SeedTestDataAsync();
+            var (client, rsaKeyPair) = await SeedTestDataAsync();
 
-            var accessToken = "expired-test-token";
-            var subject = "integration-test-subject";
+            // 期限切れの JWT を手動生成
+            var jti = Guid.NewGuid().ToString();
+            var now = DateTime.UtcNow;
 
-            // 期限切れのアクセストークンをデータベースに直接挿入
-            var tokenEntity = new AccessToken
+            string expiredJwt;
+            using (var rsa = RSA.Create())
             {
-                Token = accessToken,
-                ExpiresAt = DateTime.UtcNow.AddHours(-1), // 期限切れ
-                ClientId = 1,
-                                Subject = subject,
+                rsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPair.PrivateKey), out _);
+
+                var signingCredentials = new SigningCredentials(new RsaSecurityKey(rsa), SecurityAlgorithms.RsaSha256)
+                {
+                    CryptoProviderFactory = new CryptoProviderFactory { CacheSignatureProviders = false }
+                };
+
+                var claims = new List<Claim>
+                {
+                    new(JwtRegisteredClaimNames.Sub, "integration-test-subject"),
+                    new("sub_type", "b2c"),
+                    new("org_id", "1", ClaimValueTypes.Integer32),
+                    new("client_id", client.ClientId),
+                    new(JwtRegisteredClaimNames.Iss, "https://test.ec-cube.io"),
+                    new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now.AddHours(-2)).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                    new(JwtRegisteredClaimNames.Exp, new DateTimeOffset(now.AddHours(-1)).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                    new(JwtRegisteredClaimNames.Jti, jti)
+                };
+
+                var tokenDescriptor = new SecurityTokenDescriptor
+                {
+                    Subject = new ClaimsIdentity(claims),
+                    Expires = now.AddHours(-1),
+                    NotBefore = now.AddHours(-2),
+                    IssuedAt = now.AddHours(-2),
+                    SigningCredentials = signingCredentials
+                };
+
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var token = tokenHandler.CreateToken(tokenDescriptor);
+                expiredJwt = tokenHandler.WriteToken(token);
+            }
+
+            // DB にメタデータを保存
+            _context.AccessTokens.Add(new AccessToken
+            {
+                Token = jti,
+                ExpiresAt = now.AddHours(-1),
+                ClientId = client.Id,
+                Subject = "integration-test-subject",
                 SubjectType = SubjectType.B2C,
-                CreatedAt = DateTime.UtcNow.AddHours(-2),
+                CreatedAt = now.AddHours(-2),
                 Scopes = "openid profile"
-            };
-            _context.AccessTokens.Add(tokenEntity);
+            });
             await _context.SaveChangesAsync();
 
-            _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
+            _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {expiredJwt}";
 
             // Act
             var result = await _controller.Get();
@@ -126,27 +165,20 @@ namespace IdentityProvider.Test.Controllers
         public async Task IntegrationTest_MultiTenant_CorrectUserForTenant()
         {
             // Arrange
-            await SeedMultiTenantDataAsync();
-
-            var accessToken = "tenant1-token";
-            var subject = "tenant1-user-subject";
-
-            // テナント1のユーザー用アクセストークン
-            var tokenEntity = new AccessToken
-            {
-                Token = accessToken,
-                ExpiresAt = DateTime.UtcNow.AddHours(1),
-                ClientId = 1, // Tenant1のクライアント
-                                Subject = subject,
-                SubjectType = SubjectType.B2C,
-                CreatedAt = DateTime.UtcNow,
-                Scopes = "openid profile"
-            };
-            _context.AccessTokens.Add(tokenEntity);
-            await _context.SaveChangesAsync();
+            var (client1, rsaKeyPair1) = await SeedMultiTenantDataAsync();
 
             // テナント1に切り替え
             _mockTenantService.SetTenant("tenant1");
+
+            var user = await _context.EcAuthUsers.FirstAsync(u => u.Subject == "tenant1-user-subject");
+            var request = new ITokenService.TokenRequest
+            {
+                User = user,
+                Client = client1,
+                RequestedScopes = new[] { "openid", "profile" },
+                SubjectType = SubjectType.B2C
+            };
+            var accessToken = await _tokenService.GenerateAccessTokenAsync(request);
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
@@ -159,31 +191,26 @@ namespace IdentityProvider.Test.Controllers
 
             Assert.NotNull(response);
             var subProperty = response.GetType().GetProperty("sub")?.GetValue(response);
-            Assert.Equal(subject, subProperty);
+            Assert.Equal("tenant1-user-subject", subProperty);
         }
 
         [Fact]
         public async Task IntegrationTest_CrossTenantAccess_ReturnsUnauthorized()
         {
             // Arrange
-            await SeedMultiTenantDataAsync();
+            var (client1, rsaKeyPair1) = await SeedMultiTenantDataAsync();
 
-            var accessToken = "tenant1-token";
-            var subject = "tenant1-user-subject";
-
-            // テナント1のユーザー用アクセストークン
-            var tokenEntity = new AccessToken
+            // テナント1のユーザー用のトークンを生成
+            _mockTenantService.SetTenant("tenant1");
+            var user = await _context.EcAuthUsers.FirstAsync(u => u.Subject == "tenant1-user-subject");
+            var request = new ITokenService.TokenRequest
             {
-                Token = accessToken,
-                ExpiresAt = DateTime.UtcNow.AddHours(1),
-                ClientId = 1, // Tenant1のクライアント
-                                Subject = subject,
-                SubjectType = SubjectType.B2C,
-                CreatedAt = DateTime.UtcNow,
-                Scopes = "openid profile"
+                User = user,
+                Client = client1,
+                RequestedScopes = new[] { "openid", "profile" },
+                SubjectType = SubjectType.B2C
             };
-            _context.AccessTokens.Add(tokenEntity);
-            await _context.SaveChangesAsync();
+            var accessToken = await _tokenService.GenerateAccessTokenAsync(request);
 
             // テナント2に切り替え（クロステナントアクセス）
             _mockTenantService.SetTenant("tenant2");
@@ -206,26 +233,19 @@ namespace IdentityProvider.Test.Controllers
         public async Task IntegrationTest_RevokedAccessToken_ReturnsUnauthorized()
         {
             // Arrange
-            await SeedTestDataAsync();
+            var (client, rsaKeyPair) = await SeedTestDataAsync();
 
-            var accessToken = "revoked-test-token";
-            var subject = "integration-test-subject";
-
-            // アクセストークンをデータベースに追加
-            var tokenEntity = new AccessToken
+            var user = await _context.EcAuthUsers.FirstAsync(u => u.Subject == "integration-test-subject");
+            var request = new ITokenService.TokenRequest
             {
-                Token = accessToken,
-                ExpiresAt = DateTime.UtcNow.AddHours(1),
-                ClientId = 1,
-                                Subject = subject,
-                SubjectType = SubjectType.B2C,
-                CreatedAt = DateTime.UtcNow,
-                Scopes = "openid profile"
+                User = user,
+                Client = client,
+                RequestedScopes = new[] { "openid", "profile" },
+                SubjectType = SubjectType.B2C
             };
-            _context.AccessTokens.Add(tokenEntity);
-            await _context.SaveChangesAsync();
+            var accessToken = await _tokenService.GenerateAccessTokenAsync(request);
 
-            // トークンを無効化（削除）
+            // トークンを無効化
             await _tokenService.RevokeAccessTokenAsync(accessToken);
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
@@ -246,36 +266,20 @@ namespace IdentityProvider.Test.Controllers
         public async Task IntegrationTest_B2BAccessToken_SubjectTypeB2B_ReturnsUserInfo()
         {
             // Arrange
-            await SeedB2BTestDataAsync();
+            var (client, rsaKeyPair) = await SeedB2BTestDataAsync();
 
-            var accessToken = "b2b-integration-test-token";
-            var subject = "b2b-integration-test-subject";
-
-            // B2Bユーザー用のアクセストークンをデータベースに直接挿入
-            var tokenEntity = new AccessToken
+            var b2bUser = await _context.B2BUsers.FirstAsync(u => u.Subject == "b2b-integration-test-subject");
+            var request = new ITokenService.TokenRequest
             {
-                Token = accessToken,
-                ExpiresAt = DateTime.UtcNow.AddHours(1),
-                ClientId = 1,
-                Subject = subject,
-                SubjectType = SubjectType.B2B,
-                CreatedAt = DateTime.UtcNow,
-                Scopes = "openid profile"
+                User = b2bUser,
+                Client = client,
+                RequestedScopes = new[] { "openid", "profile" },
+                SubjectType = SubjectType.B2B
             };
-            _context.AccessTokens.Add(tokenEntity);
-            await _context.SaveChangesAsync();
+            var accessToken = await _tokenService.GenerateAccessTokenAsync(request);
 
             // B2BUserServiceのモック設定
-            var b2bUser = new B2BUser
-            {
-                Subject = subject,
-                ExternalId = "b2b-admin@example.com",
-                UserType = "admin",
-                OrganizationId = 1,
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow
-            };
-            _mockB2BUserService.Setup(x => x.GetBySubjectAsync(subject))
+            _mockB2BUserService.Setup(x => x.GetBySubjectAsync("b2b-integration-test-subject"))
                 .ReturnsAsync(b2bUser);
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
@@ -289,31 +293,24 @@ namespace IdentityProvider.Test.Controllers
 
             Assert.NotNull(response);
             var subProperty = response.GetType().GetProperty("sub")?.GetValue(response);
-            Assert.Equal(subject, subProperty);
+            Assert.Equal("b2b-integration-test-subject", subProperty);
         }
 
         [Fact]
         public async Task IntegrationTest_B2CAccessToken_SubjectTypeB2C_ReturnsUserInfo()
         {
             // Arrange
-            await SeedTestDataAsync();
+            var (client, rsaKeyPair) = await SeedTestDataAsync();
 
-            var accessToken = "b2c-subjecttype-test-token";
-            var subject = "integration-test-subject";
-
-            // B2Cユーザー用のアクセストークン（SubjectType.B2C を明示的に設定）
-            var tokenEntity = new AccessToken
+            var user = await _context.EcAuthUsers.FirstAsync(u => u.Subject == "integration-test-subject");
+            var request = new ITokenService.TokenRequest
             {
-                Token = accessToken,
-                ExpiresAt = DateTime.UtcNow.AddHours(1),
-                ClientId = 1,
-                                Subject = subject,
-                SubjectType = SubjectType.B2C,
-                CreatedAt = DateTime.UtcNow,
-                Scopes = "openid profile"
+                User = user,
+                Client = client,
+                RequestedScopes = new[] { "openid", "profile" },
+                SubjectType = SubjectType.B2C
             };
-            _context.AccessTokens.Add(tokenEntity);
-            await _context.SaveChangesAsync();
+            var accessToken = await _tokenService.GenerateAccessTokenAsync(request);
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
@@ -326,10 +323,10 @@ namespace IdentityProvider.Test.Controllers
 
             Assert.NotNull(response);
             var subProperty = response.GetType().GetProperty("sub")?.GetValue(response);
-            Assert.Equal(subject, subProperty);
+            Assert.Equal("integration-test-subject", subProperty);
         }
 
-        private async Task SeedTestDataAsync()
+        private async Task<(Client client, RsaKeyPair rsaKeyPair)> SeedTestDataAsync()
         {
             var organization = new Organization
             {
@@ -362,10 +359,14 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.EcAuthUsers.Add(user);
 
+            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client, 1);
+
             await _context.SaveChangesAsync();
+
+            return (client, rsaKeyPair);
         }
 
-        private async Task SeedB2BTestDataAsync()
+        private async Task<(Client client, RsaKeyPair rsaKeyPair)> SeedB2BTestDataAsync()
         {
             var organization = new Organization
             {
@@ -399,10 +400,14 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.B2BUsers.Add(b2bUser);
 
+            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client, 1);
+
             await _context.SaveChangesAsync();
+
+            return (client, rsaKeyPair);
         }
 
-        private async Task SeedMultiTenantDataAsync()
+        private async Task<(Client client1, RsaKeyPair rsaKeyPair1)> SeedMultiTenantDataAsync()
         {
             // テナント1
             var org1 = new Organization
@@ -436,6 +441,8 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.EcAuthUsers.Add(user1);
 
+            var rsaKeyPair1 = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client1, 1);
+
             // テナント2
             var org2 = new Organization
             {
@@ -468,7 +475,11 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.EcAuthUsers.Add(user2);
 
+            TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client2, 2);
+
             await _context.SaveChangesAsync();
+
+            return (client1, rsaKeyPair1);
         }
 
         public void Dispose()

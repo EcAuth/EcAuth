@@ -50,6 +50,13 @@ namespace IdentityProvider.Models
         [MaxLength(1000)]
         public string? Scopes { get; set; }
 
+        [Column("is_revoked")]
+        [Required]
+        public bool IsRevoked { get; set; } = false;
+
+        [Column("revoked_at")]
+        public DateTime? RevokedAt { get; set; }
+
         public bool IsExpired => DateTime.UtcNow > ExpiresAt;
     }
 }

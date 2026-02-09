@@ -1,6 +1,7 @@
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
 
 namespace IdentityProvider.Test.TestHelpers
 {
@@ -15,6 +16,27 @@ namespace IdentityProvider.Test.TestHelpers
 
             var mockTenantService = tenantService ?? new MockTenantService();
             return new EcAuthDbContext(options, mockTenantService);
+        }
+
+        public static RsaKeyPair GenerateAndAddRsaKeyPair(EcAuthDbContext context, Client client, int keyId)
+        {
+            string publicKey, privateKey;
+            using (var rsa = RSA.Create(2048))
+            {
+                publicKey = Convert.ToBase64String(rsa.ExportRSAPublicKey());
+                privateKey = Convert.ToBase64String(rsa.ExportRSAPrivateKey());
+            }
+
+            var rsaKeyPair = new RsaKeyPair
+            {
+                Id = keyId,
+                ClientId = client.Id,
+                PublicKey = publicKey,
+                PrivateKey = privateKey,
+                Client = client
+            };
+            context.RsaKeyPairs.Add(rsaKeyPair);
+            return rsaKeyPair;
         }
     }
 

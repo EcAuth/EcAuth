@@ -68,7 +68,11 @@ namespace IdentityProvider.Test.Controllers
             _authCodeService = new AuthorizationCodeService(_context, authCodeLogger.Object);
 
             var tokenLogger = new Mock<ILogger<TokenService>>();
-            _tokenService = new TokenService(_context, tokenLogger.Object);
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Scheme = "https";
+            httpContext.Request.Host = new HostString("test.ec-cube.io");
+            var httpContextAccessor = new HttpContextAccessor { HttpContext = httpContext };
+            _tokenService = new TokenService(_context, tokenLogger.Object, httpContextAccessor);
 
             _mockControllerLogger = new Mock<ILogger<B2BPasskeyController>>();
             _mockTokenService = new Mock<ITokenService>();
@@ -135,6 +139,9 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = 1
             };
             _context.RedirectUris.Add(redirectUri);
+
+            // RSA鍵ペアを追加（JWT ベースの AccessToken 生成に必要）
+            TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, _client, 1);
 
             _context.SaveChanges();
         }
@@ -700,10 +707,15 @@ namespace IdentityProvider.Test.Controllers
             // Assert
             Assert.NotNull(accessToken);
 
-            // DBに保存されたアクセストークンを取得
+            // JWT から jti を取得
+            var handler = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler();
+            var jwtToken = handler.ReadJwtToken(accessToken);
+            var jti = jwtToken.Claims.FirstOrDefault(c => c.Type == System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti)?.Value;
+
+            // DBに保存されたアクセストークンを取得（Token カラムには jti が保存される）
             var savedToken = await _context.AccessTokens
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(t => t.Token == accessToken);
+                .FirstOrDefaultAsync(t => t.Token == jti);
 
             Assert.NotNull(savedToken);
             // SubjectType が B2B に設定されていることを確認
