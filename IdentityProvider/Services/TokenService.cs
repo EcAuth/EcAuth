@@ -409,6 +409,18 @@ namespace IdentityProvider.Services
                 var scopeClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == "scope")?.Value;
                 var orgIdClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == "org_id")?.Value;
 
+                if (string.IsNullOrEmpty(subject) || string.IsNullOrEmpty(subTypeClaim) || string.IsNullOrEmpty(jti))
+                {
+                    _logger.LogWarning("Access token missing required claims");
+                    return new ITokenService.AccessTokenValidationResult { IsValid = false };
+                }
+
+                if (subTypeClaim != "b2b" && subTypeClaim != "b2c")
+                {
+                    _logger.LogWarning("Access token has invalid sub_type: {SubType}", subTypeClaim);
+                    return new ITokenService.AccessTokenValidationResult { IsValid = false };
+                }
+
                 SubjectType subjectType = subTypeClaim == "b2b" ? SubjectType.B2B : SubjectType.B2C;
 
                 _logger.LogDebug("Access token validated successfully for subject {Subject} (type: {SubjectType})",
