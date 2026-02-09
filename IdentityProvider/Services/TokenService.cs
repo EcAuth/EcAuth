@@ -158,13 +158,16 @@ namespace IdentityProvider.Services
                     CryptoProviderFactory = new CryptoProviderFactory { CacheSignatureProviders = false }
                 };
 
+                if (request.Client.OrganizationId is null)
+                    throw new InvalidOperationException($"OrganizationId is required for client {request.Client.Id}");
+
                 var subjectTypeString = request.SubjectType == SubjectType.B2B ? "b2b" : "b2c";
 
                 var claims = new List<Claim>
                 {
                     new(JwtRegisteredClaimNames.Sub, subject),
                     new("sub_type", subjectTypeString),
-                    new("org_id", request.Client.OrganizationId.ToString(), ClaimValueTypes.Integer32),
+                    new("org_id", request.Client.OrganizationId.Value.ToString(), ClaimValueTypes.Integer32),
                     new("client_id", request.Client.ClientId),
                     new(JwtRegisteredClaimNames.Iss, GetIssuer()),
                     new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
