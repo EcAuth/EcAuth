@@ -68,7 +68,11 @@ namespace IdentityProvider.Test.Controllers
             _authCodeService = new AuthorizationCodeService(_context, authCodeLogger.Object);
 
             var tokenLogger = new Mock<ILogger<TokenService>>();
-            _tokenService = new TokenService(_context, tokenLogger.Object);
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Scheme = "https";
+            httpContext.Request.Host = new HostString("test.ec-cube.io");
+            var httpContextAccessor = new HttpContextAccessor { HttpContext = httpContext };
+            _tokenService = new TokenService(_context, tokenLogger.Object, httpContextAccessor);
 
             _mockControllerLogger = new Mock<ILogger<B2BPasskeyController>>();
             _mockTokenService = new Mock<ITokenService>();

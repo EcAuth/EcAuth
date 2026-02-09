@@ -2,6 +2,7 @@ using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdentityProvider.Test.TestHelpers;
 using IdpUtilities;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
@@ -14,18 +15,26 @@ namespace IdentityProvider.Test.Services
     public class TokenServiceTests
     {
         private readonly ILogger<TokenService> _logger;
+        private readonly IHttpContextAccessor _httpContextAccessor;
+
+        public const string TestIssuer = "https://test.ec-cube.io";
 
         public TokenServiceTests()
         {
             var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
             _logger = loggerFactory.CreateLogger<TokenService>();
+
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Scheme = "https";
+            httpContext.Request.Host = new HostString("test.ec-cube.io");
+            _httpContextAccessor = new HttpContextAccessor { HttpContext = httpContext };
         }
 
         [Fact]
         public async Task GenerateIdTokenAsync_ValidRequest_ShouldGenerateValidJwtToken()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -50,7 +59,7 @@ namespace IdentityProvider.Test.Services
             var jsonToken = handler.ReadJwtToken(token);
 
             Assert.Equal(user.Subject, jsonToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Sub)?.Value);
-            Assert.Equal("https://ecauth.example.com", jsonToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Iss)?.Value);
+            Assert.Equal(TestIssuer, jsonToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Iss)?.Value);
             Assert.Equal(client.ClientId, jsonToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Aud)?.Value);
             Assert.Equal("test-nonce", jsonToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Nonce)?.Value);
             Assert.NotNull(jsonToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Jti)?.Value);
@@ -61,7 +70,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_WithoutNonce_ShouldGenerateTokenWithoutNonceClaim()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -87,7 +96,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_WithoutEmailScope_ShouldNotIncludeEmailClaims()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -113,7 +122,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_NullUser_ShouldThrowArgumentException()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, _, _) = await SetupTestDataAsync(context);
@@ -132,7 +141,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_NullClient_ShouldThrowArgumentException()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (_, user, _) = await SetupTestDataAsync(context);
@@ -151,7 +160,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_NoRsaKeyPair_ShouldThrowInvalidOperationException()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange - Create client and user without RSA key pair
             var organization = new Organization { Id = 1, Code = "TESTORG", Name = "TestOrg", TenantName = "test-tenant" };
@@ -190,7 +199,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_ValidRequest_ShouldGenerateAccessToken()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -222,7 +231,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_ShouldContainCorrectJwtClaims()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -246,7 +255,7 @@ namespace IdentityProvider.Test.Services
             Assert.Equal("b2c", jwtToken.Claims.FirstOrDefault(c => c.Type == "sub_type")?.Value);
             Assert.Equal(client.OrganizationId.ToString(), jwtToken.Claims.FirstOrDefault(c => c.Type == "org_id")?.Value);
             Assert.Equal(client.ClientId, jwtToken.Claims.FirstOrDefault(c => c.Type == "client_id")?.Value);
-            Assert.Equal("https://ecauth.example.com", jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Iss)?.Value);
+            Assert.Equal(TestIssuer, jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Iss)?.Value);
             Assert.NotNull(jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Jti)?.Value);
             Assert.Equal("openid profile", jwtToken.Claims.FirstOrDefault(c => c.Type == "scope")?.Value);
         }
@@ -255,7 +264,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateTokensAsync_ValidRequest_ShouldGenerateBothTokens()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -292,7 +301,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateTokenAsync_ValidToken_ShouldReturnSubject()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -316,7 +325,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateTokenAsync_InvalidToken_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, _, _) = await SetupTestDataAsync(context);
@@ -332,7 +341,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateTokenAsync_NoRsaKeyPair_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange - Create client without RSA key pair
             var organization = new Organization { Id = 1, Code = "TESTORG", Name = "TestOrg", TenantName = "test-tenant" };
@@ -390,7 +399,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_ValidToken_ShouldReturnSubject()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -415,7 +424,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_InvalidToken_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Act
             var subject = await service.ValidateAccessTokenAsync("invalid-token");
@@ -428,7 +437,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_ExpiredToken_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -452,7 +461,7 @@ namespace IdentityProvider.Test.Services
                     new("sub_type", "b2c"),
                     new("org_id", client.OrganizationId.ToString(), ClaimValueTypes.Integer32),
                     new("client_id", client.ClientId),
-                    new(JwtRegisteredClaimNames.Iss, "https://ecauth.example.com"),
+                    new(JwtRegisteredClaimNames.Iss, TestIssuer),
                     new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now.AddHours(-2)).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
                     new(JwtRegisteredClaimNames.Exp, new DateTimeOffset(now.AddHours(-1)).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
                     new(JwtRegisteredClaimNames.Jti, jti)
@@ -494,7 +503,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_RevokedJwt_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -523,7 +532,7 @@ namespace IdentityProvider.Test.Services
         public async Task RevokeAccessTokenAsync_ValidToken_ShouldRevokeSuccessfully()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -558,7 +567,7 @@ namespace IdentityProvider.Test.Services
         public async Task RevokeAccessTokenAsync_InvalidToken_ShouldReturnFalse()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Act
             var result = await service.RevokeAccessTokenAsync("invalid-token");
@@ -571,7 +580,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_ShouldSaveTokenToDatabase()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger);
+            var service = new TokenService(context, _logger, _httpContextAccessor);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);

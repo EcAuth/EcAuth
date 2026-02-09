@@ -12,11 +12,13 @@ namespace IdentityProvider.Services
     {
         private readonly EcAuthDbContext _context;
         private readonly ILogger<TokenService> _logger;
+        private readonly IHttpContextAccessor _httpContextAccessor;
 
-        public TokenService(EcAuthDbContext context, ILogger<TokenService> logger)
+        public TokenService(EcAuthDbContext context, ILogger<TokenService> logger, IHttpContextAccessor httpContextAccessor)
         {
             _context = context;
             _logger = logger;
+            _httpContextAccessor = httpContextAccessor;
         }
 
         public async Task<ITokenService.TokenResponse> GenerateTokensAsync(ITokenService.TokenRequest request)
@@ -283,10 +285,15 @@ namespace IdentityProvider.Services
             }
         }
 
-        private static string GetIssuer()
+        private string GetIssuer()
         {
-            // 実際の実装では設定ファイルから取得
-            return "https://ecauth.example.com";
+            var request = _httpContextAccessor.HttpContext?.Request;
+            if (request != null)
+            {
+                return $"{request.Scheme}://{request.Host}";
+            }
+
+            throw new InvalidOperationException("HttpContext is not available. Cannot determine issuer.");
         }
 
         public async Task<string?> ValidateAccessTokenAsync(string token)

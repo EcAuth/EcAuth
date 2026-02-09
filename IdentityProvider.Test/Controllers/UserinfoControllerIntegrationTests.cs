@@ -34,7 +34,12 @@ namespace IdentityProvider.Test.Controllers
             var mockLogger = new Mock<ILogger<TokenService>>();
             var mockUserLogger = new Mock<ILogger<UserService>>();
 
-            _tokenService = new TokenService(_context, mockLogger.Object);
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Scheme = "https";
+            httpContext.Request.Host = new HostString("test.ec-cube.io");
+            var httpContextAccessor = new HttpContextAccessor { HttpContext = httpContext };
+
+            _tokenService = new TokenService(_context, mockLogger.Object, httpContextAccessor);
             _userService = new UserService(_context, mockUserLogger.Object);
             _mockB2BUserService = new Mock<IB2BUserService>();
 
@@ -109,7 +114,7 @@ namespace IdentityProvider.Test.Controllers
                     new("sub_type", "b2c"),
                     new("org_id", "1", ClaimValueTypes.Integer32),
                     new("client_id", client.ClientId),
-                    new(JwtRegisteredClaimNames.Iss, "https://ecauth.example.com"),
+                    new(JwtRegisteredClaimNames.Iss, "https://test.ec-cube.io"),
                     new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now.AddHours(-2)).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
                     new(JwtRegisteredClaimNames.Exp, new DateTimeOffset(now.AddHours(-1)).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
                     new(JwtRegisteredClaimNames.Jti, jti)
