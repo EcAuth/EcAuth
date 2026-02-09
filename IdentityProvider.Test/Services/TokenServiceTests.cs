@@ -577,6 +577,196 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
+        public async Task ValidateAccessTokenAsync_DifferentClientKey_ShouldReturnInvalid()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            var service = new TokenService(context, _logger, _httpContextAccessor);
+
+            // Arrange - Client A のデータを作成
+            var (clientA, user, rsaKeyPairA) = await SetupTestDataAsync(context);
+
+            // Client B を別の Organization + RSA鍵ペアで作成
+            var organizationB = new Organization { Id = 2, Code = "TESTORG2", Name = "TestOrg2", TenantName = "test-tenant-2" };
+            context.Organizations.Add(organizationB);
+
+            var clientB = new Client
+            {
+                Id = 2,
+                ClientId = "test-client-b",
+                ClientSecret = "test-secret-b",
+                AppName = "Test App B",
+                OrganizationId = 2
+            };
+            context.Clients.Add(clientB);
+            TestDbContextHelper.GenerateAndAddRsaKeyPair(context, clientB, 2);
+            await context.SaveChangesAsync();
+
+            // Client A の鍵で署名した JWT を手動生成し、client_id を Client B に設定
+            var jti = Guid.NewGuid().ToString();
+            var now = DateTime.UtcNow;
+
+            using (var rsa = RSA.Create())
+            {
+                rsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPairA.PrivateKey), out _);
+
+                var signingCredentials = new SigningCredentials(new RsaSecurityKey(rsa), SecurityAlgorithms.RsaSha256)
+                {
+                    CryptoProviderFactory = new CryptoProviderFactory { CacheSignatureProviders = false }
+                };
+
+                var claims = new List<Claim>
+                {
+                    new(JwtRegisteredClaimNames.Sub, user.Subject),
+                    new("sub_type", "b2c"),
+                    new("org_id", clientB.OrganizationId.ToString()!, ClaimValueTypes.Integer32),
+                    new("client_id", clientB.ClientId), // Client B の ClientId を設定
+                    new(JwtRegisteredClaimNames.Iss, TestIssuer),
+                    new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                    new(JwtRegisteredClaimNames.Exp, new DateTimeOffset(now.AddHours(1)).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                    new(JwtRegisteredClaimNames.Jti, jti)
+                };
+
+                var tokenDescriptor = new SecurityTokenDescriptor
+                {
+                    Subject = new ClaimsIdentity(claims),
+                    Expires = now.AddHours(1),
+                    NotBefore = now,
+                    IssuedAt = now,
+                    SigningCredentials = signingCredentials
+                };
+
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var token = tokenHandler.CreateToken(tokenDescriptor);
+                var tamperedJwt = tokenHandler.WriteToken(token);
+
+                // Act - Client B の鍵で署名検証が走るため、署名不一致で失敗するはず
+                var result = await service.ValidateAccessTokenWithTypeAsync(tamperedJwt);
+
+                // Assert
+                Assert.False(result.IsValid);
+            }
+        }
+
+        [Fact]
+        public async Task ValidateAccessTokenAsync_WrongIssuer_ShouldReturnInvalid()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            var service = new TokenService(context, _logger, _httpContextAccessor);
+
+            // Arrange
+            var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
+
+            var jti = Guid.NewGuid().ToString();
+            var now = DateTime.UtcNow;
+
+            using (var rsa = RSA.Create())
+            {
+                rsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPair.PrivateKey), out _);
+
+                var signingCredentials = new SigningCredentials(new RsaSecurityKey(rsa), SecurityAlgorithms.RsaSha256)
+                {
+                    CryptoProviderFactory = new CryptoProviderFactory { CacheSignatureProviders = false }
+                };
+
+                var claims = new List<Claim>
+                {
+                    new(JwtRegisteredClaimNames.Sub, user.Subject),
+                    new("sub_type", "b2c"),
+                    new("org_id", client.OrganizationId.ToString()!, ClaimValueTypes.Integer32),
+                    new("client_id", client.ClientId),
+                    new(JwtRegisteredClaimNames.Iss, "https://malicious.example.com"), // 不正な Issuer
+                    new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                    new(JwtRegisteredClaimNames.Exp, new DateTimeOffset(now.AddHours(1)).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                    new(JwtRegisteredClaimNames.Jti, jti)
+                };
+
+                var tokenDescriptor = new SecurityTokenDescriptor
+                {
+                    Subject = new ClaimsIdentity(claims),
+                    Expires = now.AddHours(1),
+                    NotBefore = now,
+                    IssuedAt = now,
+                    SigningCredentials = signingCredentials
+                };
+
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var token = tokenHandler.CreateToken(tokenDescriptor);
+                var wrongIssuerJwt = tokenHandler.WriteToken(token);
+
+                // DB にメタデータを保存
+                context.AccessTokens.Add(new AccessToken
+                {
+                    Token = jti,
+                    ExpiresAt = now.AddHours(1),
+                    ClientId = client.Id,
+                    Subject = user.Subject,
+                    CreatedAt = now
+                });
+                await context.SaveChangesAsync();
+
+                // Act
+                var result = await service.ValidateAccessTokenWithTypeAsync(wrongIssuerJwt);
+
+                // Assert
+                Assert.False(result.IsValid);
+            }
+        }
+
+        [Fact]
+        public async Task ValidateAccessTokenAsync_MissingJtiClaim_ShouldReturnInvalid()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            var service = new TokenService(context, _logger, _httpContextAccessor);
+
+            // Arrange
+            var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
+
+            var now = DateTime.UtcNow;
+
+            using (var rsa = RSA.Create())
+            {
+                rsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPair.PrivateKey), out _);
+
+                var signingCredentials = new SigningCredentials(new RsaSecurityKey(rsa), SecurityAlgorithms.RsaSha256)
+                {
+                    CryptoProviderFactory = new CryptoProviderFactory { CacheSignatureProviders = false }
+                };
+
+                // jti を意図的に除外
+                var claims = new List<Claim>
+                {
+                    new(JwtRegisteredClaimNames.Sub, user.Subject),
+                    new("sub_type", "b2c"),
+                    new("org_id", client.OrganizationId.ToString()!, ClaimValueTypes.Integer32),
+                    new("client_id", client.ClientId),
+                    new(JwtRegisteredClaimNames.Iss, TestIssuer),
+                    new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                    new(JwtRegisteredClaimNames.Exp, new DateTimeOffset(now.AddHours(1)).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
+                    // jti なし
+                };
+
+                var tokenDescriptor = new SecurityTokenDescriptor
+                {
+                    Subject = new ClaimsIdentity(claims),
+                    Expires = now.AddHours(1),
+                    NotBefore = now,
+                    IssuedAt = now,
+                    SigningCredentials = signingCredentials
+                };
+
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var token = tokenHandler.CreateToken(tokenDescriptor);
+                var noJtiJwt = tokenHandler.WriteToken(token);
+
+                // Act
+                var result = await service.ValidateAccessTokenWithTypeAsync(noJtiJwt);
+
+                // Assert
+                Assert.False(result.IsValid);
+            }
+        }
+
+        [Fact]
         public async Task GenerateAccessTokenAsync_ShouldSaveTokenToDatabase()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
