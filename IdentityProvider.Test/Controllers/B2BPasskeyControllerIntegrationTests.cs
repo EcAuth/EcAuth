@@ -137,22 +137,7 @@ namespace IdentityProvider.Test.Controllers
             _context.RedirectUris.Add(redirectUri);
 
             // RSA鍵ペアを追加（JWT ベースの AccessToken 生成に必要）
-            string publicKey, privateKey;
-            using (var rsa = System.Security.Cryptography.RSA.Create(2048))
-            {
-                publicKey = Convert.ToBase64String(rsa.ExportRSAPublicKey());
-                privateKey = Convert.ToBase64String(rsa.ExportRSAPrivateKey());
-            }
-
-            var rsaKeyPair = new RsaKeyPair
-            {
-                Id = 1,
-                ClientId = _client.Id,
-                PublicKey = publicKey,
-                PrivateKey = privateKey,
-                Client = _client
-            };
-            _context.RsaKeyPairs.Add(rsaKeyPair);
+            TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, _client, 1);
 
             _context.SaveChanges();
         }

@@ -354,23 +354,7 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.EcAuthUsers.Add(user);
 
-            // RSA鍵ペアを生成
-            string publicKey, privateKey;
-            using (var rsa = RSA.Create(2048))
-            {
-                publicKey = Convert.ToBase64String(rsa.ExportRSAPublicKey());
-                privateKey = Convert.ToBase64String(rsa.ExportRSAPrivateKey());
-            }
-
-            var rsaKeyPair = new RsaKeyPair
-            {
-                Id = 1,
-                ClientId = client.Id,
-                PublicKey = publicKey,
-                PrivateKey = privateKey,
-                Client = client
-            };
-            _context.RsaKeyPairs.Add(rsaKeyPair);
+            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client, 1);
 
             await _context.SaveChangesAsync();
 
@@ -411,23 +395,7 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.B2BUsers.Add(b2bUser);
 
-            // RSA鍵ペアを生成
-            string publicKey, privateKey;
-            using (var rsa = RSA.Create(2048))
-            {
-                publicKey = Convert.ToBase64String(rsa.ExportRSAPublicKey());
-                privateKey = Convert.ToBase64String(rsa.ExportRSAPrivateKey());
-            }
-
-            var rsaKeyPair = new RsaKeyPair
-            {
-                Id = 1,
-                ClientId = client.Id,
-                PublicKey = publicKey,
-                PrivateKey = privateKey,
-                Client = client
-            };
-            _context.RsaKeyPairs.Add(rsaKeyPair);
+            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client, 1);
 
             await _context.SaveChangesAsync();
 
@@ -468,23 +436,7 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.EcAuthUsers.Add(user1);
 
-            // テナント1用RSA鍵ペア
-            string publicKey1, privateKey1;
-            using (var rsa = RSA.Create(2048))
-            {
-                publicKey1 = Convert.ToBase64String(rsa.ExportRSAPublicKey());
-                privateKey1 = Convert.ToBase64String(rsa.ExportRSAPrivateKey());
-            }
-
-            var rsaKeyPair1 = new RsaKeyPair
-            {
-                Id = 1,
-                ClientId = client1.Id,
-                PublicKey = publicKey1,
-                PrivateKey = privateKey1,
-                Client = client1
-            };
-            _context.RsaKeyPairs.Add(rsaKeyPair1);
+            var rsaKeyPair1 = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client1, 1);
 
             // テナント2
             var org2 = new Organization
@@ -518,23 +470,7 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.EcAuthUsers.Add(user2);
 
-            // テナント2用RSA鍵ペア
-            string publicKey2, privateKey2;
-            using (var rsa = RSA.Create(2048))
-            {
-                publicKey2 = Convert.ToBase64String(rsa.ExportRSAPublicKey());
-                privateKey2 = Convert.ToBase64String(rsa.ExportRSAPrivateKey());
-            }
-
-            var rsaKeyPair2 = new RsaKeyPair
-            {
-                Id = 2,
-                ClientId = client2.Id,
-                PublicKey = publicKey2,
-                PrivateKey = privateKey2,
-                Client = client2
-            };
-            _context.RsaKeyPairs.Add(rsaKeyPair2);
+            TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client2, 2);
 
             await _context.SaveChangesAsync();
 

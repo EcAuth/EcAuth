@@ -379,23 +379,7 @@ namespace IdentityProvider.Test.Services
             };
             context.EcAuthUsers.Add(user);
 
-            // Generate RSA key pair for testing
-            string publicKey, privateKey;
-            using (var rsa = RSA.Create(2048))
-            {
-                publicKey = Convert.ToBase64String(rsa.ExportRSAPublicKey());
-                privateKey = Convert.ToBase64String(rsa.ExportRSAPrivateKey());
-            }
-
-            var rsaKeyPair = new RsaKeyPair
-            {
-                Id = 1,
-                ClientId = client.Id,
-                PublicKey = publicKey,
-                PrivateKey = privateKey,
-                Client = client
-            };
-            context.RsaKeyPairs.Add(rsaKeyPair);
+            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(context, client, 1);
 
             await context.SaveChangesAsync();
 
