@@ -56,6 +56,11 @@ namespace IdentityProvider.Services
             /// WebAuthn登録オプション（Fido2.NetLib形式）
             /// </summary>
             public CredentialCreateOptions Options { get; set; } = null!;
+
+            /// <summary>
+            /// JITプロビジョニングでB2BUserが新規作成されたか
+            /// </summary>
+            public bool IsProvisioned { get; set; }
         }
 
         /// <summary>

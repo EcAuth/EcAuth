@@ -13,6 +13,9 @@ namespace IdentityProvider.Test.Services
 {
     public class B2BPasskeyServiceTests : IDisposable
     {
+        private const string TestB2BSubject = "550e8400-e29b-41d4-a716-446655440000";
+        private const string TestB2BSubject2 = "550e8400-e29b-41d4-a716-446655440001";
+
         private readonly EcAuthDbContext _context;
         private readonly Mock<IFido2> _mockFido2;
         private readonly Mock<IWebAuthnChallengeService> _mockChallengeService;
@@ -67,7 +70,7 @@ namespace IdentityProvider.Test.Services
             _testUser = new B2BUser
             {
                 Id = 1,
-                Subject = "test-b2b-subject",
+                Subject = TestB2BSubject,
                 ExternalId = "admin@example.com",
                 UserType = "admin",
                 OrganizationId = 1,
@@ -88,12 +91,12 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 DisplayName = "テスト管理者",
                 DeviceName = "MacBook Pro"
             };
 
-            _mockUserService.Setup(x => x.GetBySubjectAsync("test-b2b-subject"))
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
                 .ReturnsAsync(_testUser);
 
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
@@ -111,7 +114,7 @@ namespace IdentityProvider.Test.Services
                 Rp = new PublicKeyCredentialRpEntity("shop.example.com", "テスト組織"),
                 User = new Fido2User
                 {
-                    Id = Encoding.UTF8.GetBytes("test-b2b-subject"),
+                    Id = Encoding.UTF8.GetBytes(TestB2BSubject),
                     Name = "admin@example.com",
                     DisplayName = "テスト管理者"
                 },
@@ -139,7 +142,7 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = clientId,
                 RpId = "shop.example.com",
-                B2BSubject = "test-b2b-subject"
+                B2BSubject = TestB2BSubject
             };
 
             // Act & Assert
@@ -158,7 +161,7 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = rpId,
-                B2BSubject = "test-b2b-subject"
+                B2BSubject = TestB2BSubject
             };
 
             // Act & Assert
@@ -194,7 +197,7 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "non-existing-client",
                 RpId = "shop.example.com",
-                B2BSubject = "test-b2b-subject"
+                B2BSubject = TestB2BSubject
             };
 
             // Act & Assert
@@ -204,23 +207,146 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
-        public async Task CreateRegistrationOptionsAsync_NonExistingUser_ShouldThrowInvalidOperationException()
+        public async Task CreateRegistrationOptionsAsync_NonExistingUser_ShouldJitProvisionAndReturnOptions()
+        {
+            // Arrange
+            var newSubject = "660e8400-e29b-41d4-a716-446655440099";
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = newSubject,
+                DisplayName = "新規管理者"
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(newSubject))
+                .ReturnsAsync((B2BUser?)null);
+
+            var provisionedUser = new B2BUser
+            {
+                Id = 99,
+                Subject = newSubject,
+                UserType = "admin",
+                OrganizationId = 1,
+                Organization = _organization
+            };
+            _mockUserService.Setup(x => x.CreateAsync(It.IsAny<IB2BUserService.CreateUserRequest>()))
+                .ReturnsAsync(new IB2BUserService.CreateUserResult { User = provisionedUser });
+
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "session-jit",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal("session-jit", result.SessionId);
+            Assert.True(result.IsProvisioned);
+
+            // CreateAsync が正しいパラメータで呼ばれたことを確認
+            _mockUserService.Verify(x => x.CreateAsync(It.Is<IB2BUserService.CreateUserRequest>(r =>
+                r.Subject == newSubject &&
+                r.UserType == "admin" &&
+                r.OrganizationId == 1
+            )), Times.Once);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_ExistingUser_ShouldNotProvision()
         {
             // Arrange
             var request = new IB2BPasskeyService.RegistrationOptionsRequest
             {
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
-                B2BSubject = "non-existing-subject"
+                B2BSubject = TestB2BSubject,
+                DisplayName = "テスト管理者"
             };
 
-            _mockUserService.Setup(x => x.GetBySubjectAsync("non-existing-subject"))
-                .ReturnsAsync((B2BUser?)null);
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(_testUser);
+
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "session-existing",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.False(result.IsProvisioned);
+
+            // CreateAsync が呼ばれないことを確認
+            _mockUserService.Verify(x => x.CreateAsync(It.IsAny<IB2BUserService.CreateUserRequest>()), Times.Never);
+        }
+
+        [Theory]
+        [InlineData("not-a-uuid")]
+        [InlineData("12345")]
+        [InlineData("xyz-invalid-format")]
+        public async Task CreateRegistrationOptionsAsync_InvalidUuidSubject_ShouldThrowArgumentException(string invalidSubject)
+        {
+            // Arrange
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = invalidSubject
+            };
 
             // Act & Assert
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
                 _service.CreateRegistrationOptionsAsync(request));
-            Assert.Contains("B2BUser", ex.Message);
+            Assert.Contains("UUID", ex.Message);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_DisplayNameTooLong_ShouldThrowArgumentException()
+        {
+            // Arrange
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                DisplayName = new string('a', 129)
+            };
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+            Assert.Contains("DisplayName", ex.Message);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_DeviceNameTooLong_ShouldThrowArgumentException()
+        {
+            // Arrange
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                DeviceName = new string('a', 129)
+            };
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+            Assert.Contains("DeviceName", ex.Message);
         }
 
         [Fact]
@@ -231,10 +357,10 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = "unauthorized.example.com", // AllowedRpIdsに含まれない
-                B2BSubject = "test-b2b-subject"
+                B2BSubject = TestB2BSubject
             };
 
-            _mockUserService.Setup(x => x.GetBySubjectAsync("test-b2b-subject"))
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
                 .ReturnsAsync(_testUser);
 
             // Act & Assert
@@ -252,12 +378,12 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = "Shop.Example.COM",
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 DisplayName = "テスト管理者",
                 DeviceName = "MacBook Pro"
             };
 
-            _mockUserService.Setup(x => x.GetBySubjectAsync("test-b2b-subject"))
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
                 .ReturnsAsync(_testUser);
 
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
@@ -293,12 +419,12 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = mixedCaseRpId,
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 DisplayName = "テスト管理者",
                 DeviceName = "E2E Test Device"
             };
 
-            _mockUserService.Setup(x => x.GetBySubjectAsync("test-b2b-subject"))
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
                 .ReturnsAsync(_testUser);
 
             IWebAuthnChallengeService.ChallengeRequest? capturedChallengeRequest = null;
@@ -339,7 +465,7 @@ namespace IdentityProvider.Test.Services
                 Challenge = "dGVzdC1jaGFsbGVuZ2U", // Base64URL
                 Type = "registration",
                 UserType = "b2b",
-                Subject = "test-b2b-subject",
+                Subject = TestB2BSubject,
                 RpId = "shop.example.com",
                 ClientId = 1,
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
@@ -398,7 +524,7 @@ namespace IdentityProvider.Test.Services
             // DBに保存されていることを確認
             var saved = await _context.B2BPasskeyCredentials
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(c => c.B2BSubject == "test-b2b-subject");
+                .FirstOrDefaultAsync(c => c.B2BSubject == TestB2BSubject);
             Assert.NotNull(saved);
             Assert.Equal("MacBook Pro", saved.DeviceName);
         }
@@ -435,7 +561,7 @@ namespace IdentityProvider.Test.Services
                 Challenge = "dGVzdC1jaGFsbGVuZ2U",
                 Type = "registration",
                 UserType = "b2b",
-                Subject = "test-b2b-subject",
+                Subject = TestB2BSubject,
                 RpId = "shop.example.com",
                 ClientId = 1,
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1) // 期限切れ
@@ -469,7 +595,7 @@ namespace IdentityProvider.Test.Services
                 Challenge = "dGVzdC1jaGFsbGVuZ2U",
                 Type = "authentication", // 登録ではなく認証
                 UserType = "b2b",
-                Subject = "test-b2b-subject",
+                Subject = TestB2BSubject,
                 RpId = "shop.example.com",
                 ClientId = 1,
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
@@ -503,7 +629,7 @@ namespace IdentityProvider.Test.Services
             // Arrange
             var credential = new B2BPasskeyCredential
             {
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 CredentialId = Encoding.UTF8.GetBytes("credential-id"),
                 PublicKey = Encoding.UTF8.GetBytes("public-key"),
                 SignCount = 0,
@@ -518,7 +644,7 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
-                B2BSubject = "test-b2b-subject"
+                B2BSubject = TestB2BSubject
             };
 
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
@@ -554,7 +680,7 @@ namespace IdentityProvider.Test.Services
             // 複数ユーザーのクレデンシャルを追加
             var user2 = new B2BUser
             {
-                Subject = "test-b2b-subject-2",
+                Subject = TestB2BSubject2,
                 ExternalId = "staff@example.com",
                 UserType = "staff",
                 OrganizationId = 1,
@@ -566,7 +692,7 @@ namespace IdentityProvider.Test.Services
             {
                 new B2BPasskeyCredential
                 {
-                    B2BSubject = "test-b2b-subject",
+                    B2BSubject = TestB2BSubject,
                     CredentialId = Encoding.UTF8.GetBytes("credential-1"),
                     PublicKey = Encoding.UTF8.GetBytes("public-key-1"),
                     SignCount = 0,
@@ -574,7 +700,7 @@ namespace IdentityProvider.Test.Services
                 },
                 new B2BPasskeyCredential
                 {
-                    B2BSubject = "test-b2b-subject-2",
+                    B2BSubject = TestB2BSubject2,
                     CredentialId = Encoding.UTF8.GetBytes("credential-2"),
                     PublicKey = Encoding.UTF8.GetBytes("public-key-2"),
                     SignCount = 0,
@@ -622,7 +748,7 @@ namespace IdentityProvider.Test.Services
             // 拒否していた不具合のリグレッション防止。
             var credential = new B2BPasskeyCredential
             {
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 CredentialId = Encoding.UTF8.GetBytes("credential-for-null-subject"),
                 PublicKey = Encoding.UTF8.GetBytes("public-key"),
                 SignCount = 0,
@@ -701,7 +827,7 @@ namespace IdentityProvider.Test.Services
             // リクエストでは大文字を含む "Shop.Example.COM" を送信
             var credential = new B2BPasskeyCredential
             {
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 CredentialId = Encoding.UTF8.GetBytes("credential-id"),
                 PublicKey = Encoding.UTF8.GetBytes("public-key"),
                 SignCount = 0,
@@ -716,7 +842,7 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = "Shop.Example.COM",
-                B2BSubject = "test-b2b-subject"
+                B2BSubject = TestB2BSubject
             };
 
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
@@ -751,7 +877,7 @@ namespace IdentityProvider.Test.Services
 
             var credential = new B2BPasskeyCredential
             {
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 CredentialId = Encoding.UTF8.GetBytes("credential-for-normalize"),
                 PublicKey = Encoding.UTF8.GetBytes("public-key"),
                 SignCount = 0,
@@ -766,7 +892,7 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = mixedCaseRpId,
-                B2BSubject = "test-b2b-subject"
+                B2BSubject = TestB2BSubject
             };
 
             IWebAuthnChallengeService.ChallengeRequest? capturedChallengeRequest = null;
@@ -803,7 +929,7 @@ namespace IdentityProvider.Test.Services
             var credentialIdBytes = Encoding.UTF8.GetBytes("auth-credential-id");
             var credential = new B2BPasskeyCredential
             {
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 CredentialId = credentialIdBytes,
                 PublicKey = Encoding.UTF8.GetBytes("public-key"),
                 SignCount = 5,
@@ -819,7 +945,7 @@ namespace IdentityProvider.Test.Services
                 Challenge = "YXV0aC1jaGFsbGVuZ2U", // Base64URL of "auth-challenge"
                 Type = "authentication",
                 UserType = "b2b",
-                Subject = "test-b2b-subject",
+                Subject = TestB2BSubject,
                 RpId = "shop.example.com",
                 ClientId = 1,
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
@@ -867,13 +993,13 @@ namespace IdentityProvider.Test.Services
             // Assert
             Assert.NotNull(result);
             Assert.True(result.Success);
-            Assert.Equal("test-b2b-subject", result.B2BSubject);
+            Assert.Equal(TestB2BSubject, result.B2BSubject);
             Assert.NotNull(result.CredentialId);
 
             // SignCountが更新されていることを確認
             var updated = await _context.B2BPasskeyCredentials
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(c => c.B2BSubject == "test-b2b-subject");
+                .FirstOrDefaultAsync(c => c.B2BSubject == TestB2BSubject);
             Assert.NotNull(updated);
             Assert.Equal(6u, updated.SignCount);
             Assert.NotNull(updated.LastUsedAt);
@@ -911,7 +1037,7 @@ namespace IdentityProvider.Test.Services
                 Challenge = "YXV0aC1jaGFsbGVuZ2U",
                 Type = "authentication",
                 UserType = "b2b",
-                Subject = "test-b2b-subject",
+                Subject = TestB2BSubject,
                 RpId = "shop.example.com",
                 ClientId = 1,
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
@@ -959,7 +1085,7 @@ namespace IdentityProvider.Test.Services
             var credentialIdBytes = Encoding.UTF8.GetBytes("discoverable-credential-id");
             var credential = new B2BPasskeyCredential
             {
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 CredentialId = credentialIdBytes,
                 PublicKey = Encoding.UTF8.GetBytes("public-key"),
                 SignCount = 3,
@@ -1023,7 +1149,7 @@ namespace IdentityProvider.Test.Services
             // Assert: challenge.Subject が null でも CredentialId からユーザーを特定できる
             Assert.NotNull(result);
             Assert.True(result.Success);
-            Assert.Equal("test-b2b-subject", result.B2BSubject);
+            Assert.Equal(TestB2BSubject, result.B2BSubject);
             Assert.NotNull(result.CredentialId);
 
             // SignCount が更新されていること
@@ -1042,7 +1168,7 @@ namespace IdentityProvider.Test.Services
             var credentialIdBytes = Encoding.UTF8.GetBytes("cloned-credential-id");
             var credential = new B2BPasskeyCredential
             {
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 CredentialId = credentialIdBytes,
                 PublicKey = Encoding.UTF8.GetBytes("public-key"),
                 SignCount = 10, // 前回のSignCount
@@ -1058,7 +1184,7 @@ namespace IdentityProvider.Test.Services
                 Challenge = "Y2xvbmUtY2hhbGxlbmdl", // Base64URL of "clone-challenge"
                 Type = "authentication",
                 UserType = "b2b",
-                Subject = "test-b2b-subject",
+                Subject = TestB2BSubject,
                 RpId = "shop.example.com",
                 ClientId = 1,
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
@@ -1115,7 +1241,7 @@ namespace IdentityProvider.Test.Services
             {
                 new B2BPasskeyCredential
                 {
-                    B2BSubject = "test-b2b-subject",
+                    B2BSubject = TestB2BSubject,
                     CredentialId = Encoding.UTF8.GetBytes("cred-1"),
                     PublicKey = Encoding.UTF8.GetBytes("key-1"),
                     SignCount = 5,
@@ -1127,7 +1253,7 @@ namespace IdentityProvider.Test.Services
                 },
                 new B2BPasskeyCredential
                 {
-                    B2BSubject = "test-b2b-subject",
+                    B2BSubject = TestB2BSubject,
                     CredentialId = Encoding.UTF8.GetBytes("cred-2"),
                     PublicKey = Encoding.UTF8.GetBytes("key-2"),
                     SignCount = 3,
@@ -1141,7 +1267,7 @@ namespace IdentityProvider.Test.Services
             await _context.SaveChangesAsync();
 
             // Act
-            var result = await _service.GetCredentialsBySubjectAsync("test-b2b-subject");
+            var result = await _service.GetCredentialsBySubjectAsync(TestB2BSubject);
 
             // Assert
             Assert.NotNull(result);
@@ -1186,7 +1312,7 @@ namespace IdentityProvider.Test.Services
             var credentialId = Encoding.UTF8.GetBytes("delete-cred");
             var credential = new B2BPasskeyCredential
             {
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 CredentialId = credentialId,
                 PublicKey = Encoding.UTF8.GetBytes("key"),
                 SignCount = 0,
@@ -1198,7 +1324,7 @@ namespace IdentityProvider.Test.Services
             var credentialIdBase64 = WebEncoders.Base64UrlEncode(credentialId);
 
             // Act
-            var result = await _service.DeleteCredentialAsync("test-b2b-subject", credentialIdBase64);
+            var result = await _service.DeleteCredentialAsync(TestB2BSubject, credentialIdBase64);
 
             // Assert
             Assert.True(result);
@@ -1213,7 +1339,7 @@ namespace IdentityProvider.Test.Services
         public async Task DeleteCredentialAsync_NonExistingCredential_ShouldReturnFalse()
         {
             // Act
-            var result = await _service.DeleteCredentialAsync("test-b2b-subject", "non-existing-cred-id");
+            var result = await _service.DeleteCredentialAsync(TestB2BSubject, "non-existing-cred-id");
 
             // Assert
             Assert.False(result);
@@ -1238,7 +1364,7 @@ namespace IdentityProvider.Test.Services
             var credentialIdBase64 = WebEncoders.Base64UrlEncode(credentialId);
 
             // Act
-            var result = await _service.DeleteCredentialAsync("test-b2b-subject", credentialIdBase64);
+            var result = await _service.DeleteCredentialAsync(TestB2BSubject, credentialIdBase64);
 
             // Assert
             Assert.False(result);
@@ -1262,7 +1388,7 @@ namespace IdentityProvider.Test.Services
             {
                 new B2BPasskeyCredential
                 {
-                    B2BSubject = "test-b2b-subject",
+                    B2BSubject = TestB2BSubject,
                     CredentialId = Encoding.UTF8.GetBytes("count-cred-1"),
                     PublicKey = Encoding.UTF8.GetBytes("key-1"),
                     SignCount = 0,
@@ -1270,7 +1396,7 @@ namespace IdentityProvider.Test.Services
                 },
                 new B2BPasskeyCredential
                 {
-                    B2BSubject = "test-b2b-subject",
+                    B2BSubject = TestB2BSubject,
                     CredentialId = Encoding.UTF8.GetBytes("count-cred-2"),
                     PublicKey = Encoding.UTF8.GetBytes("key-2"),
                     SignCount = 0,
@@ -1278,7 +1404,7 @@ namespace IdentityProvider.Test.Services
                 },
                 new B2BPasskeyCredential
                 {
-                    B2BSubject = "test-b2b-subject",
+                    B2BSubject = TestB2BSubject,
                     CredentialId = Encoding.UTF8.GetBytes("count-cred-3"),
                     PublicKey = Encoding.UTF8.GetBytes("key-3"),
                     SignCount = 0,
@@ -1289,7 +1415,7 @@ namespace IdentityProvider.Test.Services
             await _context.SaveChangesAsync();
 
             // Act
-            var result = await _service.CountCredentialsBySubjectAsync("test-b2b-subject");
+            var result = await _service.CountCredentialsBySubjectAsync(TestB2BSubject);
 
             // Assert
             Assert.Equal(3, result);
@@ -1333,7 +1459,7 @@ namespace IdentityProvider.Test.Services
             {
                 credentials.Add(new B2BPasskeyCredential
                 {
-                    B2BSubject = "test-b2b-subject",
+                    B2BSubject = TestB2BSubject,
                     CredentialId = Encoding.UTF8.GetBytes($"credential-{i}"),
                     PublicKey = Encoding.UTF8.GetBytes($"key-{i}"),
                     SignCount = 0,
@@ -1344,7 +1470,7 @@ namespace IdentityProvider.Test.Services
             // ターゲットのクレデンシャル
             credentials.Add(new B2BPasskeyCredential
             {
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 CredentialId = targetCredentialId,
                 PublicKey = Encoding.UTF8.GetBytes("target-key"),
                 SignCount = 10,
@@ -1360,7 +1486,7 @@ namespace IdentityProvider.Test.Services
                 Challenge = "cGVyZi1jaGFsbGVuZ2U",
                 Type = "authentication",
                 UserType = "b2b",
-                Subject = "test-b2b-subject",
+                Subject = TestB2BSubject,
                 RpId = "shop.example.com",
                 ClientId = 1,
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
@@ -1409,7 +1535,7 @@ namespace IdentityProvider.Test.Services
 
             // Assert
             Assert.True(result.Success);
-            Assert.Equal("test-b2b-subject", result.B2BSubject);
+            Assert.Equal(TestB2BSubject, result.B2BSubject);
 
             // パフォーマンス検証: 100個のクレデンシャルでも高速に処理できること
             // （DB側でフィルタリングされるため、1秒以内に完了する想定）
@@ -1436,7 +1562,7 @@ namespace IdentityProvider.Test.Services
             {
                 credentials.Add(new B2BPasskeyCredential
                 {
-                    B2BSubject = "test-b2b-subject",
+                    B2BSubject = TestB2BSubject,
                     CredentialId = Encoding.UTF8.GetBytes($"delete-cred-{i}"),
                     PublicKey = Encoding.UTF8.GetBytes($"key-{i}"),
                     SignCount = 0,
@@ -1447,7 +1573,7 @@ namespace IdentityProvider.Test.Services
             // 削除対象のクレデンシャル
             credentials.Add(new B2BPasskeyCredential
             {
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 CredentialId = targetCredentialId,
                 PublicKey = Encoding.UTF8.GetBytes("target-key"),
                 SignCount = 0,
@@ -1461,7 +1587,7 @@ namespace IdentityProvider.Test.Services
 
             // Act: パフォーマンステスト（DB側でフィルタリングされることを期待）
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            var result = await _service.DeleteCredentialAsync("test-b2b-subject", credentialIdBase64);
+            var result = await _service.DeleteCredentialAsync(TestB2BSubject, credentialIdBase64);
             stopwatch.Stop();
 
             // Assert
@@ -1480,7 +1606,7 @@ namespace IdentityProvider.Test.Services
             // 他のクレデンシャルは削除されていないことを確認
             var remaining = await _context.B2BPasskeyCredentials
                 .IgnoreQueryFilters()
-                .CountAsync(c => c.B2BSubject == "test-b2b-subject");
+                .CountAsync(c => c.B2BSubject == TestB2BSubject);
             Assert.Equal(49, remaining);
         }
 
@@ -1516,7 +1642,7 @@ namespace IdentityProvider.Test.Services
             var user2 = new B2BUser
             {
                 Id = 2,
-                Subject = "user2-subject",
+                Subject = TestB2BSubject2,
                 ExternalId = "admin2@example.com",
                 UserType = "admin",
                 OrganizationId = 2,
@@ -1529,7 +1655,7 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id", // Organization 1
                 RpId = "shop.example.com",
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 DisplayName = "管理者1"
             };
 
@@ -1537,13 +1663,13 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "client2-id", // Organization 2
                 RpId = "shop2.example.com",
-                B2BSubject = "user2-subject",
+                B2BSubject = TestB2BSubject2,
                 DisplayName = "管理者2"
             };
 
-            _mockUserService.Setup(x => x.GetBySubjectAsync("test-b2b-subject"))
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
                 .ReturnsAsync(_testUser);
-            _mockUserService.Setup(x => x.GetBySubjectAsync("user2-subject"))
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject2))
                 .ReturnsAsync(user2);
 
             var challengeResult1 = new IWebAuthnChallengeService.ChallengeResult
@@ -1587,11 +1713,11 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = TestB2BSubject,
                 DisplayName = "テスト管理者"
             };
 
-            _mockUserService.Setup(x => x.GetBySubjectAsync("test-b2b-subject"))
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
                 .ReturnsAsync(_testUser);
 
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
@@ -1609,7 +1735,7 @@ namespace IdentityProvider.Test.Services
                 Rp = new PublicKeyCredentialRpEntity("shop.example.com", "テスト組織"),
                 User = new Fido2User
                 {
-                    Id = Encoding.UTF8.GetBytes("test-b2b-subject"),
+                    Id = Encoding.UTF8.GetBytes(TestB2BSubject),
                     Name = "admin@example.com",
                     DisplayName = "テスト管理者"
                 },

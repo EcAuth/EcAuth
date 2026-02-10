@@ -56,6 +56,17 @@ namespace IdentityProvider.Services
             if (string.IsNullOrWhiteSpace(request.B2BSubject))
                 throw new ArgumentException("B2BSubject is required", nameof(request));
 
+            // UUID 形式の検証・正規化（小文字ハイフン付き形式に統一）
+            if (!Guid.TryParse(request.B2BSubject, out var parsedB2BSubject))
+                throw new ArgumentException("B2BSubject must be a valid UUID format", nameof(request));
+            var b2bSubject = parsedB2BSubject.ToString();
+
+            // 文字列長の制限
+            if (request.DisplayName != null && request.DisplayName.Length > 128)
+                throw new ArgumentException("DisplayName must be 128 characters or less", nameof(request));
+            if (request.DeviceName != null && request.DeviceName.Length > 128)
+                throw new ArgumentException("DeviceName must be 128 characters or less", nameof(request));
+
             // クライアント取得
             var client = await _context.Clients
                 .IgnoreQueryFilters()
@@ -65,19 +76,58 @@ namespace IdentityProvider.Services
             if (client == null)
                 throw new InvalidOperationException($"Client not found: {request.ClientId}");
 
+            if (client.OrganizationId == null)
+                throw new InvalidOperationException($"Client has no associated Organization: {request.ClientId}");
+
             // RP ID検証（ドメイン名は大文字小文字を区別しない: RFC 4343）
             if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");
 
-            // B2Bユーザー取得
-            var user = await _userService.GetBySubjectAsync(request.B2BSubject);
+            // B2Bユーザー取得、存在しない場合は JIT プロビジョニング
+            var user = await _userService.GetBySubjectAsync(b2bSubject);
+            bool isProvisioned = false;
             if (user == null)
-                throw new InvalidOperationException($"B2BUser not found: {request.B2BSubject}");
+            {
+                try
+                {
+                    _logger.LogInformation(
+                        "JIT provisioning B2BUser: Subject={Subject}, OrganizationId={OrganizationId}, ClientId={ClientId}",
+                        b2bSubject, client.OrganizationId, request.ClientId);
+
+                    // ExternalId は JIT プロビジョニング時点では不明（EC-CUBE の login_id 等）。
+                    // パスキー登録後、必要に応じて UpdateAsync で設定する。
+                    // UserType は Phase 1 (MVP) では全 B2B ユーザーが "admin"。
+                    var createResult = await _userService.CreateAsync(new IB2BUserService.CreateUserRequest
+                    {
+                        Subject = b2bSubject,
+                        UserType = "admin",
+                        OrganizationId = client.OrganizationId.Value
+                    });
+                    user = createResult.User;
+                    isProvisioned = true;
+
+                    _logger.LogInformation(
+                        "JIT provisioned B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
+                        user.Subject, user.OrganizationId);
+                }
+                catch (DbUpdateException)
+                {
+                    // 並行リクエストで Subject の一意制約違反が発生した場合、再取得を試みる。
+                    // DbUpdateException は他の原因でも発生しうるが、再取得失敗時は
+                    // InvalidOperationException をスローするため実質的に安全。
+                    _logger.LogInformation(
+                        "B2BUser already created by concurrent request, re-fetching: Subject={Subject}",
+                        b2bSubject);
+                    user = await _userService.GetBySubjectAsync(b2bSubject);
+                    if (user == null)
+                        throw new InvalidOperationException($"Failed to create or retrieve B2BUser: {b2bSubject}");
+                }
+            }
 
             // 既存のクレデンシャルを取得（除外リスト用）
             var existingCredentials = await _context.B2BPasskeyCredentials
                 .IgnoreQueryFilters()
-                .Where(c => c.B2BSubject == request.B2BSubject)
+                .Where(c => c.B2BSubject == b2bSubject)
                 .Select(c => new PublicKeyCredentialDescriptor(c.CredentialId))
                 .ToListAsync();
 
@@ -87,7 +137,7 @@ namespace IdentityProvider.Services
                 {
                     Type = "registration",
                     UserType = "b2b",
-                    Subject = request.B2BSubject,
+                    Subject = b2bSubject,
                     RpId = rpId,
                     ClientId = client.Id
                 });
@@ -95,8 +145,8 @@ namespace IdentityProvider.Services
             // Fido2ユーザー作成
             var fido2User = new Fido2User
             {
-                Id = Encoding.UTF8.GetBytes(request.B2BSubject),
-                Name = user.ExternalId ?? request.B2BSubject,
+                Id = Encoding.UTF8.GetBytes(b2bSubject),
+                Name = user.ExternalId ?? b2bSubject,
                 DisplayName = request.DisplayName ?? user.ExternalId ?? "管理者"
             };
 
@@ -124,13 +174,14 @@ namespace IdentityProvider.Services
 
             _logger.LogInformation(
                 "Created registration options for B2BUser {Subject}, SessionId: {SessionId}",
-                request.B2BSubject,
+                b2bSubject,
                 challengeResult.SessionId);
 
             return new IB2BPasskeyService.RegistrationOptionsResult
             {
                 SessionId = challengeResult.SessionId,
-                Options = options
+                Options = options,
+                IsProvisioned = isProvisioned
             };
         }
 
@@ -295,14 +346,24 @@ namespace IdentityProvider.Services
             if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");
 
+            // B2BSubject の正規化（指定時のみ）
+            string? b2bSubject = null;
+            if (!string.IsNullOrWhiteSpace(request.B2BSubject))
+            {
+                if (Guid.TryParse(request.B2BSubject, out var parsedSubject))
+                    b2bSubject = parsedSubject.ToString();
+                else
+                    b2bSubject = request.B2BSubject;
+            }
+
             // 許可されるクレデンシャルを取得
             IQueryable<B2BPasskeyCredential> credentialQuery = _context.B2BPasskeyCredentials
                 .IgnoreQueryFilters();
 
-            if (!string.IsNullOrWhiteSpace(request.B2BSubject))
+            if (b2bSubject != null)
             {
                 // 特定ユーザーのクレデンシャルのみ
-                credentialQuery = credentialQuery.Where(c => c.B2BSubject == request.B2BSubject);
+                credentialQuery = credentialQuery.Where(c => c.B2BSubject == b2bSubject);
             }
             else
             {
@@ -329,7 +390,7 @@ namespace IdentityProvider.Services
                 {
                     Type = "authentication",
                     UserType = "b2b",
-                    Subject = request.B2BSubject,
+                    Subject = b2bSubject,
                     RpId = rpId,
                     ClientId = client.Id
                 });

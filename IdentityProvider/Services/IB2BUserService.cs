@@ -13,6 +13,11 @@ namespace IdentityProvider.Services
         public class CreateUserRequest
         {
             /// <summary>
+            /// Subject（UUID）- 指定された場合はそのまま使用、未指定の場合は自動生成
+            /// </summary>
+            public string? Subject { get; set; }
+
+            /// <summary>
             /// 外部ID（EC-CUBEのlogin_id等）
             /// </summary>
             public string? ExternalId { get; set; }
