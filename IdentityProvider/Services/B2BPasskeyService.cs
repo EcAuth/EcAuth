@@ -75,6 +75,9 @@ namespace IdentityProvider.Services
             if (client == null)
                 throw new InvalidOperationException($"Client not found: {request.ClientId}");
 
+            if (client.OrganizationId == null)
+                throw new InvalidOperationException($"Client has no associated Organization: {request.ClientId}");
+
             // RP ID検証（ドメイン名は大文字小文字を区別しない: RFC 4343）
             if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");
@@ -94,7 +97,7 @@ namespace IdentityProvider.Services
                     {
                         Subject = request.B2BSubject,
                         UserType = "admin",
-                        OrganizationId = client.OrganizationId!.Value
+                        OrganizationId = client.OrganizationId.Value
                     });
                     user = createResult.User;
                     isProvisioned = true;
