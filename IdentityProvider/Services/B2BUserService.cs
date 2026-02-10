@@ -24,8 +24,18 @@ namespace IdentityProvider.Services
             // 入力検証
             ValidateCreateRequest(request);
 
-            // Subject生成（UUID）
-            var subject = Guid.NewGuid().ToString();
+            // Subject生成（UUID）- 指定された場合はバリデーション後にそのまま使用
+            string subject;
+            if (!string.IsNullOrWhiteSpace(request.Subject))
+            {
+                if (!Guid.TryParse(request.Subject, out _))
+                    throw new ArgumentException("Subject は有効な UUID 形式である必要があります。", nameof(request));
+                subject = request.Subject;
+            }
+            else
+            {
+                subject = Guid.NewGuid().ToString();
+            }
             var now = DateTimeOffset.UtcNow;
 
             var user = new B2BUser

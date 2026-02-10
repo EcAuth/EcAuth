@@ -125,6 +125,65 @@ namespace IdentityProvider.Test.Services
             Assert.True(Guid.TryParse(result.User.Subject, out _), "SubjectはUUID形式である必要があります");
         }
 
+        [Fact]
+        public async Task CreateAsync_WithExplicitSubject_ShouldUseProvidedSubject()
+        {
+            // Arrange
+            var explicitSubject = "550e8400-e29b-41d4-a716-446655440099";
+            var request = new IB2BUserService.CreateUserRequest
+            {
+                Subject = explicitSubject,
+                UserType = "admin",
+                OrganizationId = 1
+            };
+
+            // Act
+            var result = await _service.CreateAsync(request);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal(explicitSubject, result.User.Subject);
+        }
+
+        [Fact]
+        public async Task CreateAsync_WithoutSubject_ShouldAutoGenerateUuid()
+        {
+            // Arrange
+            var request = new IB2BUserService.CreateUserRequest
+            {
+                Subject = null,
+                UserType = "admin",
+                OrganizationId = 1
+            };
+
+            // Act
+            var result = await _service.CreateAsync(request);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.True(Guid.TryParse(result.User.Subject, out _), "自動生成されたSubjectはUUID形式である必要があります");
+        }
+
+        [Theory]
+        [InlineData("not-a-uuid")]
+        [InlineData("12345")]
+        [InlineData("xyz-invalid")]
+        public async Task CreateAsync_InvalidUuidSubject_ShouldThrowArgumentException(string invalidSubject)
+        {
+            // Arrange
+            var request = new IB2BUserService.CreateUserRequest
+            {
+                Subject = invalidSubject,
+                UserType = "admin",
+                OrganizationId = 1
+            };
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+                _service.CreateAsync(request));
+            Assert.Contains("UUID", ex.Message);
+        }
+
         [Theory]
         [InlineData(0)]
         [InlineData(-1)]

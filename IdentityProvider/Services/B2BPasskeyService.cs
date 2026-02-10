@@ -56,6 +56,16 @@ namespace IdentityProvider.Services
             if (string.IsNullOrWhiteSpace(request.B2BSubject))
                 throw new ArgumentException("B2BSubject is required", nameof(request));
 
+            // UUID 形式の検証
+            if (!Guid.TryParse(request.B2BSubject, out _))
+                throw new ArgumentException("B2BSubject must be a valid UUID format", nameof(request));
+
+            // 文字列長の制限
+            if (request.DisplayName != null && request.DisplayName.Length > 128)
+                throw new ArgumentException("DisplayName must be 128 characters or less", nameof(request));
+            if (request.DeviceName != null && request.DeviceName.Length > 128)
+                throw new ArgumentException("DeviceName must be 128 characters or less", nameof(request));
+
             // クライアント取得
             var client = await _context.Clients
                 .IgnoreQueryFilters()
@@ -69,10 +79,41 @@ namespace IdentityProvider.Services
             if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");
 
-            // B2Bユーザー取得
+            // B2Bユーザー取得、存在しない場合は JIT プロビジョニング
             var user = await _userService.GetBySubjectAsync(request.B2BSubject);
+            bool isProvisioned = false;
             if (user == null)
-                throw new InvalidOperationException($"B2BUser not found: {request.B2BSubject}");
+            {
+                try
+                {
+                    _logger.LogInformation(
+                        "JIT provisioning B2BUser: Subject={Subject}, OrganizationId={OrganizationId}, ClientId={ClientId}",
+                        request.B2BSubject, client.OrganizationId, request.ClientId);
+
+                    var createResult = await _userService.CreateAsync(new IB2BUserService.CreateUserRequest
+                    {
+                        Subject = request.B2BSubject,
+                        UserType = "admin",
+                        OrganizationId = client.OrganizationId!.Value
+                    });
+                    user = createResult.User;
+                    isProvisioned = true;
+
+                    _logger.LogInformation(
+                        "JIT provisioned B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
+                        user.Subject, user.OrganizationId);
+                }
+                catch (DbUpdateException)
+                {
+                    // 並行リクエストで既に作成された場合、再取得
+                    _logger.LogInformation(
+                        "B2BUser already created by concurrent request, re-fetching: Subject={Subject}",
+                        request.B2BSubject);
+                    user = await _userService.GetBySubjectAsync(request.B2BSubject);
+                    if (user == null)
+                        throw new InvalidOperationException($"Failed to create or retrieve B2BUser: {request.B2BSubject}");
+                }
+            }
 
             // 既存のクレデンシャルを取得（除外リスト用）
             var existingCredentials = await _context.B2BPasskeyCredentials
@@ -130,7 +171,8 @@ namespace IdentityProvider.Services
             return new IB2BPasskeyService.RegistrationOptionsResult
             {
                 SessionId = challengeResult.SessionId,
-                Options = options
+                Options = options,
+                IsProvisioned = isProvisioned
             };
         }
 

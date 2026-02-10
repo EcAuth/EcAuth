@@ -170,7 +170,8 @@ namespace IdentityProvider.Controllers
                 return Ok(new
                 {
                     session_id = result.SessionId,
-                    options = result.Options
+                    options = result.Options,
+                    is_provisioned = result.IsProvisioned
                 });
             }
             catch (ArgumentException ex)
