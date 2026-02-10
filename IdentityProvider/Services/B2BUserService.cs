@@ -28,9 +28,9 @@ namespace IdentityProvider.Services
             string subject;
             if (!string.IsNullOrWhiteSpace(request.Subject))
             {
-                if (!Guid.TryParse(request.Subject, out _))
+                if (!Guid.TryParse(request.Subject, out var parsedGuid))
                     throw new ArgumentException("Subject は有効な UUID 形式である必要があります。", nameof(request));
-                subject = request.Subject;
+                subject = parsedGuid.ToString();
             }
             else
             {
