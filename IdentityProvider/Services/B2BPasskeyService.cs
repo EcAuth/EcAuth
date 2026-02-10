@@ -94,6 +94,9 @@ namespace IdentityProvider.Services
                         "JIT provisioning B2BUser: Subject={Subject}, OrganizationId={OrganizationId}, ClientId={ClientId}",
                         b2bSubject, client.OrganizationId, request.ClientId);
 
+                    // ExternalId は JIT プロビジョニング時点では不明（EC-CUBE の login_id 等）。
+                    // パスキー登録後、必要に応じて UpdateAsync で設定する。
+                    // UserType は Phase 1 (MVP) では全 B2B ユーザーが "admin"。
                     var createResult = await _userService.CreateAsync(new IB2BUserService.CreateUserRequest
                     {
                         Subject = b2bSubject,
@@ -109,7 +112,9 @@ namespace IdentityProvider.Services
                 }
                 catch (DbUpdateException)
                 {
-                    // 並行リクエストで既に作成された場合、再取得
+                    // 並行リクエストで Subject の一意制約違反が発生した場合、再取得を試みる。
+                    // DbUpdateException は他の原因でも発生しうるが、再取得失敗時は
+                    // InvalidOperationException をスローするため実質的に安全。
                     _logger.LogInformation(
                         "B2BUser already created by concurrent request, re-fetching: Subject={Subject}",
                         b2bSubject);

@@ -144,6 +144,8 @@ namespace IdentityProvider.Models
                 .HasQueryFilter(wc => wc.Client != null && wc.Client.Organization != null && wc.Client.Organization.TenantName == _tenantService.TenantName);
 
             // B2BUser 関連の設定
+            // Subject（UUID）はグローバルに一意。EC-CUBEプラグインが生成するUUIDをそのまま使用するため、
+            // Organization をまたいでも衝突しない設計。Subject のみでユーザーを特定可能にしている。
             modelBuilder.Entity<B2BUser>()
                 .HasAlternateKey(u => u.Subject);
 
