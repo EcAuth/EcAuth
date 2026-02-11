@@ -18,7 +18,8 @@ namespace IdentityProvider.Models
 
         [Column("external_id")]
         [MaxLength(255)]
-        public string? ExternalId { get; set; }
+        [Required]
+        public string ExternalId { get; set; } = string.Empty;
 
         [Column("user_type")]
         [MaxLength(50)]

@@ -58,6 +58,8 @@ namespace IdentityProvider.Controllers
             public string? DisplayName { get; set; }
             [JsonPropertyName("device_name")]
             public string? DeviceName { get; set; }
+            [JsonPropertyName("external_id")]
+            public string ExternalId { get; set; } = string.Empty;
         }
 
         /// <summary>
@@ -141,6 +143,15 @@ namespace IdentityProvider.Controllers
                     });
                 }
 
+                if (string.IsNullOrWhiteSpace(request.ExternalId))
+                {
+                    return BadRequest(new
+                    {
+                        error = "invalid_request",
+                        error_description = "external_id は必須です。"
+                    });
+                }
+
                 // クライアント認証
                 var client = await AuthenticateClientAsync(request.ClientId, request.ClientSecret);
                 if (client == null)
@@ -160,7 +171,8 @@ namespace IdentityProvider.Controllers
                     RpId = request.RpId,
                     B2BSubject = request.B2BSubject,
                     DisplayName = request.DisplayName,
-                    DeviceName = request.DeviceName
+                    DeviceName = request.DeviceName,
+                    ExternalId = request.ExternalId
                 };
 
                 var result = await _passkeyService.CreateRegistrationOptionsAsync(serviceRequest);

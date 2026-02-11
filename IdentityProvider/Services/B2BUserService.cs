@@ -200,6 +200,11 @@ namespace IdentityProvider.Services
             {
                 throw new ArgumentException("UserType は必須です。", nameof(request));
             }
+
+            if (string.IsNullOrWhiteSpace(request.ExternalId))
+            {
+                throw new ArgumentException("ExternalId は必須です。", nameof(request));
+            }
         }
     }
 }

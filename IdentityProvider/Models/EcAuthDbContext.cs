@@ -165,8 +165,7 @@ namespace IdentityProvider.Models
 
             modelBuilder.Entity<B2BUser>()
                 .HasIndex(u => new { u.OrganizationId, u.ExternalId })
-                .IsUnique()
-                .HasFilter("[external_id] IS NOT NULL");
+                .IsUnique();
 
             // B2BPasskeyCredential 関連の設定
             modelBuilder.Entity<B2BPasskeyCredential>()

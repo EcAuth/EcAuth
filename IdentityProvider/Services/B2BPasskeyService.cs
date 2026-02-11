@@ -55,6 +55,10 @@ namespace IdentityProvider.Services
             var rpId = request.RpId.ToLowerInvariant();
             if (string.IsNullOrWhiteSpace(request.B2BSubject))
                 throw new ArgumentException("B2BSubject is required", nameof(request));
+            if (string.IsNullOrWhiteSpace(request.ExternalId))
+                throw new ArgumentException("ExternalId is required", nameof(request));
+            if (request.ExternalId.Length > 255)
+                throw new ArgumentException("ExternalId must be 255 characters or less", nameof(request));
 
             // UUID 形式の検証・正規化（小文字ハイフン付き形式に統一）
             if (!Guid.TryParse(request.B2BSubject, out var parsedB2BSubject))
@@ -88,18 +92,28 @@ namespace IdentityProvider.Services
             bool isProvisioned = false;
             if (user == null)
             {
+                // ExternalId で既存ユーザーを検索（EC-CUBEプラグイン再インストール時の復旧）
+                user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
+                if (user != null)
+                {
+                    _logger.LogInformation(
+                        "Found existing B2BUser by ExternalId: ExternalId={ExternalId}, Subject={Subject}",
+                        request.ExternalId, user.Subject);
+                }
+            }
+
+            if (user == null)
+            {
                 try
                 {
                     _logger.LogInformation(
-                        "JIT provisioning B2BUser: Subject={Subject}, OrganizationId={OrganizationId}, ClientId={ClientId}",
-                        b2bSubject, client.OrganizationId, request.ClientId);
+                        "JIT provisioning B2BUser: Subject={Subject}, ExternalId={ExternalId}, OrganizationId={OrganizationId}",
+                        b2bSubject, request.ExternalId, client.OrganizationId);
 
-                    // ExternalId は JIT プロビジョニング時点では不明（EC-CUBE の login_id 等）。
-                    // パスキー登録後、必要に応じて UpdateAsync で設定する。
-                    // UserType は Phase 1 (MVP) では全 B2B ユーザーが "admin"。
                     var createResult = await _userService.CreateAsync(new IB2BUserService.CreateUserRequest
                     {
                         Subject = b2bSubject,
+                        ExternalId = request.ExternalId,
                         UserType = "admin",
                         OrganizationId = client.OrganizationId.Value
                     });
@@ -112,22 +126,26 @@ namespace IdentityProvider.Services
                 }
                 catch (DbUpdateException)
                 {
-                    // 並行リクエストで Subject の一意制約違反が発生した場合、再取得を試みる。
-                    // DbUpdateException は他の原因でも発生しうるが、再取得失敗時は
-                    // InvalidOperationException をスローするため実質的に安全。
+                    // 並行リクエストで Subject または ExternalId の一意制約違反が発生した場合、再取得を試みる。
                     _logger.LogInformation(
                         "B2BUser already created by concurrent request, re-fetching: Subject={Subject}",
                         b2bSubject);
                     user = await _userService.GetBySubjectAsync(b2bSubject);
                     if (user == null)
+                        user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
+                    if (user == null)
                         throw new InvalidOperationException($"Failed to create or retrieve B2BUser: {b2bSubject}");
                 }
             }
 
+            // ExternalId で既存ユーザーが見つかった場合、Subject が異なる可能性がある
+            // 以降の処理は解決済みの Subject を使用する
+            var resolvedSubject = user.Subject;
+
             // 既存のクレデンシャルを取得（除外リスト用）
             var existingCredentials = await _context.B2BPasskeyCredentials
                 .IgnoreQueryFilters()
-                .Where(c => c.B2BSubject == b2bSubject)
+                .Where(c => c.B2BSubject == resolvedSubject)
                 .Select(c => new PublicKeyCredentialDescriptor(c.CredentialId))
                 .ToListAsync();
 
@@ -137,7 +155,7 @@ namespace IdentityProvider.Services
                 {
                     Type = "registration",
                     UserType = "b2b",
-                    Subject = b2bSubject,
+                    Subject = resolvedSubject,
                     RpId = rpId,
                     ClientId = client.Id
                 });
@@ -145,8 +163,8 @@ namespace IdentityProvider.Services
             // Fido2ユーザー作成
             var fido2User = new Fido2User
             {
-                Id = Encoding.UTF8.GetBytes(b2bSubject),
-                Name = user.ExternalId ?? b2bSubject,
+                Id = Encoding.UTF8.GetBytes(resolvedSubject),
+                Name = user.ExternalId ?? resolvedSubject,
                 DisplayName = request.DisplayName ?? user.ExternalId ?? "管理者"
             };
 
@@ -174,7 +192,7 @@ namespace IdentityProvider.Services
 
             _logger.LogInformation(
                 "Created registration options for B2BUser {Subject}, SessionId: {SessionId}",
-                b2bSubject,
+                resolvedSubject,
                 challengeResult.SessionId);
 
             return new IB2BPasskeyService.RegistrationOptionsResult

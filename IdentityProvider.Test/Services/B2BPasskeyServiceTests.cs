@@ -93,7 +93,8 @@ namespace IdentityProvider.Test.Services
                 RpId = "shop.example.com",
                 B2BSubject = TestB2BSubject,
                 DisplayName = "テスト管理者",
-                DeviceName = "MacBook Pro"
+                DeviceName = "MacBook Pro",
+                ExternalId = "admin@example.com"
             };
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
@@ -142,7 +143,8 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = clientId,
                 RpId = "shop.example.com",
-                B2BSubject = TestB2BSubject
+                B2BSubject = TestB2BSubject,
+                ExternalId = "test-admin"
             };
 
             // Act & Assert
@@ -161,7 +163,8 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = rpId,
-                B2BSubject = TestB2BSubject
+                B2BSubject = TestB2BSubject,
+                ExternalId = "test-admin"
             };
 
             // Act & Assert
@@ -180,7 +183,8 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
-                B2BSubject = subject
+                B2BSubject = subject,
+                ExternalId = "test-admin"
             };
 
             // Act & Assert
@@ -197,7 +201,8 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "non-existing-client",
                 RpId = "shop.example.com",
-                B2BSubject = TestB2BSubject
+                B2BSubject = TestB2BSubject,
+                ExternalId = "test-admin"
             };
 
             // Act & Assert
@@ -216,10 +221,13 @@ namespace IdentityProvider.Test.Services
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
                 B2BSubject = newSubject,
-                DisplayName = "新規管理者"
+                DisplayName = "新規管理者",
+                ExternalId = "new-admin@example.com"
             };
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(newSubject))
+                .ReturnsAsync((B2BUser?)null);
+            _mockUserService.Setup(x => x.GetByExternalIdAsync("new-admin@example.com", 1))
                 .ReturnsAsync((B2BUser?)null);
 
             var provisionedUser = new B2BUser
@@ -254,7 +262,8 @@ namespace IdentityProvider.Test.Services
             _mockUserService.Verify(x => x.CreateAsync(It.Is<IB2BUserService.CreateUserRequest>(r =>
                 r.Subject == newSubject &&
                 r.UserType == "admin" &&
-                r.OrganizationId == 1
+                r.OrganizationId == 1 &&
+                r.ExternalId == "new-admin@example.com"
             )), Times.Once);
         }
 
@@ -267,7 +276,8 @@ namespace IdentityProvider.Test.Services
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
                 B2BSubject = TestB2BSubject,
-                DisplayName = "テスト管理者"
+                DisplayName = "テスト管理者",
+                ExternalId = "admin@example.com"
             };
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
@@ -304,7 +314,8 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
-                B2BSubject = invalidSubject
+                B2BSubject = invalidSubject,
+                ExternalId = "test-admin"
             };
 
             // Act & Assert
@@ -322,7 +333,8 @@ namespace IdentityProvider.Test.Services
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
                 B2BSubject = TestB2BSubject,
-                DisplayName = new string('a', 129)
+                DisplayName = new string('a', 129),
+                ExternalId = "test-admin"
             };
 
             // Act & Assert
@@ -340,7 +352,8 @@ namespace IdentityProvider.Test.Services
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
                 B2BSubject = TestB2BSubject,
-                DeviceName = new string('a', 129)
+                DeviceName = new string('a', 129),
+                ExternalId = "test-admin"
             };
 
             // Act & Assert
@@ -357,7 +370,8 @@ namespace IdentityProvider.Test.Services
             {
                 ClientId = "test-client-id",
                 RpId = "unauthorized.example.com", // AllowedRpIdsに含まれない
-                B2BSubject = TestB2BSubject
+                B2BSubject = TestB2BSubject,
+                ExternalId = "test-admin"
             };
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
@@ -380,7 +394,8 @@ namespace IdentityProvider.Test.Services
                 RpId = "Shop.Example.COM",
                 B2BSubject = TestB2BSubject,
                 DisplayName = "テスト管理者",
-                DeviceName = "MacBook Pro"
+                DeviceName = "MacBook Pro",
+                ExternalId = "test-admin"
             };
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
@@ -421,7 +436,8 @@ namespace IdentityProvider.Test.Services
                 RpId = mixedCaseRpId,
                 B2BSubject = TestB2BSubject,
                 DisplayName = "テスト管理者",
-                DeviceName = "E2E Test Device"
+                DeviceName = "E2E Test Device",
+                ExternalId = "test-admin"
             };
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
@@ -448,6 +464,89 @@ namespace IdentityProvider.Test.Services
             // チャレンジに保存されるRP IDも小文字であること
             Assert.NotNull(capturedChallengeRequest);
             Assert.Equal(expectedLowercaseRpId, capturedChallengeRequest.RpId);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_UserFoundByExternalId_ShouldNotProvisionNewUser()
+        {
+            // Arrange: Subject では見つからないが、ExternalId で既存ユーザーが見つかるケース
+            // （EC-CUBEプラグイン再インストール時の復旧シナリオ）
+            var newSubject = "770e8400-e29b-41d4-a716-446655440099";
+            var existingSubject = TestB2BSubject;
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = newSubject,
+                ExternalId = "admin@example.com",
+                DisplayName = "管理者"
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(newSubject))
+                .ReturnsAsync((B2BUser?)null);
+            _mockUserService.Setup(x => x.GetByExternalIdAsync("admin@example.com", 1))
+                .ReturnsAsync(_testUser);
+
+            IWebAuthnChallengeService.ChallengeRequest? capturedChallengeRequest = null;
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "session-external-id",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .Callback<IWebAuthnChallengeService.ChallengeRequest>(req => capturedChallengeRequest = req)
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.False(result.IsProvisioned);
+
+            // CreateAsync は呼ばれないこと
+            _mockUserService.Verify(x => x.CreateAsync(It.IsAny<IB2BUserService.CreateUserRequest>()), Times.Never);
+
+            // resolvedSubject（既存ユーザーのSubject）がチャレンジに使われること
+            Assert.NotNull(capturedChallengeRequest);
+            Assert.Equal(existingSubject, capturedChallengeRequest.Subject);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_MissingExternalId_ShouldThrowArgumentException()
+        {
+            // Arrange
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = ""
+            };
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+            Assert.Contains("ExternalId", ex.Message);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_ExternalIdTooLong_ShouldThrowArgumentException()
+        {
+            // Arrange
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = new string('a', 256)
+            };
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+            Assert.Contains("ExternalId", ex.Message);
         }
 
         #endregion
@@ -1656,7 +1755,8 @@ namespace IdentityProvider.Test.Services
                 ClientId = "test-client-id", // Organization 1
                 RpId = "shop.example.com",
                 B2BSubject = TestB2BSubject,
-                DisplayName = "管理者1"
+                DisplayName = "管理者1",
+                ExternalId = "admin@example.com"
             };
 
             var request2 = new IB2BPasskeyService.RegistrationOptionsRequest
@@ -1664,7 +1764,8 @@ namespace IdentityProvider.Test.Services
                 ClientId = "client2-id", // Organization 2
                 RpId = "shop2.example.com",
                 B2BSubject = TestB2BSubject2,
-                DisplayName = "管理者2"
+                DisplayName = "管理者2",
+                ExternalId = "admin2@example.com"
             };
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
@@ -1714,7 +1815,8 @@ namespace IdentityProvider.Test.Services
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
                 B2BSubject = TestB2BSubject,
-                DisplayName = "テスト管理者"
+                DisplayName = "テスト管理者",
+                ExternalId = "admin@example.com"
             };
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
