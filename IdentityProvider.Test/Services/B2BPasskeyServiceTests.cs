@@ -540,7 +540,7 @@ namespace IdentityProvider.Test.Services
                 ClientId = "test-client-id",
                 RpId = "shop.example.com",
                 B2BSubject = TestB2BSubject,
-                ExternalId = new string('a', 256)
+                ExternalId = new string('a', B2BUser.ExternalIdMaxLength + 1)
             };
 
             // Act & Assert

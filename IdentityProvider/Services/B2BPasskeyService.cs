@@ -57,8 +57,8 @@ namespace IdentityProvider.Services
                 throw new ArgumentException("B2BSubject is required", nameof(request));
             if (string.IsNullOrWhiteSpace(request.ExternalId))
                 throw new ArgumentException("ExternalId is required", nameof(request));
-            if (request.ExternalId.Length > 255)
-                throw new ArgumentException("ExternalId must be 255 characters or less", nameof(request));
+            if (request.ExternalId.Length > B2BUser.ExternalIdMaxLength)
+                throw new ArgumentException($"ExternalId must be {B2BUser.ExternalIdMaxLength} characters or less", nameof(request));
 
             // UUID 形式の検証・正規化（小文字ハイフン付き形式に統一）
             if (!Guid.TryParse(request.B2BSubject, out var parsedB2BSubject))

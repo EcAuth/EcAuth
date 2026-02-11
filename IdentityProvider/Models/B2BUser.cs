@@ -6,6 +6,8 @@ namespace IdentityProvider.Models
     [Table("b2b_user")]
     public class B2BUser : ISubjectProvider
     {
+        public const int ExternalIdMaxLength = 255;
+
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
         [Column("id")]
@@ -17,7 +19,7 @@ namespace IdentityProvider.Models
         public string Subject { get; set; } = string.Empty;
 
         [Column("external_id")]
-        [MaxLength(255)]
+        [MaxLength(ExternalIdMaxLength)]
         [Required]
         public string ExternalId { get; set; } = string.Empty;
 
