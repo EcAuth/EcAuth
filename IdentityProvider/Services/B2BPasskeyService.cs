@@ -164,8 +164,8 @@ namespace IdentityProvider.Services
             var fido2User = new Fido2User
             {
                 Id = Encoding.UTF8.GetBytes(resolvedSubject),
-                Name = user.ExternalId ?? resolvedSubject,
-                DisplayName = request.DisplayName ?? user.ExternalId ?? "管理者"
+                Name = user.ExternalId,
+                DisplayName = request.DisplayName ?? user.ExternalId
             };
 
             // 認証器選択オプション
