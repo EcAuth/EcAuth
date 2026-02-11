@@ -14,6 +14,16 @@ namespace IdentityProvider.Migrations
                 name: "IX_b2b_user_organization_id_external_id",
                 table: "b2b_user");
 
+            // 既存の NULL データを空文字列に変換（NOT NULL 制約追加前に実行）
+            migrationBuilder.Sql(@"
+                IF EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'dbo.b2b_user')
+                           AND name = 'external_id')
+                BEGIN
+                    EXEC('UPDATE dbo.b2b_user SET external_id = '''' WHERE external_id IS NULL')
+                END
+            ");
+
             migrationBuilder.AlterColumn<string>(
                 name: "external_id",
                 table: "b2b_user",
