@@ -18,9 +18,9 @@ namespace IdentityProvider.Services
             public string? Subject { get; set; }
 
             /// <summary>
-            /// 外部ID（EC-CUBEのlogin_id等）
+            /// 外部ID（EC-CUBEのlogin_id等）- 必須
             /// </summary>
-            public string? ExternalId { get; set; }
+            public string ExternalId { get; set; } = string.Empty;
 
             /// <summary>
             /// ユーザータイプ（"admin", "staff" 等）

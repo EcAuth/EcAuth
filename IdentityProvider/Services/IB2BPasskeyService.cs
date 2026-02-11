@@ -40,6 +40,11 @@ namespace IdentityProvider.Services
             /// デバイス名（"MacBook Pro", "iPhone" 等）
             /// </summary>
             public string? DeviceName { get; set; }
+
+            /// <summary>
+            /// 外部ID（EC-CUBEのlogin_id等）- 必須
+            /// </summary>
+            public string ExternalId { get; set; } = string.Empty;
         }
 
         /// <summary>

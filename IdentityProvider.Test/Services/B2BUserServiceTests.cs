@@ -67,38 +67,36 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
-        public async Task CreateAsync_WithoutExternalId_ShouldCreateUser()
+        public async Task CreateAsync_WithoutExternalId_ShouldThrowArgumentException()
         {
             // Arrange
             var request = new IB2BUserService.CreateUserRequest
             {
-                ExternalId = null,
+                ExternalId = "",
                 UserType = "staff",
                 OrganizationId = 1
             };
 
-            // Act
-            var result = await _service.CreateAsync(request);
-
-            // Assert
-            Assert.NotNull(result);
-            Assert.Null(result.User.ExternalId);
-            Assert.Equal("staff", result.User.UserType);
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+                _service.CreateAsync(request));
+            Assert.Contains("ExternalId", ex.Message);
         }
 
         [Fact]
         public async Task CreateAsync_ShouldGenerateUniqueSubject()
         {
-            // Arrange
-            var request = new IB2BUserService.CreateUserRequest
+            // Arrange - each request needs a unique ExternalId
+            var requests = Enumerable.Range(0, 5).Select(i => new IB2BUserService.CreateUserRequest
             {
+                ExternalId = $"unique-admin-{i}",
                 UserType = "admin",
                 OrganizationId = 1
-            };
+            }).ToList();
 
             // Act
             var subjects = new HashSet<string>();
-            for (int i = 0; i < 5; i++)
+            foreach (var request in requests)
             {
                 var result = await _service.CreateAsync(request);
                 Assert.True(subjects.Add(result.User.Subject), "重複したSubjectが生成されました");
@@ -114,6 +112,7 @@ namespace IdentityProvider.Test.Services
             // Arrange
             var request = new IB2BUserService.CreateUserRequest
             {
+                ExternalId = "uuid-test-admin",
                 UserType = "admin",
                 OrganizationId = 1
             };
@@ -133,6 +132,7 @@ namespace IdentityProvider.Test.Services
             var request = new IB2BUserService.CreateUserRequest
             {
                 Subject = explicitSubject,
+                ExternalId = "explicit-subject-admin",
                 UserType = "admin",
                 OrganizationId = 1
             };
@@ -152,6 +152,7 @@ namespace IdentityProvider.Test.Services
             var request = new IB2BUserService.CreateUserRequest
             {
                 Subject = null,
+                ExternalId = "auto-uuid-admin",
                 UserType = "admin",
                 OrganizationId = 1
             };
@@ -174,6 +175,7 @@ namespace IdentityProvider.Test.Services
             var request = new IB2BUserService.CreateUserRequest
             {
                 Subject = invalidSubject,
+                ExternalId = "invalid-uuid-admin",
                 UserType = "admin",
                 OrganizationId = 1
             };
@@ -192,6 +194,7 @@ namespace IdentityProvider.Test.Services
             // Arrange
             var request = new IB2BUserService.CreateUserRequest
             {
+                ExternalId = "invalid-org-admin",
                 UserType = "admin",
                 OrganizationId = organizationId
             };
@@ -210,6 +213,7 @@ namespace IdentityProvider.Test.Services
             // Arrange
             var request = new IB2BUserService.CreateUserRequest
             {
+                ExternalId = "empty-usertype-admin",
                 UserType = userType,
                 OrganizationId = 1
             };

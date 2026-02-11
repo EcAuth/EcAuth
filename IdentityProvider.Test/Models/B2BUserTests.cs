@@ -11,7 +11,7 @@ namespace IdentityProvider.Test.Models
 
             Assert.Equal(0, user.Id);
             Assert.Equal(string.Empty, user.Subject);
-            Assert.Null(user.ExternalId);
+            Assert.Equal(string.Empty, user.ExternalId);
             Assert.Equal("admin", user.UserType);
             Assert.Equal(0, user.OrganizationId);
             Assert.True(user.CreatedAt <= DateTimeOffset.UtcNow);

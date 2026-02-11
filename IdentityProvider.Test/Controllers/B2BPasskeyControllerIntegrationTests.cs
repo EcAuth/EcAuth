@@ -160,6 +160,7 @@ namespace IdentityProvider.Test.Controllers
                 ClientSecret = _client.ClientSecret!,
                 RpId = "shop.example.com",
                 B2BSubject = testUser.Subject,
+                ExternalId = "admin@example.com",
                 DisplayName = "テスト管理者",
                 DeviceName = "MacBook Pro"
             };
@@ -260,6 +261,7 @@ namespace IdentityProvider.Test.Controllers
                 ClientSecret = _client.ClientSecret!,
                 RpId = "unauthorized.example.com", // AllowedRpIdsに含まれない
                 B2BSubject = testUser.Subject,
+                ExternalId = "admin2@example.com",
                 DisplayName = "テスト管理者"
             };
 
@@ -333,6 +335,7 @@ namespace IdentityProvider.Test.Controllers
                 ClientSecret = "wrong-secret", // 誤ったシークレット
                 RpId = "shop.example.com",
                 B2BSubject = testUser.Subject,
+                ExternalId = "authfail@example.com",
                 DisplayName = "テスト管理者"
             };
 
@@ -1126,6 +1129,7 @@ namespace IdentityProvider.Test.Controllers
                 ClientSecret = _client.ClientSecret!,
                 RpId = "shop.example.com",
                 B2BSubject = user.Subject,
+                ExternalId = user.ExternalId,
                 DisplayName = "テスト管理者",
                 DeviceName = deviceName
             };
