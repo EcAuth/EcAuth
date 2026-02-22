@@ -81,7 +81,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("Token")
                         .IsUnique();
 
-                    b.ToTable("access_token");
+                    b.ToTable("access_token", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.Account", b =>
@@ -113,7 +113,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("account");
+                    b.ToTable("account", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.AuthorizationCode", b =>
@@ -175,7 +175,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("ExpiresAt");
 
-                    b.ToTable("authorization_code");
+                    b.ToTable("authorization_code", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.B2BPasskeyCredential", b =>
@@ -236,7 +236,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("CredentialId")
                         .IsUnique();
 
-                    b.ToTable("b2b_passkey_credential");
+                    b.ToTable("b2b_passkey_credential", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.B2BUser", b =>
@@ -283,7 +283,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("OrganizationId", "ExternalId")
                         .IsUnique();
 
-                    b.ToTable("b2b_user");
+                    b.ToTable("b2b_user", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.Client", b =>
@@ -336,7 +336,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("OrganizationId");
 
-                    b.ToTable("client");
+                    b.ToTable("client", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.EcAuthUser", b =>
@@ -380,7 +380,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("OrganizationId", "EmailHash")
                         .IsUnique();
 
-                    b.ToTable("ecauth_user");
+                    b.ToTable("ecauth_user", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.ExternalIdpMapping", b =>
@@ -421,7 +421,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("ExternalProvider", "ExternalSubject")
                         .IsUnique();
 
-                    b.ToTable("external_idp_mapping");
+                    b.ToTable("external_idp_mapping", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.ExternalIdpToken", b =>
@@ -475,7 +475,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("EcAuthSubject", "ExternalProvider")
                         .IsUnique();
 
-                    b.ToTable("external_idp_token");
+                    b.ToTable("external_idp_token", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.OpenIdProvider", b =>
@@ -542,7 +542,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("ClientId");
 
-                    b.ToTable("open_id_provider");
+                    b.ToTable("open_id_provider", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.OpenIdProviderScope", b =>
@@ -579,7 +579,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("OpenIdProviderId");
 
-                    b.ToTable("open_id_provider_scope");
+                    b.ToTable("open_id_provider_scope", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.Organization", b =>
@@ -619,7 +619,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("organization");
+                    b.ToTable("organization", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.RedirectUri", b =>
@@ -652,7 +652,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("ClientId");
 
-                    b.ToTable("redirect_uri");
+                    b.ToTable("redirect_uri", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.RsaKeyPair", b =>
@@ -683,7 +683,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("ClientId")
                         .IsUnique();
 
-                    b.ToTable("rsa_key_pair");
+                    b.ToTable("rsa_key_pair", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.WebAuthnChallenge", b =>
@@ -750,7 +750,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("SessionId")
                         .IsUnique();
 
-                    b.ToTable("webauthn_challenge");
+                    b.ToTable("webauthn_challenge", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.AccessToken", b =>

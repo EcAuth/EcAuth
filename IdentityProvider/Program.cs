@@ -25,6 +25,7 @@ builder.Services.AddScoped<IB2BUserService, B2BUserService>();
 builder.Services.AddScoped<IB2BPasskeyService, B2BPasskeyService>();
 
 // データベース初期化（シーダー）
+builder.Services.AddScoped<IDbSeeder, OrganizationClientSeeder>();
 builder.Services.AddScoped<IDbSeeder, B2BPasskeySeeder>();
 builder.Services.AddScoped<DbInitializer>();
 // Fido2.NetLib設定（動的RP IDに対応するためリクエストごとに設定を変更する必要あり）
