@@ -265,7 +265,7 @@ public class OrganizationClientSeeder : IDbSeeder
             AuthorizationEndpoint = authorizationEndpoint,
             TokenEndpoint = tokenEndpoint,
             UserinfoEndpoint = userinfoEndpoint,
-            ClientId = client.Id
+            Client = client
         });
 
         logger.LogInformation("Created OpenIdProvider {Name} for client {ClientId}",
