@@ -20,6 +20,14 @@ namespace IdentityProvider.Migrations
                 oldClrType: typeof(string),
                 oldType: "nvarchar(max)");
 
+            // ユニークインデックス作成前に重複する client_id を持つレコードを削除（最小 id を残す）
+            migrationBuilder.Sql(@"
+                DELETE FROM dbo.client
+                WHERE id NOT IN (
+                    SELECT MIN(id) FROM dbo.client GROUP BY client_id
+                )
+            ");
+
             migrationBuilder.CreateIndex(
                 name: "IX_client_client_id",
                 table: "client",
