@@ -184,9 +184,9 @@ jobs:
 
   deploy:
     needs: [build, migrate]
+    # push イベント時は inputs.dry_run が undefined になるため || false でフォールバック
     if: |
       always() &&
-      # push イベント時は inputs.dry_run が undefined になるため || false でフォールバック
       (inputs.dry_run || false) != true &&
       needs.build.result == 'success' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
@@ -238,10 +238,10 @@ jobs:
 
   verify:
     needs: deploy
+    # push イベント時は inputs.dry_run が undefined になるため || false でフォールバック
     if: |
       always() &&
       needs.deploy.result == 'success' &&
-      # push イベント時は inputs.dry_run が undefined になるため || false でフォールバック
       (inputs.dry_run || false) != true
     runs-on: ubuntu-latest
     environment:
