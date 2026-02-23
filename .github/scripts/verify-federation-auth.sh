@@ -82,7 +82,8 @@ main() {
 
   # Step 1: EcAuth 認可エンドポイント
   log_step "Step 1: EcAuth 認可エンドポイント"
-  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=staging-mockidp&state=test123" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+  PROVIDER_NAME="${MOCK_IDP_PROVIDER_NAME:-staging-mockidp}"
+  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=${PROVIDER_NAME}&state=test123" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
 
   if [ -z "$MOCKIDP_URL" ]; then
     log_error "Failed to get MockIdP redirect URL"
