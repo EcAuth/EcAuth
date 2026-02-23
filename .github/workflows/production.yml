@@ -13,10 +13,10 @@ on:
           - migrate-only
         default: 'migrate-and-deploy'
       dry_run:
-        description: 'Dry run (generate migration script only)'
+        description: 'Dry run (generate migration script only, skip deploy and verify)'
         required: false
         type: boolean
-        default: false
+        default: true
 
 env:
   DOTNET_VERSION: '9.0.x'
@@ -196,6 +196,7 @@ jobs:
     needs: [build, migrate]
     if: |
       always() &&
+      inputs.dry_run != true &&
       needs.build.result == 'success' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
     runs-on: ubuntu-latest
