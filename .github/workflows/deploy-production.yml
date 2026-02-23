@@ -1,0 +1,195 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_PACKAGE_PATH: ./publish
+  DOTNET_VERSION: '9.0.x'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Add GitHub Packages source with credentials
+        run: |
+          dotnet nuget remove source github || true
+          dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
+            --name github \
+            --username ${{ github.actor }} \
+            --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+            --store-password-in-clear-text
+
+      - name: Restore dependencies
+        run: dotnet restore IdentityProvider/IdentityProvider.csproj
+
+      - name: Build
+        run: dotnet build IdentityProvider/IdentityProvider.csproj --configuration Release --no-restore
+
+      - name: Publish
+        run: dotnet publish IdentityProvider/IdentityProvider.csproj --configuration Release --no-build --output ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: webapp
+          path: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: production
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: webapp
+          path: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ecauth-prod-${{ secrets.WEB_APP_SUFFIX }}
+          package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+
+      - name: Health check
+        env:
+          HEALTH_CHECK_URL: https://ecauth-prod-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net/healthz
+        run: |
+          echo "Waiting for deployment to complete..."
+          sleep 30
+          for i in {1..10}; do
+            response=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" || echo "000")
+            if [ "$response" = "200" ]; then
+              echo "Health check passed!"
+              exit 0
+            fi
+            echo "Attempt $i: Health check returned $response, retrying in 30 seconds..."
+            sleep 30
+          done
+          echo "Health check failed after 10 attempts"
+          exit 1
+
+  verify:
+    runs-on: ubuntu-latest
+    needs: deploy
+    environment:
+      name: production
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/scripts
+            E2ETests
+
+      - name: Load secrets from 1Password
+        uses: 1password/load-secrets-action@v3
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_PROD }}
+          MOCK_USER: op://EcAuth/mockidp-production/default_user_email
+          MOCK_PASS: op://EcAuth/mockidp-production/default_user_password
+          CLIENT_ID: op://EcAuth/ecauth-prod-app/client_id
+          CLIENT_SECRET: op://EcAuth/ecauth-prod-app/client_secret
+          B2B_USER_SUBJECT: op://EcAuth/ecauth-prod-app/b2b_user_subject
+          B2B_REDIRECT_URI: op://EcAuth/ecauth-prod-app/b2b_redirect_uri
+
+      - name: Federation authentication verification
+        id: federation_verify
+        env:
+          ECAUTH_BASE_URL: https://ecauth-prod-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
+        run: ./.github/scripts/verify-federation-auth.sh
+
+      - name: Federation verification result
+        if: always()
+        run: |
+          echo "Federation verification result: ${{ steps.federation_verify.outputs.result }}"
+          if [ "${{ steps.federation_verify.outputs.result }}" = "success" ]; then
+            echo "✅ User subject: ${{ steps.federation_verify.outputs.user_sub }}"
+          else
+            echo "❌ Failed at step: ${{ steps.federation_verify.outputs.failed_step }}"
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install Playwright
+        working-directory: E2ETests
+        run: |
+          yarn install --frozen-lockfile
+          yarn playwright install --with-deps chromium
+
+      - name: B2B passkey E2E verification
+        id: b2b_verify
+        working-directory: E2ETests
+        env:
+          E2E_BASE_URL: https://ecauth-prod-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
+          DEFAULT_CLIENT_ID: ${{ env.CLIENT_ID }}
+          DEFAULT_CLIENT_SECRET: ${{ env.CLIENT_SECRET }}
+          DEV_B2B_ALLOWED_RP_IDS: ecauth-prod-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
+          DEV_B2B_USER_SUBJECT: ${{ env.B2B_USER_SUBJECT }}
+          DEV_B2B_REDIRECT_URI: ${{ env.B2B_REDIRECT_URI }}
+        run: |
+          set -o pipefail
+          yarn playwright test tests/specs/b2b_passkey_authentication.spec.ts --reporter=list 2>&1 | tee playwright-output.txt
+
+      - name: Upload E2E test results
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: b2b-e2e-test-results
+          path: E2ETests/test-results/
+
+      - name: B2B verification result
+        if: always()
+        run: |
+          echo "### B2B Passkey E2E Verification" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.b2b_verify.outcome }}" = "success" ]; then
+            echo "✅ B2B passkey E2E verification passed" | tee -a $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ B2B passkey E2E verification failed" | tee -a $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f E2ETests/playwright-output.txt ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat E2ETests/playwright-output.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "--- Playwright Output ---"
+            cat E2ETests/playwright-output.txt
+          fi

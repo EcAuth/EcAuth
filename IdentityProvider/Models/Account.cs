@@ -15,8 +15,8 @@ namespace IdentityProvider.Models
         [Column("password")]
         public string Password { get; set; }
         [Column("created_at")]
-        public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
+        public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
         [Column("updated_at")]
-        public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.Now;
+        public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     }
 }

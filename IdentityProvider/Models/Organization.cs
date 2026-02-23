@@ -19,9 +19,9 @@ namespace IdentityProvider.Models
         [Column("is_sandbox")]
         public bool IsSandbox { get; set; } = false;
         [Column("created_at")]
-        public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
+        public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
         [Column("updated_at")]
-        public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.Now;
+        public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
         public ICollection<Client> Clients { get; } = new List<Client>();
     }
 }
