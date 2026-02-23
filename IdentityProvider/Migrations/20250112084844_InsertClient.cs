@@ -16,8 +16,11 @@ namespace IdentityProvider.Migrations
             var app_name = DotNetEnv.Env.GetString("APP_NAME");
             migrationBuilder.Sql("SET IDENTITY_INSERT client ON");
             migrationBuilder.Sql(@$"
-                INSERT INTO client (id, client_id, client_secret, app_name, created_at, updated_at)
-                VALUES (1, '{client_id}', '{client_secret}', '{app_name}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                IF NOT EXISTS (SELECT 1 FROM dbo.client WHERE id = 1)
+                BEGIN
+                    INSERT INTO client (id, client_id, client_secret, app_name, created_at, updated_at)
+                    VALUES (1, '{client_id}', '{client_secret}', '{app_name}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                END
             ");
             migrationBuilder.Sql("SET IDENTITY_INSERT client OFF");
         }

@@ -28,28 +28,34 @@ namespace IdentityProvider.Migrations
 
             // 1. Client を挿入（既存の staging Organization に紐付け）
             migrationBuilder.Sql($@"
-                INSERT INTO client (client_id, client_secret, app_name, organization_id, created_at, updated_at)
-                SELECT
-                    '{ECCUBE2_CLIENT_ID}',
-                    '{ECCUBE2_CLIENT_SECRET}',
-                    'EC-CUBE2 EcAuth Plugin',
-                    o.id,
-                    SYSDATETIMEOFFSET(),
-                    SYSDATETIMEOFFSET()
-                FROM organization o
-                WHERE o.code = '{STAGING_ORGANIZATION_CODE}'
+                IF NOT EXISTS (SELECT 1 FROM dbo.client c INNER JOIN dbo.organization o ON c.organization_id = o.id WHERE c.client_id = '{ECCUBE2_CLIENT_ID}' AND o.code = '{STAGING_ORGANIZATION_CODE}')
+                BEGIN
+                    INSERT INTO client (client_id, client_secret, app_name, organization_id, created_at, updated_at)
+                    SELECT
+                        '{ECCUBE2_CLIENT_ID}',
+                        '{ECCUBE2_CLIENT_SECRET}',
+                        'EC-CUBE2 EcAuth Plugin',
+                        o.id,
+                        SYSDATETIMEOFFSET(),
+                        SYSDATETIMEOFFSET()
+                    FROM organization o
+                    WHERE o.code = '{STAGING_ORGANIZATION_CODE}'
+                END
             ");
 
             // 2. RedirectUri を挿入
             migrationBuilder.Sql($@"
-                INSERT INTO redirect_uri (uri, client_id, created_at, updated_at)
-                SELECT
-                    '{ECCUBE2_REDIRECT_URI}',
-                    c.id,
-                    SYSDATETIMEOFFSET(),
-                    SYSDATETIMEOFFSET()
-                FROM client c
-                WHERE c.client_id = '{ECCUBE2_CLIENT_ID}'
+                IF NOT EXISTS (SELECT 1 FROM dbo.redirect_uri r INNER JOIN dbo.client c ON r.client_id = c.id WHERE r.uri = '{ECCUBE2_REDIRECT_URI}' AND c.client_id = '{ECCUBE2_CLIENT_ID}')
+                BEGIN
+                    INSERT INTO redirect_uri (uri, client_id, created_at, updated_at)
+                    SELECT
+                        '{ECCUBE2_REDIRECT_URI}',
+                        c.id,
+                        SYSDATETIMEOFFSET(),
+                        SYSDATETIMEOFFSET()
+                    FROM client c
+                    WHERE c.client_id = '{ECCUBE2_CLIENT_ID}'
+                END
             ");
 
             // 3. RSA Key Pair を生成・挿入
@@ -67,27 +73,31 @@ namespace IdentityProvider.Migrations
                     '{privateKeyBase64}'
                 FROM client c
                 WHERE c.client_id = '{ECCUBE2_CLIENT_ID}'
+                AND NOT EXISTS (SELECT 1 FROM dbo.rsa_key_pair r WHERE r.client_id = c.id)
             ");
 
             // 4. OpenIdProvider（MockIdP）を挿入
             migrationBuilder.Sql($@"
-                INSERT INTO open_id_provider (
-                    name, idp_client_id, idp_client_secret,
-                    authorization_endpoint, token_endpoint, userinfo_endpoint,
-                    created_at, updated_at, client_id
-                )
-                SELECT
-                    '{STAGING_MOCK_IDP_APP_NAME}',
-                    '{STAGING_MOCK_IDP_CLIENT_ID}',
-                    '{STAGING_MOCK_IDP_CLIENT_SECRET}',
-                    '{STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT}',
-                    '{STAGING_MOCK_IDP_TOKEN_ENDPOINT}',
-                    '{STAGING_MOCK_IDP_USERINFO_ENDPOINT}',
-                    SYSDATETIMEOFFSET(),
-                    SYSDATETIMEOFFSET(),
-                    c.id
-                FROM client c
-                WHERE c.client_id = '{ECCUBE2_CLIENT_ID}'
+                IF NOT EXISTS (SELECT 1 FROM dbo.open_id_provider p INNER JOIN dbo.client c ON p.client_id = c.id WHERE p.name = '{STAGING_MOCK_IDP_APP_NAME}' AND c.client_id = '{ECCUBE2_CLIENT_ID}')
+                BEGIN
+                    INSERT INTO open_id_provider (
+                        name, idp_client_id, idp_client_secret,
+                        authorization_endpoint, token_endpoint, userinfo_endpoint,
+                        created_at, updated_at, client_id
+                    )
+                    SELECT
+                        '{STAGING_MOCK_IDP_APP_NAME}',
+                        '{STAGING_MOCK_IDP_CLIENT_ID}',
+                        '{STAGING_MOCK_IDP_CLIENT_SECRET}',
+                        '{STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT}',
+                        '{STAGING_MOCK_IDP_TOKEN_ENDPOINT}',
+                        '{STAGING_MOCK_IDP_USERINFO_ENDPOINT}',
+                        SYSDATETIMEOFFSET(),
+                        SYSDATETIMEOFFSET(),
+                        c.id
+                    FROM client c
+                    WHERE c.client_id = '{ECCUBE2_CLIENT_ID}'
+                END
             ");
         }
 
