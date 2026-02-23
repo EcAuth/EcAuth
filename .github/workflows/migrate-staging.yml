@@ -138,6 +138,7 @@ jobs:
           # 1Password action でエクスポートされたシェル環境変数を使用
           export CLIENT_ID="$STAGING_CLIENT_ID"
           export CLIENT_SECRET="$STAGING_CLIENT_SECRET"
+          export MOCK_IDP_PROVIDER_NAME="$STAGING_MOCK_IDP_APP_NAME"
           ./.github/scripts/verify-federation-auth.sh
 
       - name: Federation verification result

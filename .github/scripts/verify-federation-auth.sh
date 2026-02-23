@@ -3,11 +3,12 @@
 # EcAuth フェデレーション認証確認スクリプト
 #
 # 必須環境変数:
-#   ECAUTH_BASE_URL  - EcAuth のベース URL
-#   MOCK_USER        - MockIdP のテストユーザーメールアドレス
-#   MOCK_PASS        - MockIdP のテストユーザーパスワード
-#   CLIENT_ID        - EcAuth クライアント ID
-#   CLIENT_SECRET    - EcAuth クライアントシークレット
+#   ECAUTH_BASE_URL        - EcAuth のベース URL
+#   MOCK_USER              - MockIdP のテストユーザーメールアドレス
+#   MOCK_PASS              - MockIdP のテストユーザーパスワード
+#   CLIENT_ID              - EcAuth クライアント ID
+#   CLIENT_SECRET          - EcAuth クライアントシークレット
+#   MOCK_IDP_PROVIDER_NAME - MockIdP の provider_name（open_id_provider.name）
 #
 # オプション環境変数:
 #   GITHUB_OUTPUT    - GitHub Actions の output ファイル（設定されていれば出力を書き込む）
@@ -60,7 +61,7 @@ write_summary() {
 # 必須環境変数のチェック
 check_required_vars() {
   local missing=0
-  for var in ECAUTH_BASE_URL MOCK_USER MOCK_PASS CLIENT_ID CLIENT_SECRET; do
+  for var in ECAUTH_BASE_URL MOCK_USER MOCK_PASS CLIENT_ID CLIENT_SECRET MOCK_IDP_PROVIDER_NAME; do
     if [ -z "${!var}" ]; then
       log_error "Required environment variable $var is not set"
       missing=1
@@ -82,7 +83,7 @@ main() {
 
   # Step 1: EcAuth 認可エンドポイント
   log_step "Step 1: EcAuth 認可エンドポイント"
-  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=staging-mockidp&state=test123" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=${MOCK_IDP_PROVIDER_NAME}&state=test123" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
 
   if [ -z "$MOCKIDP_URL" ]; then
     log_error "Failed to get MockIdP redirect URL"
