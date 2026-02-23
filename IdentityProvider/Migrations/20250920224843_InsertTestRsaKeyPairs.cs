@@ -24,7 +24,7 @@ namespace IdentityProvider.Migrations
             migrationBuilder.Sql($@"
                 IF NOT EXISTS (SELECT 1 FROM dbo.rsa_key_pair WHERE client_id = 1)
                 BEGIN
-                    EXEC(N'INSERT INTO [rsa_key_pair] ([client_id], [public_key], [private_key])
+                    EXEC(N'INSERT INTO [dbo].[rsa_key_pair] ([client_id], [public_key], [private_key])
                     VALUES (1, N''{publicKeyBase64}'', N''{privateKeyBase64}'')')
                 END
             ");
