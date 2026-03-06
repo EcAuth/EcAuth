@@ -20,6 +20,28 @@ namespace IdentityProvider.Migrations
                 oldClrType: typeof(string),
                 oldType: "nvarchar(max)");
 
+            // ユニークインデックス作成前に重複する client_id を持つレコードを削除（最小 id を残す）
+            // FK Restrict の子テーブルを先に削除してから親テーブルを削除する
+            migrationBuilder.Sql(@"
+                -- 削除対象の重複 client ID を一時テーブルに格納
+                SELECT id INTO #dup_clients FROM dbo.client
+                WHERE id NOT IN (SELECT MIN(id) FROM dbo.client GROUP BY client_id);
+
+                -- FK Restrict: access_token, authorization_code, webauthn_challenge
+                DELETE FROM dbo.access_token       WHERE client_id IN (SELECT id FROM #dup_clients);
+                DELETE FROM dbo.authorization_code WHERE client_id IN (SELECT id FROM #dup_clients);
+                DELETE FROM dbo.webauthn_challenge  WHERE client_id IN (SELECT id FROM #dup_clients);
+
+                -- FK No Action (default): open_id_provider
+                -- open_id_provider_scope は open_id_provider に Cascade なので自動削除される
+                DELETE FROM dbo.open_id_provider   WHERE client_id IN (SELECT id FROM #dup_clients);
+
+                -- redirect_uri, rsa_key_pair は Cascade なので自動削除される
+                DELETE FROM dbo.client             WHERE id IN (SELECT id FROM #dup_clients);
+
+                DROP TABLE #dup_clients;
+            ");
+
             migrationBuilder.CreateIndex(
                 name: "IX_client_client_id",
                 table: "client",

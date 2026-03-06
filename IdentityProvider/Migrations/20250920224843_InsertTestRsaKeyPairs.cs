@@ -21,10 +21,13 @@ namespace IdentityProvider.Migrations
             var publicKeyBase64 = Convert.ToBase64String(publicKeyBytes);
             var privateKeyBase64 = Convert.ToBase64String(privateKeyBytes);
 
-            migrationBuilder.InsertData(
-                table: "rsa_key_pair",
-                columns: new[] { "client_id", "public_key", "private_key" },
-                values: new object[] { 1, publicKeyBase64, privateKeyBase64 });
+            migrationBuilder.Sql($@"
+                IF NOT EXISTS (SELECT 1 FROM dbo.rsa_key_pair WHERE client_id = 1)
+                BEGIN
+                    EXEC(N'INSERT INTO [dbo].[rsa_key_pair] ([client_id], [public_key], [private_key])
+                    VALUES (1, N''{publicKeyBase64}'', N''{privateKeyBase64}'')')
+                END
+            ");
         }
 
         /// <inheritdoc />
