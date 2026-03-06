@@ -396,7 +396,8 @@ namespace IdentityProvider.Test.Data.Seeders
                 ["ASPNETCORE_ENVIRONMENT"] = "Unknown",
                 ["DEFAULT_CLIENT_ID"] = TestClientId,
                 ["DEFAULT_ORGANIZATION_CODE"] = TestOrganizationCode,
-                ["DEV_B2B_USER_SUBJECT"] = "dev-fallback-subject"
+                ["DEV_B2B_USER_SUBJECT"] = "dev-fallback-subject",
+                ["DEV_B2B_USER_EXTERNAL_ID"] = "dev-fallback-admin"
             });
 
             // Act
@@ -416,7 +417,8 @@ namespace IdentityProvider.Test.Data.Seeders
             // Arrange
             var configuration = CreateDevConfiguration(new Dictionary<string, string?>
             {
-                ["DEV_B2B_USER_SUBJECT"] = "dev-default-subject"
+                ["DEV_B2B_USER_SUBJECT"] = "dev-default-subject",
+                ["DEV_B2B_USER_EXTERNAL_ID"] = "dev-default-admin"
             });
 
             // Act
@@ -439,6 +441,27 @@ namespace IdentityProvider.Test.Data.Seeders
         {
             // Arrange
             var configuration = CreateDevConfiguration(new Dictionary<string, string?>());
+
+            // Act
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert
+            var userCount = await _context.B2BUsers
+                .IgnoreQueryFilters()
+                .CountAsync();
+
+            Assert.Equal(0, userCount);
+        }
+
+        [Fact]
+        public async Task SeedAsync_WithoutB2BUserExternalId_ShouldSkip()
+        {
+            // Arrange
+            var configuration = CreateDevConfiguration(new Dictionary<string, string?>
+            {
+                ["DEV_B2B_USER_SUBJECT"] = "test-subject-uuid"
+                // DEV_B2B_USER_EXTERNAL_ID is not set
+            });
 
             // Act
             await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);

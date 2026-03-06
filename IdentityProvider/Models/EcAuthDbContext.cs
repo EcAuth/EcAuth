@@ -35,6 +35,11 @@ namespace IdentityProvider.Models
             modelBuilder.Entity<Organization>()
                 .HasQueryFilter(o => o.TenantName == _tenantService.TenantName);
 
+            // Organization.Code のグローバルユニーク制約
+            modelBuilder.Entity<Organization>()
+                .HasIndex(o => o.Code)
+                .IsUnique();
+
             // EcAuthUserにも同じグローバルクエリフィルターを適用
             modelBuilder.Entity<EcAuthUser>()
                 .HasQueryFilter(u => u.Organization != null && u.Organization.TenantName == _tenantService.TenantName);
@@ -144,6 +149,9 @@ namespace IdentityProvider.Models
                 .HasQueryFilter(wc => wc.Client != null && wc.Client.Organization != null && wc.Client.Organization.TenantName == _tenantService.TenantName);
 
             // B2BUser 関連の設定
+            // Subject（UUID）はグローバルに一意（RFC 9562）。EC-CUBEプラグインが生成するUUIDを
+            // そのまま使用するため、Organization をまたいでも衝突しない設計。
+            // Subject のみでユーザーを特定可能にしている。
             modelBuilder.Entity<B2BUser>()
                 .HasAlternateKey(u => u.Subject);
 
@@ -162,8 +170,7 @@ namespace IdentityProvider.Models
 
             modelBuilder.Entity<B2BUser>()
                 .HasIndex(u => new { u.OrganizationId, u.ExternalId })
-                .IsUnique()
-                .HasFilter("[external_id] IS NOT NULL");
+                .IsUnique();
 
             // B2BPasskeyCredential 関連の設定
             modelBuilder.Entity<B2BPasskeyCredential>()

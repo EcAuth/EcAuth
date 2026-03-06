@@ -55,6 +55,21 @@ namespace IdentityProvider.Services
             var rpId = request.RpId.ToLowerInvariant();
             if (string.IsNullOrWhiteSpace(request.B2BSubject))
                 throw new ArgumentException("B2BSubject is required", nameof(request));
+            if (string.IsNullOrWhiteSpace(request.ExternalId))
+                throw new ArgumentException("ExternalId is required", nameof(request));
+            if (request.ExternalId.Length > B2BUser.ExternalIdMaxLength)
+                throw new ArgumentException($"ExternalId must be {B2BUser.ExternalIdMaxLength} characters or less", nameof(request));
+
+            // UUID 形式の検証・正規化（小文字ハイフン付き形式に統一）
+            if (!Guid.TryParse(request.B2BSubject, out var parsedB2BSubject))
+                throw new ArgumentException("B2BSubject must be a valid UUID format", nameof(request));
+            var b2bSubject = parsedB2BSubject.ToString();
+
+            // 文字列長の制限
+            if (request.DisplayName != null && request.DisplayName.Length > 128)
+                throw new ArgumentException("DisplayName must be 128 characters or less", nameof(request));
+            if (request.DeviceName != null && request.DeviceName.Length > 128)
+                throw new ArgumentException("DeviceName must be 128 characters or less", nameof(request));
 
             // クライアント取得
             var client = await _context.Clients
@@ -65,19 +80,72 @@ namespace IdentityProvider.Services
             if (client == null)
                 throw new InvalidOperationException($"Client not found: {request.ClientId}");
 
+            if (client.OrganizationId == null)
+                throw new InvalidOperationException($"Client has no associated Organization: {request.ClientId}");
+
             // RP ID検証（ドメイン名は大文字小文字を区別しない: RFC 4343）
             if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");
 
-            // B2Bユーザー取得
-            var user = await _userService.GetBySubjectAsync(request.B2BSubject);
+            // B2Bユーザー取得、存在しない場合は JIT プロビジョニング
+            var user = await _userService.GetBySubjectAsync(b2bSubject);
+            bool isProvisioned = false;
             if (user == null)
-                throw new InvalidOperationException($"B2BUser not found: {request.B2BSubject}");
+            {
+                // ExternalId で既存ユーザーを検索（EC-CUBEプラグイン再インストール時の復旧）
+                user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
+                if (user != null)
+                {
+                    _logger.LogInformation(
+                        "Found existing B2BUser by ExternalId: ExternalId={ExternalId}, Subject={Subject}",
+                        request.ExternalId, user.Subject);
+                }
+            }
+
+            if (user == null)
+            {
+                try
+                {
+                    _logger.LogInformation(
+                        "JIT provisioning B2BUser: Subject={Subject}, ExternalId={ExternalId}, OrganizationId={OrganizationId}",
+                        b2bSubject, request.ExternalId, client.OrganizationId);
+
+                    var createResult = await _userService.CreateAsync(new IB2BUserService.CreateUserRequest
+                    {
+                        Subject = b2bSubject,
+                        ExternalId = request.ExternalId,
+                        UserType = "admin",
+                        OrganizationId = client.OrganizationId.Value
+                    });
+                    user = createResult.User;
+                    isProvisioned = true;
+
+                    _logger.LogInformation(
+                        "JIT provisioned B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
+                        user.Subject, user.OrganizationId);
+                }
+                catch (DbUpdateException)
+                {
+                    // 並行リクエストで Subject または ExternalId の一意制約違反が発生した場合、再取得を試みる。
+                    _logger.LogInformation(
+                        "B2BUser already created by concurrent request, re-fetching: Subject={Subject}",
+                        b2bSubject);
+                    user = await _userService.GetBySubjectAsync(b2bSubject);
+                    if (user == null)
+                        user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
+                    if (user == null)
+                        throw new InvalidOperationException($"Failed to create or retrieve B2BUser: {b2bSubject}");
+                }
+            }
+
+            // ExternalId で既存ユーザーが見つかった場合、Subject が異なる可能性がある
+            // 以降の処理は解決済みの Subject を使用する
+            var resolvedSubject = user.Subject;
 
             // 既存のクレデンシャルを取得（除外リスト用）
             var existingCredentials = await _context.B2BPasskeyCredentials
                 .IgnoreQueryFilters()
-                .Where(c => c.B2BSubject == request.B2BSubject)
+                .Where(c => c.B2BSubject == resolvedSubject)
                 .Select(c => new PublicKeyCredentialDescriptor(c.CredentialId))
                 .ToListAsync();
 
@@ -87,7 +155,7 @@ namespace IdentityProvider.Services
                 {
                     Type = "registration",
                     UserType = "b2b",
-                    Subject = request.B2BSubject,
+                    Subject = resolvedSubject,
                     RpId = rpId,
                     ClientId = client.Id
                 });
@@ -95,9 +163,9 @@ namespace IdentityProvider.Services
             // Fido2ユーザー作成
             var fido2User = new Fido2User
             {
-                Id = Encoding.UTF8.GetBytes(request.B2BSubject),
-                Name = user.ExternalId ?? request.B2BSubject,
-                DisplayName = request.DisplayName ?? user.ExternalId ?? "管理者"
+                Id = Encoding.UTF8.GetBytes(resolvedSubject),
+                Name = user.ExternalId,
+                DisplayName = request.DisplayName ?? user.ExternalId
             };
 
             // 認証器選択オプション
@@ -124,13 +192,14 @@ namespace IdentityProvider.Services
 
             _logger.LogInformation(
                 "Created registration options for B2BUser {Subject}, SessionId: {SessionId}",
-                request.B2BSubject,
+                resolvedSubject,
                 challengeResult.SessionId);
 
             return new IB2BPasskeyService.RegistrationOptionsResult
             {
                 SessionId = challengeResult.SessionId,
-                Options = options
+                Options = options,
+                IsProvisioned = isProvisioned
             };
         }
 
@@ -295,14 +364,24 @@ namespace IdentityProvider.Services
             if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");
 
+            // B2BSubject の正規化（指定時のみ）
+            string? b2bSubject = null;
+            if (!string.IsNullOrWhiteSpace(request.B2BSubject))
+            {
+                if (Guid.TryParse(request.B2BSubject, out var parsedSubject))
+                    b2bSubject = parsedSubject.ToString();
+                else
+                    b2bSubject = request.B2BSubject;
+            }
+
             // 許可されるクレデンシャルを取得
             IQueryable<B2BPasskeyCredential> credentialQuery = _context.B2BPasskeyCredentials
                 .IgnoreQueryFilters();
 
-            if (!string.IsNullOrWhiteSpace(request.B2BSubject))
+            if (b2bSubject != null)
             {
                 // 特定ユーザーのクレデンシャルのみ
-                credentialQuery = credentialQuery.Where(c => c.B2BSubject == request.B2BSubject);
+                credentialQuery = credentialQuery.Where(c => c.B2BSubject == b2bSubject);
             }
             else
             {
@@ -329,7 +408,7 @@ namespace IdentityProvider.Services
                 {
                     Type = "authentication",
                     UserType = "b2b",
-                    Subject = request.B2BSubject,
+                    Subject = b2bSubject,
                     RpId = rpId,
                     ClientId = client.Id
                 });

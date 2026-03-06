@@ -68,9 +68,10 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = client.ClientId,
                 ClientSecret = client.ClientSecret!,
                 RpId = "shop.example.com",
-                B2BSubject = "test-subject",
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
                 DisplayName = "Test User",
-                DeviceName = "MacBook Pro"
+                DeviceName = "MacBook Pro",
+                ExternalId = "test-admin"
             };
 
             var expectedResult = new RegistrationOptionsResult
@@ -105,7 +106,8 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = client.ClientId,
                 ClientSecret = "wrong-secret",
                 RpId = "shop.example.com",
-                B2BSubject = "test-subject"
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                ExternalId = "test-admin"
             };
 
             // Act
@@ -129,7 +131,8 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = "nonexistent-client",
                 ClientSecret = "secret",
                 RpId = "shop.example.com",
-                B2BSubject = "test-subject"
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                ExternalId = "test-admin"
             };
 
             // Act
@@ -153,7 +156,8 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = "",
                 ClientSecret = "secret",
                 RpId = "shop.example.com",
-                B2BSubject = "test-subject"
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                ExternalId = "test-admin"
             };
 
             // Act
@@ -179,7 +183,8 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = client.ClientId,
                 ClientSecret = client.ClientSecret!,
                 RpId = "shop.example.com",
-                B2BSubject = "test-subject"
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                ExternalId = "test-admin"
             };
 
             _mockPasskeyService.Setup(x => x.CreateRegistrationOptionsAsync(It.IsAny<RegistrationOptionsRequest>()))
@@ -197,6 +202,36 @@ namespace IdentityProvider.Test.Controllers
 
             var error = response.GetType().GetProperty("error")?.GetValue(response);
             Assert.Equal("server_error", error);
+        }
+
+        [Fact]
+        public async Task RegisterOptions_MissingExternalId_ReturnsBadRequest()
+        {
+            // Arrange
+            var client = await CreateTestClientAsync();
+
+            var request = new B2BPasskeyController.RegisterOptionsRequest
+            {
+                ClientId = client.ClientId,
+                ClientSecret = client.ClientSecret!,
+                RpId = "shop.example.com",
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                ExternalId = ""
+            };
+
+            // Act
+            var result = await _controller.RegisterOptions(request);
+
+            // Assert
+            var badRequestResult = Assert.IsType<BadRequestObjectResult>(result);
+            var response = badRequestResult.Value;
+            Assert.NotNull(response);
+
+            var error = response.GetType().GetProperty("error")?.GetValue(response);
+            Assert.Equal("invalid_request", error);
+
+            var errorDescription = response.GetType().GetProperty("error_description")?.GetValue(response);
+            Assert.Equal("external_id は必須です。", errorDescription);
         }
 
         #endregion
@@ -291,7 +326,7 @@ namespace IdentityProvider.Test.Controllers
             {
                 ClientId = client.ClientId,
                 RpId = "shop.example.com",
-                B2BSubject = "test-subject"
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000"
             };
 
             var expectedResult = new AuthenticationOptionsResult
@@ -359,14 +394,14 @@ namespace IdentityProvider.Test.Controllers
             var verifyResult = new AuthenticationVerifyResult
             {
                 Success = true,
-                B2BSubject = "test-b2b-subject",
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
                 CredentialId = "credential-id"
             };
 
             var authCode = new AuthorizationCode
             {
                 Code = "test-auth-code",
-                Subject = "test-b2b-subject",
+                Subject = "550e8400-e29b-41d4-a716-446655440000",
                 SubjectType = SubjectType.B2B,
                 ClientId = client.Id,
                 RedirectUri = request.RedirectUri,
@@ -551,7 +586,7 @@ namespace IdentityProvider.Test.Controllers
         {
             // Arrange
             var accessToken = "valid-access-token";
-            var subject = "test-b2b-subject";
+            var subject = "550e8400-e29b-41d4-a716-446655440000";
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
@@ -635,7 +670,7 @@ namespace IdentityProvider.Test.Controllers
         {
             // Arrange
             var accessToken = "valid-access-token";
-            var subject = "test-b2b-subject";
+            var subject = "550e8400-e29b-41d4-a716-446655440000";
             var credentialId = "credential-id-base64url";
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
@@ -658,7 +693,7 @@ namespace IdentityProvider.Test.Controllers
         {
             // Arrange
             var accessToken = "valid-access-token";
-            var subject = "test-b2b-subject";
+            var subject = "550e8400-e29b-41d4-a716-446655440000";
             var credentialId = "nonexistent-credential";
 
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";

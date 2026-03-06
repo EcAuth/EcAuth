@@ -7,6 +7,7 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   const clientSecret = process.env.DEFAULT_CLIENT_SECRET || 'client_secret';
   const rpId = process.env.DEV_B2B_ALLOWED_RP_IDS || 'localhost';
   const b2bSubject = process.env.DEV_B2B_USER_SUBJECT || '3f7c0ab4-b004-4102-b6ed-a730369dd237';
+  const externalId = process.env.DEV_B2B_USER_EXTERNAL_ID || 'test-admin';
   const redirectUri = process.env.DEV_B2B_REDIRECT_URI || 'https://localhost:8081/admin/ecauth/callback';
 
   let context: BrowserContext;
@@ -72,6 +73,7 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
     await page.fill('#clientSecret', clientSecret);
     await page.fill('#rpId', rpId);
     await page.fill('#b2bSubject', b2bSubject);
+    await page.fill('#externalId', externalId);
     await page.fill('#redirectUri', redirectUri);
     await page.fill('#displayName', 'Test Admin');
     await page.fill('#deviceName', 'E2E Test Device');
