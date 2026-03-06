@@ -71,8 +71,15 @@ public class B2BPasskeySeeder : IDbSeeder
         // 2. RedirectUri を追加
         hasChanges |= await SeedRedirectUriAsync(context, client, b2bRedirectUri, clientId, logger);
 
-        // 3. B2BUser を作成
-        hasChanges |= await SeedB2BUserAsync(context, b2bUserSubject, b2bUserExternalId, organizationCode, logger);
+        // 3. B2BUser を作成（ExternalId が設定されている場合のみ）
+        if (string.IsNullOrEmpty(b2bUserExternalId))
+        {
+            logger.LogInformation("Skipped B2BUser creation - {Prefix}_B2B_USER_EXTERNAL_ID not configured", prefix);
+        }
+        else
+        {
+            hasChanges |= await SeedB2BUserAsync(context, b2bUserSubject, b2bUserExternalId, organizationCode, logger);
+        }
 
         if (hasChanges)
         {

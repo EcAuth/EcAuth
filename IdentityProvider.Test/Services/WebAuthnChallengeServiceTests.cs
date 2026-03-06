@@ -56,7 +56,7 @@ namespace IdentityProvider.Test.Services
             {
                 Type = "registration",
                 UserType = "b2b",
-                Subject = "test-b2b-subject",
+                Subject = "550e8400-e29b-41d4-a716-446655440000",
                 RpId = "shop.example.com",
                 ClientId = 1
             };

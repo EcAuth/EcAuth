@@ -40,6 +40,11 @@ namespace IdentityProvider.Services
             /// デバイス名（"MacBook Pro", "iPhone" 等）
             /// </summary>
             public string? DeviceName { get; set; }
+
+            /// <summary>
+            /// 外部ID（EC-CUBEのlogin_id等）- 必須
+            /// </summary>
+            public string ExternalId { get; set; } = string.Empty;
         }
 
         /// <summary>
@@ -56,6 +61,11 @@ namespace IdentityProvider.Services
             /// WebAuthn登録オプション（Fido2.NetLib形式）
             /// </summary>
             public CredentialCreateOptions Options { get; set; } = null!;
+
+            /// <summary>
+            /// JITプロビジョニングでB2BUserが新規作成されたか
+            /// </summary>
+            public bool IsProvisioned { get; set; }
         }
 
         /// <summary>

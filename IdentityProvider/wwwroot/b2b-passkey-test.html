@@ -176,6 +176,10 @@
                 <small style="color:#666;">Note: Must match an existing B2BUser in the database</small>
             </div>
             <div class="form-group">
+                <label for="externalId">External ID (EC-CUBE login_id)</label>
+                <input type="text" id="externalId" value="test-admin" placeholder="e.g., admin">
+            </div>
+            <div class="form-group">
                 <label for="displayName">Display Name</label>
                 <input type="text" id="displayName" value="Test Admin" placeholder="e.g., Admin User">
             </div>
@@ -313,6 +317,7 @@
             const clientSecret = document.getElementById('clientSecret').value;
             const rpId = document.getElementById('rpId').value;
             const b2bSubject = document.getElementById('b2bSubject').value;
+            const externalId = document.getElementById('externalId').value;
             const displayName = document.getElementById('displayName').value;
             const deviceName = document.getElementById('deviceName').value;
 
@@ -334,6 +339,7 @@
                         client_secret: clientSecret,
                         rp_id: rpId,
                         b2b_subject: b2bSubject,
+                        external_id: externalId,
                         display_name: displayName,
                         device_name: deviceName
                     })
