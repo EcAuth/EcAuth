@@ -29,9 +29,9 @@ namespace IdentityProvider.Models
         [Column("jwks_uri")]
         public string? JwksUri { get; set; }
         [Column("created_at")]
-        public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
+        public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
         [Column("updated_at")]
-        public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.Now;
+        public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
         public Client? Client { get; set; }
         [Column("client_id")]
         public int? ClientId { get; set; }

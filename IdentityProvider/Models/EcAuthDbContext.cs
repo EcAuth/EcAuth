@@ -35,6 +35,11 @@ namespace IdentityProvider.Models
             modelBuilder.Entity<Organization>()
                 .HasQueryFilter(o => o.TenantName == _tenantService.TenantName);
 
+            // Organization.Code のグローバルユニーク制約
+            modelBuilder.Entity<Organization>()
+                .HasIndex(o => o.Code)
+                .IsUnique();
+
             // EcAuthUserにも同じグローバルクエリフィルターを適用
             modelBuilder.Entity<EcAuthUser>()
                 .HasQueryFilter(u => u.Organization != null && u.Organization.TenantName == _tenantService.TenantName);
