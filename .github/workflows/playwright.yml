@@ -133,6 +133,11 @@ jobs:
             exit 1
           fi
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: E2ETests/package.json
+
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
@@ -141,12 +146,12 @@ jobs:
       - name: Install Playwright
         working-directory: E2ETests
         run: |
-          yarn install --frozen-lockfile
-          yarn playwright install --with-deps chromium
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
 
       - name: Run Playwright E2E Tests
         working-directory: E2ETests
-        run: yarn playwright test
+        run: pnpm exec playwright test
         env:
           # secrets から直接参照（env経由では空になるため）
           MOCK_IDP_BASE_URL: ${{ secrets.MOCK_IDP_BASE_URL }}

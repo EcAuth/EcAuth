@@ -18,7 +18,7 @@ dotnet build EcAuth.sln
 dotnet test IdentityProvider.Test/IdentityProvider.Test.csproj
 
 # E2Eテスト（E2ETestsディレクトリで）
-cd E2ETests && yarn install && npx playwright test
+cd E2ETests && pnpm install && pnpm exec playwright test
 ```
 
 ## 注意事項

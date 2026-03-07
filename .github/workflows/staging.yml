@@ -289,6 +289,11 @@ jobs:
             echo "❌ Failed at step: ${{ steps.federation_verify.outputs.failed_step }}"
           fi
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: E2ETests/package.json
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -297,8 +302,8 @@ jobs:
       - name: Install Playwright
         working-directory: E2ETests
         run: |
-          yarn install --frozen-lockfile
-          yarn playwright install --with-deps chromium
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
 
       - name: B2B passkey E2E verification
         id: b2b_verify
@@ -312,7 +317,7 @@ jobs:
           DEV_B2B_REDIRECT_URI: ${{ env.B2B_REDIRECT_URI }}
         run: |
           set -o pipefail
-          yarn playwright test tests/specs/b2b_passkey_authentication.spec.ts --reporter=list 2>&1 | tee playwright-output.txt
+          pnpm exec playwright test tests/specs/b2b_passkey_authentication.spec.ts --reporter=list 2>&1 | tee playwright-output.txt
 
       - name: Upload E2E test results
         if: failure()
