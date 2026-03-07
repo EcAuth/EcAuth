@@ -106,7 +106,7 @@ jobs:
           cat ../migration.sql
 
       - name: Upload migration script as artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: migration-script
           path: migration.sql
@@ -177,7 +177,7 @@ jobs:
         run: dotnet publish IdentityProvider/IdentityProvider.csproj --configuration Release --no-build --output ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: webapp
           path: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
@@ -321,7 +321,7 @@ jobs:
 
       - name: Upload E2E test results
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: b2b-e2e-test-results
           path: E2ETests/test-results/
