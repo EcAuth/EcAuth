@@ -85,6 +85,10 @@ jobs:
           STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT: op://EcAuth/mockidp-staging/authorization_endpoint
           STAGING_MOCK_IDP_TOKEN_ENDPOINT: op://EcAuth/mockidp-staging/token_endpoint
           STAGING_MOCK_IDP_USERINFO_ENDPOINT: op://EcAuth/mockidp-staging/userinfo_endpoint
+          # Azure credentials
+          AZURE_CLIENT_ID: op://EcAuth/ecauth-workload-identity/AZURE_CLIENT_ID
+          AZURE_TENANT_ID: op://EcAuth/ecauth-workload-identity/AZURE_TENANT_ID
+          AZURE_SUBSCRIPTION_ID: op://EcAuth/ecauth-workload-identity/AZURE_SUBSCRIPTION_ID
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -134,9 +138,9 @@ jobs:
         if: ${{ inputs.dry_run != true }}
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Apply migration to production database
         if: ${{ inputs.dry_run != true }}
@@ -214,22 +218,33 @@ jobs:
           name: webapp
           path: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
 
+      - name: Load secrets from 1Password
+        uses: 1password/load-secrets-action@v3
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_PROD }}
+          AZURE_CLIENT_ID: op://EcAuth/ecauth-workload-identity/AZURE_CLIENT_ID
+          AZURE_TENANT_ID: op://EcAuth/ecauth-workload-identity/AZURE_TENANT_ID
+          AZURE_SUBSCRIPTION_ID: op://EcAuth/ecauth-workload-identity/AZURE_SUBSCRIPTION_ID
+          WEB_APP_SUFFIX: op://EcAuth/ecauth-prod-app/web_app_suffix
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
-          app-name: ecauth-prod-${{ secrets.WEB_APP_SUFFIX }}
+          app-name: ecauth-prod-${{ env.WEB_APP_SUFFIX }}
           package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
 
       - name: Health check
         env:
-          HEALTH_CHECK_URL: https://ecauth-prod-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net/healthz
+          HEALTH_CHECK_URL: https://ecauth-prod-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net/healthz
         run: |
           echo "Waiting for deployment to complete..."
           sleep 30
@@ -280,11 +295,12 @@ jobs:
           MOCK_IDP_PROVIDER_NAME: op://EcAuth/ecauth-prod-mockidp/app_name
           B2B_USER_SUBJECT: op://EcAuth/ecauth-prod-app/b2b_user_subject
           B2B_REDIRECT_URI: op://EcAuth/ecauth-prod-app/b2b_redirect_uri
+          WEB_APP_SUFFIX: op://EcAuth/ecauth-prod-app/web_app_suffix
 
       - name: Federation authentication verification
         id: federation_verify
         env:
-          ECAUTH_BASE_URL: https://ecauth-prod-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
+          ECAUTH_BASE_URL: https://ecauth-prod-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net
         run: ./.github/scripts/verify-federation-auth.sh
 
       - name: Federation verification result
@@ -297,6 +313,11 @@ jobs:
             echo "❌ Failed at step: ${{ steps.federation_verify.outputs.failed_step }}"
           fi
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: E2ETests/package.json
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -305,22 +326,22 @@ jobs:
       - name: Install Playwright
         working-directory: E2ETests
         run: |
-          yarn install --frozen-lockfile
-          yarn playwright install --with-deps chromium
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
 
       - name: B2B passkey E2E verification
         id: b2b_verify
         working-directory: E2ETests
         env:
-          E2E_BASE_URL: https://ecauth-prod-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
+          E2E_BASE_URL: https://ecauth-prod-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net
           DEFAULT_CLIENT_ID: ${{ env.CLIENT_ID }}
           DEFAULT_CLIENT_SECRET: ${{ env.CLIENT_SECRET }}
-          DEV_B2B_ALLOWED_RP_IDS: ecauth-prod-${{ secrets.WEB_APP_SUFFIX }}.azurewebsites.net
+          DEV_B2B_ALLOWED_RP_IDS: ecauth-prod-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net
           DEV_B2B_USER_SUBJECT: ${{ env.B2B_USER_SUBJECT }}
           DEV_B2B_REDIRECT_URI: ${{ env.B2B_REDIRECT_URI }}
         run: |
           set -o pipefail
-          yarn playwright test tests/specs/b2b_passkey_authentication.spec.ts --reporter=list 2>&1 | tee playwright-output.txt
+          pnpm exec playwright test tests/specs/b2b_passkey_authentication.spec.ts --reporter=list 2>&1 | tee playwright-output.txt
 
       - name: Upload E2E test results
         if: failure()
