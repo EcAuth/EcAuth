@@ -224,9 +224,9 @@ jobs:
           export-env: true
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_PROD }}
-          AZURE_CLIENT_ID: op://EcAuth/ecauth-infrastructure-sp/AZURE_CLIENT_ID
-          AZURE_TENANT_ID: op://EcAuth/ecauth-infrastructure-sp/AZURE_TENANT_ID
-          AZURE_SUBSCRIPTION_ID: op://EcAuth/ecauth-infrastructure-sp/AZURE_SUBSCRIPTION_ID
+          AZURE_CLIENT_ID: op://EcAuth/ecauth-workload-identity/AZURE_CLIENT_ID
+          AZURE_TENANT_ID: op://EcAuth/ecauth-workload-identity/AZURE_TENANT_ID
+          AZURE_SUBSCRIPTION_ID: op://EcAuth/ecauth-workload-identity/AZURE_SUBSCRIPTION_ID
           WEB_APP_SUFFIX: op://EcAuth/ecauth-prod-app/web_app_suffix
 
       - name: Login to Azure
