@@ -98,8 +98,22 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// Development/Staging 環境で静的ファイルを有効化（B2Bパスキーテストページ用）
-if (!app.Environment.IsProduction())
+// 静的ファイルの配信（B2Bパスキーテストページ用）
+// 本番環境では DEFAULT_ORGANIZATION_TENANT_NAME のサブドメインからのリクエストのみ許可
+if (app.Environment.IsProduction())
+{
+    var allowedTenant = Environment.GetEnvironmentVariable("DEFAULT_ORGANIZATION_TENANT_NAME") ?? "";
+    app.UseWhen(
+        context =>
+        {
+            var host = context.Request.Host.Host;
+            var segments = host.Split('.');
+            return segments.Length > 2 && segments[0].Equals(allowedTenant, StringComparison.OrdinalIgnoreCase);
+        },
+        appBuilder => appBuilder.UseStaticFiles()
+    );
+}
+else
 {
     app.UseStaticFiles();
 }
