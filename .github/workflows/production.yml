@@ -136,7 +136,7 @@ jobs:
 
       - name: Login to Azure
         if: ${{ inputs.dry_run != true }}
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
@@ -230,7 +230,7 @@ jobs:
           WEB_APP_SUFFIX: op://EcAuth/ecauth-prod-app/web_app_suffix
 
       - name: Login to Azure
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
@@ -314,7 +314,7 @@ jobs:
           fi
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           package_json_file: E2ETests/package.json
 
