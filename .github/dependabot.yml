@@ -69,6 +69,11 @@ updates:
         versions: [">= 10.0.0"]
       - dependency-name: "dotnet-ef"
         versions: [">= 10.0.0"]
+      # Swashbuckle 10.x は Microsoft.OpenApi 2.x を要求するが、
+      # Microsoft.AspNetCore.OpenApi 9.x（.NET 9）は Microsoft.OpenApi 1.x に依存するため競合する。
+      # .NET 10 移行時にまとめて対応する（ref: PR #298）
+      - dependency-name: "Swashbuckle.AspNetCore"
+        update-types: ["version-update:semver-major"]
 
   # E2ETests の npm パッケージの自動更新
   - package-ecosystem: "npm"
