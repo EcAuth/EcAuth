@@ -244,7 +244,7 @@ jobs:
 
       - name: Health check
         env:
-          HEALTH_CHECK_URL: https://ecauth-prod-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net/healthz
+          HEALTH_CHECK_URL: https://production.ec-auth.io/healthz
         run: |
           echo "Waiting for deployment to complete..."
           sleep 30
@@ -300,7 +300,7 @@ jobs:
       - name: Federation authentication verification
         id: federation_verify
         env:
-          ECAUTH_BASE_URL: https://ecauth-prod-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net
+          ECAUTH_BASE_URL: https://production.ec-auth.io
         run: ./.github/scripts/verify-federation-auth.sh
 
       - name: Federation verification result
@@ -333,10 +333,10 @@ jobs:
         id: b2b_verify
         working-directory: E2ETests
         env:
-          E2E_BASE_URL: https://ecauth-prod-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net
+          E2E_BASE_URL: https://production.ec-auth.io
           DEFAULT_CLIENT_ID: ${{ env.CLIENT_ID }}
           DEFAULT_CLIENT_SECRET: ${{ env.CLIENT_SECRET }}
-          DEV_B2B_ALLOWED_RP_IDS: ecauth-prod-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net
+          DEV_B2B_ALLOWED_RP_IDS: production.ec-auth.io
           DEV_B2B_USER_SUBJECT: ${{ env.B2B_USER_SUBJECT }}
           DEV_B2B_REDIRECT_URI: ${{ env.B2B_REDIRECT_URI }}
         run: |
