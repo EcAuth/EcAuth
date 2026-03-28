@@ -51,13 +51,16 @@ namespace IdentityProvider.Services
             if (string.IsNullOrWhiteSpace(subject))
                 throw new ArgumentException("Subject cannot be null or empty.", nameof(request.User));
 
+            var organizationId = request.Client.OrganizationId
+                ?? throw new InvalidOperationException($"Client {request.Client.Id} has no OrganizationId");
+
             // RSA鍵ペアを取得（Organization単位、署名用はアクティブな鍵のみ）
             var rsaKeyPair = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(k => k.OrganizationId == request.Client.OrganizationId && k.IsActive);
+                .FirstOrDefaultAsync(k => k.OrganizationId == organizationId && k.IsActive);
 
             if (rsaKeyPair == null)
-                throw new InvalidOperationException($"Active RSA key pair not found for organization {request.Client.OrganizationId}");
+                throw new InvalidOperationException($"Active RSA key pair not found for organization {organizationId}");
 
             using (var rsa = RSA.Create())
             {
@@ -67,7 +70,7 @@ namespace IdentityProvider.Services
                 }
                 catch (Exception ex)
                 {
-                    throw new InvalidOperationException($"Failed to import RSA private key for organization {request.Client.OrganizationId}: {ex.Message}", ex);
+                    throw new InvalidOperationException($"Failed to import RSA private key for organization {organizationId}: {ex.Message}", ex);
                 }
 
                 var signingCredentials = new SigningCredentials(new RsaSecurityKey(rsa), SecurityAlgorithms.RsaSha256)
@@ -136,13 +139,16 @@ namespace IdentityProvider.Services
             if (string.IsNullOrWhiteSpace(subject))
                 throw new ArgumentException("Subject cannot be null or empty.", nameof(request.User));
 
+            var organizationId = request.Client.OrganizationId
+                ?? throw new InvalidOperationException($"Client {request.Client.Id} has no OrganizationId");
+
             // RSA鍵ペアを取得（Organization単位、署名用はアクティブな鍵のみ）
             var rsaKeyPair = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(k => k.OrganizationId == request.Client.OrganizationId && k.IsActive);
+                .FirstOrDefaultAsync(k => k.OrganizationId == organizationId && k.IsActive);
 
             if (rsaKeyPair == null)
-                throw new InvalidOperationException($"Active RSA key pair not found for organization {request.Client.OrganizationId}");
+                throw new InvalidOperationException($"Active RSA key pair not found for organization {organizationId}");
 
             var jti = Guid.NewGuid().ToString();
             var now = DateTime.UtcNow;
@@ -338,6 +344,12 @@ namespace IdentityProvider.Services
                 }
 
                 // 3. RSA 公開鍵を取得（Organization単位）
+                if (client.OrganizationId == null)
+                {
+                    _logger.LogWarning("Client {ClientId} has no OrganizationId", client.Id);
+                    return new ITokenService.AccessTokenValidationResult { IsValid = false };
+                }
+
                 var rsaKeyPair = await _context.RsaKeyPairs
                     .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(k => k.OrganizationId == client.OrganizationId);
