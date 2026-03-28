@@ -315,7 +315,7 @@ namespace IdentityProvider.Test.Services
             var token = await service.GenerateIdTokenAsync(request);
 
             // Act
-            var subject = await service.ValidateTokenAsync(token, client.Id);
+            var subject = await service.ValidateTokenAsync(token, client.OrganizationId!.Value);
 
             // Assert
             Assert.Equal(user.Subject, subject);
@@ -331,7 +331,7 @@ namespace IdentityProvider.Test.Services
             var (client, _, _) = await SetupTestDataAsync(context);
 
             // Act
-            var subject = await service.ValidateTokenAsync("invalid-token", client.Id);
+            var subject = await service.ValidateTokenAsync("invalid-token", client.OrganizationId!.Value);
 
             // Assert
             Assert.Null(subject);
@@ -359,7 +359,7 @@ namespace IdentityProvider.Test.Services
             await context.SaveChangesAsync();
 
             // Act
-            var subject = await service.ValidateTokenAsync("some-token", client.Id);
+            var subject = await service.ValidateTokenAsync("some-token", organization.Id);
 
             // Assert
             Assert.Null(subject);
@@ -388,7 +388,7 @@ namespace IdentityProvider.Test.Services
             };
             context.EcAuthUsers.Add(user);
 
-            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(context, client, 1);
+            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(context, organization, 1);
 
             await context.SaveChangesAsync();
 
@@ -598,7 +598,7 @@ namespace IdentityProvider.Test.Services
                 OrganizationId = 2
             };
             context.Clients.Add(clientB);
-            TestDbContextHelper.GenerateAndAddRsaKeyPair(context, clientB, 2);
+            TestDbContextHelper.GenerateAndAddRsaKeyPair(context, organizationB, 2);
             await context.SaveChangesAsync();
 
             // Client A の鍵で署名した JWT を手動生成し、client_id を Client B に設定

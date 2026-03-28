@@ -4,6 +4,7 @@ using IdentityProvider.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IdentityProvider.Migrations
 {
     [DbContext(typeof(EcAuthDbContext))]
-    partial class EcAuthDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260328224428_ChangeRsaKeyPairToOrganization")]
+    partial class ChangeRsaKeyPairToOrganization
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -667,20 +670,6 @@ namespace IdentityProvider.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset")
-                        .HasColumnName("created_at");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("bit")
-                        .HasColumnName("is_active");
-
-                    b.Property<string>("Kid")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("nvarchar(256)")
-                        .HasColumnName("kid");
-
                     b.Property<int>("OrganizationId")
                         .HasColumnType("int")
                         .HasColumnName("organization_id");
@@ -697,7 +686,8 @@ namespace IdentityProvider.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("OrganizationId");
+                    b.HasIndex("OrganizationId")
+                        .IsUnique();
 
                     b.ToTable("rsa_key_pair");
                 });
@@ -892,8 +882,8 @@ namespace IdentityProvider.Migrations
             modelBuilder.Entity("IdentityProvider.Models.RsaKeyPair", b =>
                 {
                     b.HasOne("IdentityProvider.Models.Organization", "Organization")
-                        .WithMany("RsaKeyPairs")
-                        .HasForeignKey("OrganizationId")
+                        .WithOne("RsaKeyPair")
+                        .HasForeignKey("IdentityProvider.Models.RsaKeyPair", "OrganizationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
@@ -937,7 +927,7 @@ namespace IdentityProvider.Migrations
                 {
                     b.Navigation("Clients");
 
-                    b.Navigation("RsaKeyPairs");
+                    b.Navigation("RsaKeyPair");
                 });
 #pragma warning restore 612, 618
         }

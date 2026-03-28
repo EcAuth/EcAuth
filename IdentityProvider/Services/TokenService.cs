@@ -51,13 +51,13 @@ namespace IdentityProvider.Services
             if (string.IsNullOrWhiteSpace(subject))
                 throw new ArgumentException("Subject cannot be null or empty.", nameof(request.User));
 
-            // RSA鍵ペアを取得
+            // RSA鍵ペアを取得（Organization単位、署名用はアクティブな鍵のみ）
             var rsaKeyPair = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(k => k.ClientId == request.Client.Id);
+                .FirstOrDefaultAsync(k => k.OrganizationId == request.Client.OrganizationId && k.IsActive);
 
             if (rsaKeyPair == null)
-                throw new InvalidOperationException($"RSA key pair not found for client {request.Client.Id}");
+                throw new InvalidOperationException($"Active RSA key pair not found for organization {request.Client.OrganizationId}");
 
             using (var rsa = RSA.Create())
             {
@@ -67,7 +67,7 @@ namespace IdentityProvider.Services
                 }
                 catch (Exception ex)
                 {
-                    throw new InvalidOperationException($"Failed to import RSA private key for client {request.Client.Id}: {ex.Message}", ex);
+                    throw new InvalidOperationException($"Failed to import RSA private key for organization {request.Client.OrganizationId}: {ex.Message}", ex);
                 }
 
                 var signingCredentials = new SigningCredentials(new RsaSecurityKey(rsa), SecurityAlgorithms.RsaSha256)
@@ -136,13 +136,13 @@ namespace IdentityProvider.Services
             if (string.IsNullOrWhiteSpace(subject))
                 throw new ArgumentException("Subject cannot be null or empty.", nameof(request.User));
 
-            // RSA鍵ペアを取得
+            // RSA鍵ペアを取得（Organization単位、署名用はアクティブな鍵のみ）
             var rsaKeyPair = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(k => k.ClientId == request.Client.Id);
+                .FirstOrDefaultAsync(k => k.OrganizationId == request.Client.OrganizationId && k.IsActive);
 
             if (rsaKeyPair == null)
-                throw new InvalidOperationException($"RSA key pair not found for client {request.Client.Id}");
+                throw new InvalidOperationException($"Active RSA key pair not found for organization {request.Client.OrganizationId}");
 
             var jti = Guid.NewGuid().ToString();
             var now = DateTime.UtcNow;
@@ -217,20 +217,20 @@ namespace IdentityProvider.Services
             return accessTokenJwt;
         }
 
-        public async Task<string?> ValidateTokenAsync(string token, int clientId)
+        public async Task<string?> ValidateTokenAsync(string token, int organizationId)
         {
             try
             {
                 var tokenHandler = new JwtSecurityTokenHandler();
 
-                // クライアントのRSA公開鍵を取得
+                // OrganizationのRSA公開鍵を取得
                 var rsaKeyPair = await _context.RsaKeyPairs
                     .IgnoreQueryFilters()
-                    .FirstOrDefaultAsync(k => k.ClientId == clientId);
+                    .FirstOrDefaultAsync(k => k.OrganizationId == organizationId);
 
                 if (rsaKeyPair == null)
                 {
-                    _logger.LogWarning("RSA key pair not found for client {ClientId}", clientId);
+                    _logger.LogWarning("RSA key pair not found for organization {OrganizationId}", organizationId);
                     return null;
                 }
 
@@ -253,7 +253,7 @@ namespace IdentityProvider.Services
                         }
                         catch (Exception ex2)
                         {
-                            _logger.LogWarning(ex2, "Failed to import RSA keys for client {ClientId}", clientId);
+                            _logger.LogWarning(ex2, "Failed to import RSA keys for organization {OrganizationId}", organizationId);
                             return null;
                         }
                     }
@@ -337,14 +337,14 @@ namespace IdentityProvider.Services
                     return new ITokenService.AccessTokenValidationResult { IsValid = false };
                 }
 
-                // 3. RSA 公開鍵を取得
+                // 3. RSA 公開鍵を取得（Organization単位）
                 var rsaKeyPair = await _context.RsaKeyPairs
                     .IgnoreQueryFilters()
-                    .FirstOrDefaultAsync(k => k.ClientId == client.Id);
+                    .FirstOrDefaultAsync(k => k.OrganizationId == client.OrganizationId);
 
                 if (rsaKeyPair == null)
                 {
-                    _logger.LogWarning("RSA key pair not found for client {ClientId}", client.Id);
+                    _logger.LogWarning("RSA key pair not found for organization {OrganizationId}", client.OrganizationId);
                     return new ITokenService.AccessTokenValidationResult { IsValid = false };
                 }
 

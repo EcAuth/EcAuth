@@ -140,8 +140,8 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.RedirectUris.Add(redirectUri);
 
-            // RSA鍵ペアを追加（JWT ベースの AccessToken 生成に必要）
-            TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, _client, 1);
+            // RSA鍵ペアを追加（JWT ベースの AccessToken 生成に必要、Organization単位）
+            TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, _organization, 1);
 
             _context.SaveChanges();
         }

@@ -18,7 +18,7 @@ namespace IdentityProvider.Test.TestHelpers
             return new EcAuthDbContext(options, mockTenantService);
         }
 
-        public static RsaKeyPair GenerateAndAddRsaKeyPair(EcAuthDbContext context, Client client, int keyId)
+        public static RsaKeyPair GenerateAndAddRsaKeyPair(EcAuthDbContext context, Organization organization, int keyId)
         {
             string publicKey, privateKey;
             using (var rsa = RSA.Create(2048))
@@ -30,10 +30,11 @@ namespace IdentityProvider.Test.TestHelpers
             var rsaKeyPair = new RsaKeyPair
             {
                 Id = keyId,
-                ClientId = client.Id,
+                Kid = Guid.NewGuid().ToString(),
+                OrganizationId = organization.Id,
                 PublicKey = publicKey,
                 PrivateKey = privateKey,
-                Client = client
+                Organization = organization
             };
             context.RsaKeyPairs.Add(rsaKeyPair);
             return rsaKeyPair;

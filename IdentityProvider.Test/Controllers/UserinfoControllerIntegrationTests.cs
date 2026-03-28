@@ -359,7 +359,7 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.EcAuthUsers.Add(user);
 
-            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client, 1);
+            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, organization, 1);
 
             await _context.SaveChangesAsync();
 
@@ -400,7 +400,7 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.B2BUsers.Add(b2bUser);
 
-            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client, 1);
+            var rsaKeyPair = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, organization, 1);
 
             await _context.SaveChangesAsync();
 
@@ -441,7 +441,7 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.EcAuthUsers.Add(user1);
 
-            var rsaKeyPair1 = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client1, 1);
+            var rsaKeyPair1 = TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, org1, 1);
 
             // テナント2
             var org2 = new Organization
@@ -475,7 +475,7 @@ namespace IdentityProvider.Test.Controllers
             };
             _context.EcAuthUsers.Add(user2);
 
-            TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, client2, 2);
+            TestDbContextHelper.GenerateAndAddRsaKeyPair(_context, org2, 2);
 
             await _context.SaveChangesAsync();
 
