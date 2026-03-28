@@ -15,7 +15,7 @@ namespace IdentityProvider.Data.Seeders;
 public class OrganizationClientSeeder : IDbSeeder
 {
     /// <inheritdoc />
-    public string RequiredMigration => "20250119154540_FixIdpRelations";
+    public string RequiredMigration => "20260328224428_ChangeRsaKeyPairToOrganization";
 
     /// <inheritdoc />
     public int Order => 10;
