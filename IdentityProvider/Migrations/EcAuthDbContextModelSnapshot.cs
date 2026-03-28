@@ -695,6 +695,10 @@ namespace IdentityProvider.Migrations
                         .HasColumnType("nvarchar(max)")
                         .HasColumnName("public_key");
 
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("updated_at");
+
                     b.HasKey("Id");
 
                     b.HasIndex("OrganizationId");

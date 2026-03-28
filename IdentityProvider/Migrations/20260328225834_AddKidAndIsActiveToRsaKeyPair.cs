@@ -32,7 +32,15 @@ namespace IdentityProvider.Migrations
                 nullable: false,
                 defaultValue: true);
 
-            // 4. kid カラム追加
+            // 4. updated_at カラム追加
+            migrationBuilder.AddColumn<DateTimeOffset>(
+                name: "updated_at",
+                table: "rsa_key_pair",
+                type: "datetimeoffset",
+                nullable: false,
+                defaultValueSql: "SYSDATETIMEOFFSET()");
+
+            // 5. kid カラム追加
             migrationBuilder.AddColumn<string>(
                 name: "kid",
                 table: "rsa_key_pair",
@@ -41,7 +49,7 @@ namespace IdentityProvider.Migrations
                 nullable: false,
                 defaultValue: "");
 
-            // 5. 既存データの kid に UUID を設定
+            // 6. 既存データの kid に UUID を設定
             migrationBuilder.Sql(@"
                 IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.rsa_key_pair') AND name = 'kid')
                 BEGIN
@@ -49,13 +57,13 @@ namespace IdentityProvider.Migrations
                 END
             ");
 
-            // 6. organization_id に通常インデックスを作成
+            // 7. organization_id に通常インデックスを作成
             migrationBuilder.CreateIndex(
                 name: "IX_rsa_key_pair_organization_id",
                 table: "rsa_key_pair",
                 column: "organization_id");
 
-            // 7. (organization_id, kid) にユニークインデックスを作成
+            // 8. (organization_id, kid) にユニークインデックスを作成
             migrationBuilder.CreateIndex(
                 name: "IX_rsa_key_pair_organization_id_kid",
                 table: "rsa_key_pair",
@@ -80,6 +88,10 @@ namespace IdentityProvider.Migrations
 
             migrationBuilder.DropColumn(
                 name: "is_active",
+                table: "rsa_key_pair");
+
+            migrationBuilder.DropColumn(
+                name: "updated_at",
                 table: "rsa_key_pair");
 
             migrationBuilder.DropColumn(

@@ -21,6 +21,8 @@ namespace IdentityProvider.Models
         public bool IsActive { get; set; } = true;
         [Column("created_at")]
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+        [Column("updated_at")]
+        public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
         [Column("organization_id")]
         public int OrganizationId { get; set; }
         public Organization Organization { get; set; } = null!;
