@@ -699,6 +699,9 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("OrganizationId");
 
+                    b.HasIndex("OrganizationId", "Kid")
+                        .IsUnique();
+
                     b.ToTable("rsa_key_pair");
                 });
 

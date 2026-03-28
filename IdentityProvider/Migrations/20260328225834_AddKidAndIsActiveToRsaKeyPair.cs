@@ -54,11 +54,22 @@ namespace IdentityProvider.Migrations
                 name: "IX_rsa_key_pair_organization_id",
                 table: "rsa_key_pair",
                 column: "organization_id");
+
+            // 7. (organization_id, kid) にユニークインデックスを作成
+            migrationBuilder.CreateIndex(
+                name: "IX_rsa_key_pair_organization_id_kid",
+                table: "rsa_key_pair",
+                columns: new[] { "organization_id", "kid" },
+                unique: true);
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.DropIndex(
+                name: "IX_rsa_key_pair_organization_id_kid",
+                table: "rsa_key_pair");
+
             migrationBuilder.DropIndex(
                 name: "IX_rsa_key_pair_organization_id",
                 table: "rsa_key_pair");
