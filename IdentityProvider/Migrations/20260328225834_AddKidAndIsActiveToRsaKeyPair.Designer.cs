@@ -698,11 +698,16 @@ namespace IdentityProvider.Migrations
                         .HasColumnType("nvarchar(max)")
                         .HasColumnName("public_key");
 
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("updated_at");
+
                     b.HasKey("Id");
 
-                    b.HasIndex("OrganizationId");
+                    b.HasIndex("OrganizationId", "Kid")
+                        .IsUnique();
 
-                    b.ToTable("rsa_key_pair");
+                    b.ToTable("rsa_key_pair", (string)null);
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.WebAuthnChallenge", b =>
