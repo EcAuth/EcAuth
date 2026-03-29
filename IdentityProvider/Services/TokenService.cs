@@ -232,6 +232,8 @@ namespace IdentityProvider.Services
                 var tokenHandler = new JwtSecurityTokenHandler();
 
                 // OrganizationのRSA公開鍵を取得
+                // TODO: 鍵ローテーション実装時に JWT ヘッダーの kid で鍵を特定する。
+                //       kid がない旧トークンは全候補でフォールバック検証する。
                 var rsaKeyPair = await _context.RsaKeyPairs
                     .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(k => k.OrganizationId == organizationId);
@@ -352,6 +354,8 @@ namespace IdentityProvider.Services
                     return new ITokenService.AccessTokenValidationResult { IsValid = false };
                 }
 
+                // TODO: 鍵ローテーション実装時に JWT ヘッダーの kid で鍵を特定する。
+                //       kid がない旧トークンは全候補でフォールバック検証する。
                 var rsaKeyPair = await _context.RsaKeyPairs
                     .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(k => k.OrganizationId == client.OrganizationId);
