@@ -32,7 +32,15 @@ namespace IdentityProvider.Migrations
                 END
             ");
 
-            // 4. 同一 organization_id の重複キーペアを削除（最小IDのみ残す）
+            // 4. backfill 失敗検知: organization_id が NULL のレコードが残っていたらエラー
+            migrationBuilder.Sql(@"
+                IF EXISTS (SELECT 1 FROM dbo.rsa_key_pair WHERE organization_id IS NULL)
+                BEGIN
+                    THROW 50000, 'rsa_key_pair.organization_id backfill failed. Check client.organization_id / orphaned rsa_key_pair rows.', 1;
+                END
+            ");
+
+            // 5. 同一 organization_id の重複キーペアを削除（最小IDのみ残す）
             migrationBuilder.Sql(@"
                 IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.rsa_key_pair') AND name = 'organization_id')
                 BEGIN
@@ -40,7 +48,7 @@ namespace IdentityProvider.Migrations
                 END
             ");
 
-            // 5. NOT NULL 制約を追加
+            // 6. NOT NULL 制約を追加
             migrationBuilder.AlterColumn<int>(
                 name: "organization_id",
                 table: "rsa_key_pair",
@@ -50,24 +58,24 @@ namespace IdentityProvider.Migrations
                 oldType: "int",
                 oldNullable: true);
 
-            // 6. client_id のインデックスを削除
+            // 7. client_id のインデックスを削除
             migrationBuilder.DropIndex(
                 name: "IX_rsa_key_pair_client_id",
                 table: "rsa_key_pair");
 
-            // 7. client_id カラムを削除
+            // 8. client_id カラムを削除
             migrationBuilder.DropColumn(
                 name: "client_id",
                 table: "rsa_key_pair");
 
-            // 8. organization_id にユニ���クインデックスを作成
+            // 9. organization_id にユニークインデックスを作成
             migrationBuilder.CreateIndex(
                 name: "IX_rsa_key_pair_organization_id",
                 table: "rsa_key_pair",
                 column: "organization_id",
                 unique: true);
 
-            // 9. 外部キー制約を追加
+            // 10. 外部キー制約を追加
             migrationBuilder.AddForeignKey(
                 name: "FK_rsa_key_pair_organization_organization_id",
                 table: "rsa_key_pair",
