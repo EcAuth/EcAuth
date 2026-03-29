@@ -44,7 +44,7 @@ namespace IdentityProvider.Test.Data.Seeders
         [Fact]
         public void RequiredMigration_ShouldBeCorrectMigrationName()
         {
-            Assert.Equal("20260328224428_ChangeRsaKeyPairToOrganization", _seeder.RequiredMigration);
+            Assert.Equal("20260328225834_AddKidAndIsActiveToRsaKeyPair", _seeder.RequiredMigration);
         }
 
         [Fact]
