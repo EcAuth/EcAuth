@@ -73,7 +73,8 @@ namespace IdentityProvider.Services
                     throw new InvalidOperationException($"Failed to import RSA private key for organization {organizationId}: {ex.Message}", ex);
                 }
 
-                var signingCredentials = new SigningCredentials(new RsaSecurityKey(rsa), SecurityAlgorithms.RsaSha256)
+                var signingKey = new RsaSecurityKey(rsa) { KeyId = rsaKeyPair.Kid };
+                var signingCredentials = new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256)
                 {
                     CryptoProviderFactory = new CryptoProviderFactory { CacheSignatureProviders = false }
                 };
@@ -161,7 +162,8 @@ namespace IdentityProvider.Services
             {
                 rsa.ImportRSAPrivateKey(Convert.FromBase64String(rsaKeyPair.PrivateKey), out _);
 
-                var signingCredentials = new SigningCredentials(new RsaSecurityKey(rsa), SecurityAlgorithms.RsaSha256)
+                var signingKey = new RsaSecurityKey(rsa) { KeyId = rsaKeyPair.Kid };
+                var signingCredentials = new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256)
                 {
                     CryptoProviderFactory = new CryptoProviderFactory { CacheSignatureProviders = false }
                 };
