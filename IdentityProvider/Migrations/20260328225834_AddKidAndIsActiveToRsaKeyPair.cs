@@ -72,10 +72,6 @@ namespace IdentityProvider.Migrations
                 name: "IX_rsa_key_pair_organization_id_kid",
                 table: "rsa_key_pair");
 
-            migrationBuilder.DropIndex(
-                name: "IX_rsa_key_pair_organization_id_kid",
-                table: "rsa_key_pair");
-
             migrationBuilder.DropColumn(
                 name: "created_at",
                 table: "rsa_key_pair");
