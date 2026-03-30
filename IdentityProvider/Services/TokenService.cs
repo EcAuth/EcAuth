@@ -54,9 +54,10 @@ namespace IdentityProvider.Services
             var organizationId = request.Client.OrganizationId
                 ?? throw new InvalidOperationException($"Client {request.Client.Id} has no OrganizationId");
 
-            // RSA鍵ペアを取得（Organization単位、署名用はアクティブな鍵のみ）
+            // RSA鍵ペアを取得（Organization単位、署名用はアクティブな最新の鍵）
             var rsaKeyPair = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
+                .OrderByDescending(k => k.CreatedAt)
                 .FirstOrDefaultAsync(k => k.OrganizationId == organizationId && k.IsActive);
 
             if (rsaKeyPair == null)
@@ -143,9 +144,10 @@ namespace IdentityProvider.Services
             var organizationId = request.Client.OrganizationId
                 ?? throw new InvalidOperationException($"Client {request.Client.Id} has no OrganizationId");
 
-            // RSA鍵ペアを取得（Organization単位、署名用はアクティブな鍵のみ）
+            // RSA鍵ペアを取得（Organization単位、署名用はアクティブな最新の鍵）
             var rsaKeyPair = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
+                .OrderByDescending(k => k.CreatedAt)
                 .FirstOrDefaultAsync(k => k.OrganizationId == organizationId && k.IsActive);
 
             if (rsaKeyPair == null)
