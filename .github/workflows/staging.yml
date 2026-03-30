@@ -43,7 +43,7 @@ jobs:
 
       - name: Load secrets from 1Password
         id: load_secrets
-        uses: 1password/load-secrets-action@v3
+        uses: 1password/load-secrets-action@v4
         with:
           export-env: true
         env:
@@ -210,7 +210,7 @@ jobs:
           path: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
 
       - name: Load secrets from 1Password
-        uses: 1password/load-secrets-action@v3
+        uses: 1password/load-secrets-action@v4
         with:
           export-env: true
         env:
@@ -275,7 +275,7 @@ jobs:
             E2ETests
 
       - name: Load secrets from 1Password
-        uses: 1password/load-secrets-action@v3
+        uses: 1password/load-secrets-action@v4
         with:
           export-env: true
         env:
