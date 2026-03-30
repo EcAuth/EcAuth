@@ -44,7 +44,7 @@ namespace IdentityProvider.Test.Data.Seeders
         [Fact]
         public void RequiredMigration_ShouldBeCorrectMigrationName()
         {
-            Assert.Equal("20250119154540_FixIdpRelations", _seeder.RequiredMigration);
+            Assert.Equal("20260328225834_AddKidAndIsActiveToRsaKeyPair", _seeder.RequiredMigration);
         }
 
         [Fact]
@@ -237,9 +237,13 @@ namespace IdentityProvider.Test.Data.Seeders
                 .IgnoreQueryFilters()
                 .FirstAsync(c => c.ClientId == TestClientId);
 
+            var organization = await _context.Organizations
+                .IgnoreQueryFilters()
+                .FirstAsync(o => o.Code == TestOrganizationCode);
+
             var rsaKeyPair = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(r => r.ClientId == client.Id);
+                .FirstOrDefaultAsync(r => r.OrganizationId == organization.Id);
 
             Assert.NotNull(rsaKeyPair);
             Assert.NotEmpty(rsaKeyPair.PublicKey);
@@ -253,13 +257,13 @@ namespace IdentityProvider.Test.Data.Seeders
             var configuration = CreateDevConfiguration();
             await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
 
-            var client = await _context.Clients
+            var organization = await _context.Organizations
                 .IgnoreQueryFilters()
-                .FirstAsync(c => c.ClientId == TestClientId);
+                .FirstAsync(o => o.Code == TestOrganizationCode);
 
             var originalKeyPair = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
-                .FirstAsync(r => r.ClientId == client.Id);
+                .FirstAsync(r => r.OrganizationId == organization.Id);
 
             var originalPublicKey = originalKeyPair.PublicKey;
 
@@ -269,14 +273,14 @@ namespace IdentityProvider.Test.Data.Seeders
             // Assert
             var count = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
-                .CountAsync(r => r.ClientId == client.Id);
+                .CountAsync(r => r.OrganizationId == organization.Id);
 
             Assert.Equal(1, count);
 
             // 公開鍵は変更されていないことを確認
             var keyPair = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
-                .FirstAsync(r => r.ClientId == client.Id);
+                .FirstAsync(r => r.OrganizationId == organization.Id);
             Assert.Equal(originalPublicKey, keyPair.PublicKey);
         }
 
@@ -548,9 +552,13 @@ namespace IdentityProvider.Test.Data.Seeders
                 .CountAsync(r => r.Uri == TestRedirectUri && r.ClientId == client.Id);
             Assert.Equal(1, redirectUriCount);
 
+            var organization = await _context.Organizations
+                .IgnoreQueryFilters()
+                .FirstAsync(o => o.Code == TestOrganizationCode);
+
             var rsaKeyPairCount = await _context.RsaKeyPairs
                 .IgnoreQueryFilters()
-                .CountAsync(r => r.ClientId == client.Id);
+                .CountAsync(r => r.OrganizationId == organization.Id);
             Assert.Equal(1, rsaKeyPairCount);
 
             var providerCount = await _context.OpenIdProviders

@@ -15,7 +15,7 @@ namespace IdentityProvider.Data.Seeders;
 public class OrganizationClientSeeder : IDbSeeder
 {
     /// <inheritdoc />
-    public string RequiredMigration => "20250119154540_FixIdpRelations";
+    public string RequiredMigration => "20260328225834_AddKidAndIsActiveToRsaKeyPair";
 
     /// <inheritdoc />
     public int Order => 10;
@@ -79,8 +79,8 @@ public class OrganizationClientSeeder : IDbSeeder
         // 3. RedirectUri 作成
         hasChanges |= await SeedRedirectUriAsync(context, client.entity, redirectUri, logger);
 
-        // 4. RsaKeyPair 生成・保存
-        hasChanges |= await SeedRsaKeyPairAsync(context, client.entity, logger);
+        // 4. RsaKeyPair 生成・保存（Organization単位）
+        hasChanges |= await SeedRsaKeyPairAsync(context, organization, logger);
 
         // 5. OpenIdProvider（MockIdP）作成
         hasChanges |= await SeedOpenIdProviderAsync(
@@ -204,12 +204,12 @@ public class OrganizationClientSeeder : IDbSeeder
 
     private static async Task<bool> SeedRsaKeyPairAsync(
         EcAuthDbContext context,
-        Client client,
+        Organization organization,
         ILogger logger)
     {
         var exists = await context.RsaKeyPairs
             .IgnoreQueryFilters()
-            .AnyAsync(r => r.ClientId == client.Id);
+            .AnyAsync(r => r.OrganizationId == organization.Id);
 
         if (exists)
         {
@@ -222,12 +222,14 @@ public class OrganizationClientSeeder : IDbSeeder
 
         context.RsaKeyPairs.Add(new RsaKeyPair
         {
-            ClientId = client.Id,
+            Kid = Guid.NewGuid().ToString(),
+            OrganizationId = organization.Id,
             PublicKey = publicKeyBase64,
-            PrivateKey = privateKeyBase64
+            PrivateKey = privateKeyBase64,
+            IsActive = true
         });
 
-        logger.LogInformation("Generated RsaKeyPair for client {ClientId}", client.ClientId);
+        logger.LogInformation("Generated RsaKeyPair for organization {OrganizationCode}", organization.Code);
         return true;
     }
 

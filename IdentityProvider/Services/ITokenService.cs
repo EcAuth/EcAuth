@@ -77,9 +77,9 @@ namespace IdentityProvider.Services
         /// JWTトークンを検証する
         /// </summary>
         /// <param name="token">検証するJWTトークン</param>
-        /// <param name="clientId">クライアントID</param>
+        /// <param name="organizationId">OrganizationID</param>
         /// <returns>検証に成功した場合、ユーザーのSubject</returns>
-        Task<string?> ValidateTokenAsync(string token, int clientId);
+        Task<string?> ValidateTokenAsync(string token, int organizationId);
 
         /// <summary>
         /// アクセストークンを検証する

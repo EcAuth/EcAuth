@@ -23,5 +23,6 @@ namespace IdentityProvider.Models
         [Column("updated_at")]
         public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
         public ICollection<Client> Clients { get; } = new List<Client>();
+        public ICollection<RsaKeyPair> RsaKeyPairs { get; } = new List<RsaKeyPair>();
     }
 }

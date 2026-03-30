@@ -4,6 +4,7 @@ using IdentityProvider.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IdentityProvider.Migrations
 {
     [DbContext(typeof(EcAuthDbContext))]
-    partial class EcAuthDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260328224428_ChangeRsaKeyPairToOrganization")]
+    partial class ChangeRsaKeyPairToOrganization
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -81,7 +84,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("Token")
                         .IsUnique();
 
-                    b.ToTable("access_token", (string)null);
+                    b.ToTable("access_token");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.Account", b =>
@@ -113,7 +116,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("account", (string)null);
+                    b.ToTable("account");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.AuthorizationCode", b =>
@@ -175,7 +178,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("ExpiresAt");
 
-                    b.ToTable("authorization_code", (string)null);
+                    b.ToTable("authorization_code");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.B2BPasskeyCredential", b =>
@@ -236,7 +239,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("CredentialId")
                         .IsUnique();
 
-                    b.ToTable("b2b_passkey_credential", (string)null);
+                    b.ToTable("b2b_passkey_credential");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.B2BUser", b =>
@@ -283,7 +286,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("OrganizationId", "ExternalId")
                         .IsUnique();
 
-                    b.ToTable("b2b_user", (string)null);
+                    b.ToTable("b2b_user");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.Client", b =>
@@ -336,7 +339,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("OrganizationId");
 
-                    b.ToTable("client", (string)null);
+                    b.ToTable("client");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.EcAuthUser", b =>
@@ -380,7 +383,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("OrganizationId", "EmailHash")
                         .IsUnique();
 
-                    b.ToTable("ecauth_user", (string)null);
+                    b.ToTable("ecauth_user");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.ExternalIdpMapping", b =>
@@ -421,7 +424,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("ExternalProvider", "ExternalSubject")
                         .IsUnique();
 
-                    b.ToTable("external_idp_mapping", (string)null);
+                    b.ToTable("external_idp_mapping");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.ExternalIdpToken", b =>
@@ -475,7 +478,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("EcAuthSubject", "ExternalProvider")
                         .IsUnique();
 
-                    b.ToTable("external_idp_token", (string)null);
+                    b.ToTable("external_idp_token");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.OpenIdProvider", b =>
@@ -542,7 +545,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("ClientId");
 
-                    b.ToTable("open_id_provider", (string)null);
+                    b.ToTable("open_id_provider");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.OpenIdProviderScope", b =>
@@ -579,7 +582,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("OpenIdProviderId");
 
-                    b.ToTable("open_id_provider_scope", (string)null);
+                    b.ToTable("open_id_provider_scope");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.Organization", b =>
@@ -622,7 +625,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("Code")
                         .IsUnique();
 
-                    b.ToTable("organization", (string)null);
+                    b.ToTable("organization");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.RedirectUri", b =>
@@ -655,7 +658,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasIndex("ClientId");
 
-                    b.ToTable("redirect_uri", (string)null);
+                    b.ToTable("redirect_uri");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.RsaKeyPair", b =>
@@ -666,20 +669,6 @@ namespace IdentityProvider.Migrations
                         .HasColumnName("id");
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset")
-                        .HasColumnName("created_at");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("bit")
-                        .HasColumnName("is_active");
-
-                    b.Property<string>("Kid")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("nvarchar(256)")
-                        .HasColumnName("kid");
 
                     b.Property<int>("OrganizationId")
                         .HasColumnType("int")
@@ -695,16 +684,12 @@ namespace IdentityProvider.Migrations
                         .HasColumnType("nvarchar(max)")
                         .HasColumnName("public_key");
 
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("datetimeoffset")
-                        .HasColumnName("updated_at");
-
                     b.HasKey("Id");
 
-                    b.HasIndex("OrganizationId", "Kid")
+                    b.HasIndex("OrganizationId")
                         .IsUnique();
 
-                    b.ToTable("rsa_key_pair", (string)null);
+                    b.ToTable("rsa_key_pair");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.WebAuthnChallenge", b =>
@@ -771,7 +756,7 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("SessionId")
                         .IsUnique();
 
-                    b.ToTable("webauthn_challenge", (string)null);
+                    b.ToTable("webauthn_challenge");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.AccessToken", b =>
@@ -897,8 +882,8 @@ namespace IdentityProvider.Migrations
             modelBuilder.Entity("IdentityProvider.Models.RsaKeyPair", b =>
                 {
                     b.HasOne("IdentityProvider.Models.Organization", "Organization")
-                        .WithMany("RsaKeyPairs")
-                        .HasForeignKey("OrganizationId")
+                        .WithOne("RsaKeyPair")
+                        .HasForeignKey("IdentityProvider.Models.RsaKeyPair", "OrganizationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
@@ -942,7 +927,7 @@ namespace IdentityProvider.Migrations
                 {
                     b.Navigation("Clients");
 
-                    b.Navigation("RsaKeyPairs");
+                    b.Navigation("RsaKeyPair");
                 });
 #pragma warning restore 612, 618
         }

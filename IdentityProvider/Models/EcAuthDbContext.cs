@@ -191,6 +191,11 @@ namespace IdentityProvider.Models
                 .HasForeignKey(wc => wc.ClientId)
                 .OnDelete(DeleteBehavior.Restrict);
 
+            // RsaKeyPair: (OrganizationId, Kid) のユニーク制約
+            modelBuilder.Entity<RsaKeyPair>()
+                .HasIndex(k => new { k.OrganizationId, k.Kid })
+                .IsUnique();
+
             base.OnModelCreating(modelBuilder);
         }
     }
