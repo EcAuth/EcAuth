@@ -33,10 +33,11 @@ namespace IdentityProvider.Migrations
             ");
 
             // 4. backfill 失敗検知: organization_id が NULL のレコードが残っていたらエラー
+            // EXEC() でラップして名前解決を実行時まで遅延（idempotent スクリプト対応）
             migrationBuilder.Sql(@"
-                IF EXISTS (SELECT 1 FROM dbo.rsa_key_pair WHERE organization_id IS NULL)
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.rsa_key_pair') AND name = 'organization_id')
                 BEGIN
-                    THROW 50000, 'rsa_key_pair.organization_id backfill failed. Check client.organization_id / orphaned rsa_key_pair rows.', 1;
+                    EXEC(N'IF EXISTS (SELECT 1 FROM dbo.rsa_key_pair WHERE organization_id IS NULL) THROW 50000, ''rsa_key_pair.organization_id backfill failed. Check client.organization_id / orphaned rsa_key_pair rows.'', 1;')
                 END
             ");
 
