@@ -44,3 +44,83 @@ jobs:
     - name: Test
       working-directory: ./IdentityProvider.Test
       run: dotnet test --no-build --verbosity normal
+
+  verify-idempotent-script:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: read
+
+    env:
+      DB_PASSWORD: "<YourStrong@Passw0rd>"
+      DB_NAME: "EcAuthTest"
+
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          SA_PASSWORD: "<YourStrong@Passw0rd>"
+          ACCEPT_EULA: "Y"
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "exit 0"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: Add GitHub Packages source with credentials
+      run: |
+        dotnet nuget remove source github || true
+        dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
+          --name github \
+          --username ${{ github.actor }} \
+          --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+          --store-password-in-clear-text
+
+    - name: Restore .NET tools
+      run: dotnet tool restore
+
+    - name: Restore dependencies
+      run: dotnet restore IdentityProvider/IdentityProvider.csproj
+
+    - name: Build
+      run: dotnet build IdentityProvider/IdentityProvider.csproj --no-restore
+
+    - name: Install mssql-tools18
+      run: |
+        curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/microsoft-prod.list
+        sudo apt-get update
+        sudo ACCEPT_EULA=Y apt-get install -y mssql-tools18
+
+    - name: Create test database
+      run: |
+        /opt/mssql-tools18/bin/sqlcmd -S localhost -U SA -P "${DB_PASSWORD}" -C -b -Q \
+          "CREATE DATABASE [${DB_NAME}];"
+
+    - name: Generate idempotent migration script
+      working-directory: IdentityProvider
+      run: |
+        dotnet ef migrations script --idempotent --output ../migration.sql
+        echo "Generated idempotent migration script ($(wc -l < ../migration.sql) lines)"
+
+    - name: Verify idempotent migration script
+      run: |
+        /opt/mssql-tools18/bin/sqlcmd -S localhost -d "${DB_NAME}" -U SA -P "${DB_PASSWORD}" -C -b -I -i migration.sql
+        echo "Idempotent migration script executed successfully"
+
+    - name: Verify idempotent script is re-runnable
+      run: |
+        /opt/mssql-tools18/bin/sqlcmd -S localhost -d "${DB_NAME}" -U SA -P "${DB_PASSWORD}" -C -b -I -i migration.sql
+        echo "Idempotent migration script re-execution succeeded (idempotency verified)"

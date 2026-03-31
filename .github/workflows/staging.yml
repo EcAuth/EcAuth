@@ -139,6 +139,16 @@ jobs:
           connection-string: ${{ steps.connection.outputs.connection_string }}
           path: ./migration.sql
 
+      - name: Verify migration applied
+        if: ${{ (inputs.dry_run || false) != true }}
+        run: |
+          cd IdentityProvider
+          LATEST_MIGRATION=$(dotnet ef migrations list --no-build --configuration Release | tail -1)
+          echo "Latest migration: ${LATEST_MIGRATION}"
+          sqlcmd -S "tcp:${SQL_HOST},1433" -d "${SQL_DATABASE}" -U "${SQL_USERNAME}" -P "${SQL_PASSWORD}" -C -b -Q \
+            "IF NOT EXISTS (SELECT 1 FROM [__EFMigrationsHistory] WHERE [MigrationId] = '${LATEST_MIGRATION}') THROW 50000, 'Migration ${LATEST_MIGRATION} was not applied', 1;"
+          echo "Migration verification passed: ${LATEST_MIGRATION} exists in __EFMigrationsHistory"
+
       - name: Dry run - Skip migration apply
         if: ${{ (inputs.dry_run || false) == true }}
         run: |
