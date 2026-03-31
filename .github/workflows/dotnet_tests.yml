@@ -97,6 +97,13 @@ jobs:
     - name: Build
       run: dotnet build IdentityProvider/IdentityProvider.csproj --no-restore
 
+    - name: Install sqlcmd
+      run: |
+        curl https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc
+        sudo add-apt-repository "$(wget -qO- https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list)"
+        sudo apt-get update
+        sudo apt-get install -y sqlcmd
+
     - name: Create test database
       run: |
         sqlcmd -S localhost -U SA -P "${DB_PASSWORD}" -C -b -Q \
