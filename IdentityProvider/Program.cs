@@ -62,6 +62,9 @@ builder.Services.AddApiVersioning(options =>
     options.AssumeDefaultVersionWhenUnspecified = true;
     options.ReportApiVersions = true;
     options.ApiVersionReader = new UrlSegmentApiVersionReader();
+}).AddApiExplorer(options =>
+{
+    options.SubstituteApiVersionInUrl = true;
 });
 builder.Services.AddControllers();
 builder.Services.AddMvc();
