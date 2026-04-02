@@ -18,7 +18,7 @@ namespace IdentityProvider.Test.Data.Seeders
         private const string TestClientId = "test-client-id";
         private const string TestClientSecret = "test-client-secret";
         private const string TestAppName = "Test App";
-        private const string TestRedirectUri = "https://localhost:8081/auth/callback";
+        private const string TestRedirectUri = "https://localhost:8081/v1/auth/callback";
         private const string TestMockIdpAppName = "test-mock-idp";
         private const string TestMockIdpClientId = "mock-idp-client-id";
         private const string TestMockIdpClientSecret = "mock-idp-client-secret";

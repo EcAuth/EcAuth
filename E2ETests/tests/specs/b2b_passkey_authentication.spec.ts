@@ -2,7 +2,7 @@ import { test, expect, BrowserContext, Page, CDPSession, APIRequestContext, requ
 
 test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   const baseUrl = process.env.E2E_BASE_URL || 'https://localhost:8081';
-  const tokenEndpoint = process.env.E2E_TOKEN_ENDPOINT || `${baseUrl}/token`;
+  const tokenEndpoint = process.env.E2E_TOKEN_ENDPOINT || `${baseUrl}/v1/token`;
   const clientId = process.env.DEFAULT_CLIENT_ID || 'client_id';
   const clientSecret = process.env.DEFAULT_CLIENT_SECRET || 'client_secret';
   const rpId = process.env.DEV_B2B_ALLOWED_RP_IDS || 'localhost';
@@ -186,7 +186,7 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   test('UserInfoエンドポイント検証', async () => {
     expect(accessToken).toBeTruthy();
 
-    const response = await apiContext.get(`${baseUrl}/userinfo`, {
+    const response = await apiContext.get(`${baseUrl}/v1/userinfo`, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
@@ -203,7 +203,7 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   test('パスキー一覧取得', async () => {
     expect(accessToken).toBeTruthy();
 
-    const response = await apiContext.get(`${baseUrl}/b2b/passkey/list`, {
+    const response = await apiContext.get(`${baseUrl}/v1/b2b/passkey/list`, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
@@ -231,7 +231,7 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
     expect(credentialId).toBeTruthy();
 
     const response = await apiContext.delete(
-      `${baseUrl}/b2b/passkey/${encodeURIComponent(credentialId)}`,
+      `${baseUrl}/v1/b2b/passkey/${encodeURIComponent(credentialId)}`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -246,7 +246,7 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   test('削除後の一覧確認', async () => {
     expect(accessToken).toBeTruthy();
 
-    const response = await apiContext.get(`${baseUrl}/b2b/passkey/list`, {
+    const response = await apiContext.get(`${baseUrl}/v1/b2b/passkey/list`, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },

@@ -1,6 +1,7 @@
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdpUtilities;
+using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Web;
@@ -8,7 +9,8 @@ using System.Text.Json;
 
 namespace IdentityProvider.Controllers
 {
-    [Route("auth/callback")]
+    [Route("v{version:apiVersion}/auth/callback")]
+    [ApiVersion("1.0")]
     public class AuthorizationCallbackController : Controller
     {
         private readonly EcAuthDbContext _context;
@@ -196,7 +198,7 @@ namespace IdentityProvider.Controllers
                 {
                     { "grant_type", "authorization_code" },
                     { "code", code },
-                    { "redirect_uri", _configuration["DEFAULT_ORGANIZATION_REDIRECT_URI"] ?? "https://localhost:8081/auth/callback" },
+                    { "redirect_uri", _configuration["DEFAULT_ORGANIZATION_REDIRECT_URI"] ?? "https://localhost:8081/v1/auth/callback" },
                     { "client_id", provider.IdpClientId },
                     { "client_secret", provider.IdpClientSecret }
                 });

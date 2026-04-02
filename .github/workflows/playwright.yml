@@ -49,12 +49,12 @@ jobs:
           echo "FEDERATE_OAUTH2_TOKEN_ENDPOINT=${MOCK_IDP_BASE_URL}/token?org=${MOCK_IDP_ORG}" >> $GITHUB_ENV
           echo "FEDERATE_OAUTH2_USERINFO_ENDPOINT=${MOCK_IDP_BASE_URL}/userinfo?org=${MOCK_IDP_ORG}" >> $GITHUB_ENV
           # E2Eテスト用の環境変数
-          echo "E2E_AUTHORIZATION_ENDPOINT=https://localhost:8081/authorization" >> $GITHUB_ENV
-          echo "E2E_TOKEN_ENDPOINT=https://localhost:8081/token" >> $GITHUB_ENV
+          echo "E2E_AUTHORIZATION_ENDPOINT=https://localhost:8081/v1/authorization" >> $GITHUB_ENV
+          echo "E2E_TOKEN_ENDPOINT=https://localhost:8081/v1/token" >> $GITHUB_ENV
           echo "E2E_USERINFO_ENDPOINT=${MOCK_IDP_BASE_URL}/userinfo?org=${MOCK_IDP_ORG}" >> $GITHUB_ENV
-          echo "E2E_REDIRECT_URI=https://localhost:8081/auth/callback" >> $GITHUB_ENV
+          echo "E2E_REDIRECT_URI=https://localhost:8081/v1/auth/callback" >> $GITHUB_ENV
           # MockIdP 単体テスト用
-          echo "E2E_MOCK_IDP_REDIRECT_URI=http://localhost:8080/auth/callback" >> $GITHUB_ENV
+          echo "E2E_MOCK_IDP_REDIRECT_URI=http://localhost:8080/v1/auth/callback" >> $GITHUB_ENV
         env:
           DB_NAME: ${{ env.DB_NAME }}
           DB_USER: ${{ env.DB_USER }}

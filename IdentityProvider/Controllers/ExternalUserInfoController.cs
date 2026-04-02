@@ -1,12 +1,14 @@
 using IdentityProvider.Services;
+using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using System.Net.Http.Headers;
 using System.Text.Json;
 
 namespace IdentityProvider.Controllers
 {
-    [Route("api/external-userinfo")]
+    [Route("v{version:apiVersion}/api/external-userinfo")]
     [ApiController]
+    [ApiVersion("1.0")]
     public class ExternalUserInfoController : ControllerBase
     {
         private readonly ITokenService _tokenService;

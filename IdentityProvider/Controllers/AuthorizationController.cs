@@ -2,14 +2,16 @@ using IdentityProvider.Filters;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdpUtilities;
+using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace IdentityProvider.Controllers
 {
     [ServiceFilter(typeof(OrganizationFilter))]
-    [Route("authorization")]
+    [Route("v{version:apiVersion}/authorization")]
     [ApiController]
+    [ApiVersion("1.0")]
     public class AuthorizationController : ControllerBase
     {
         private readonly EcAuthDbContext _context;
@@ -79,7 +81,7 @@ namespace IdentityProvider.Controllers
                 $"{separator}client_id={OpenIdProvider.IdpClientId}" +
                 $"&scope={Uri.EscapeDataString(scopes)}" +
                 $"&response_type=code" +
-                $"&redirect_uri={Uri.EscapeDataString(_configuration["DEFAULT_ORGANIZATION_REDIRECT_URI"] ?? "https://localhost:8081/auth/callback")}" +
+                $"&redirect_uri={Uri.EscapeDataString(_configuration["DEFAULT_ORGANIZATION_REDIRECT_URI"] ?? "https://localhost:8081/v1/auth/callback")}" +
                 $"&state={Uri.EscapeDataString(sealedData)}"
              );
         }
