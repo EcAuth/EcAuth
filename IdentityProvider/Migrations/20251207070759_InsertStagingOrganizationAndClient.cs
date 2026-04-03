@@ -77,17 +77,21 @@ namespace IdentityProvider.Migrations
             var publicKeyBase64 = Convert.ToBase64String(publicKeyBytes);
             var privateKeyBase64 = Convert.ToBase64String(privateKeyBytes);
 
+            // EXEC() でラップし、冪等スクリプトでのパース時カラム解決エラーを回避
+            // (後続マイグレーションで rsa_key_pair.client_id → organization_id にリネームされるため)
             migrationBuilder.Sql($@"
-                IF NOT EXISTS (SELECT 1 FROM dbo.rsa_key_pair r INNER JOIN dbo.client c ON r.client_id = c.id WHERE c.client_id = '{STAGING_CLIENT_ID}')
-                BEGIN
-                    INSERT INTO dbo.rsa_key_pair (client_id, public_key, private_key)
-                    SELECT
-                        c.id,
-                        '{publicKeyBase64}',
-                        '{privateKeyBase64}'
-                    FROM dbo.client c
-                    WHERE c.client_id = '{STAGING_CLIENT_ID}'
-                END
+                EXEC(N'
+                    IF NOT EXISTS (SELECT 1 FROM dbo.rsa_key_pair r INNER JOIN dbo.client c ON r.client_id = c.id WHERE c.client_id = ''{STAGING_CLIENT_ID}'')
+                    BEGIN
+                        INSERT INTO dbo.rsa_key_pair (client_id, public_key, private_key)
+                        SELECT
+                            c.id,
+                            ''{publicKeyBase64}'',
+                            ''{privateKeyBase64}''
+                        FROM dbo.client c
+                        WHERE c.client_id = ''{STAGING_CLIENT_ID}''
+                    END
+                ')
             ");
 
             // 5. OpenIdProvider（MockIdP）を挿入
