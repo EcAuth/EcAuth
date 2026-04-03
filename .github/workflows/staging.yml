@@ -142,12 +142,13 @@ jobs:
       - name: Verify migration applied
         if: ${{ (inputs.dry_run || false) != true }}
         run: |
-          cd IdentityProvider
-          LATEST_MIGRATION=$(dotnet ef migrations list --no-build --configuration Release | tail -1)
-          echo "Latest migration: ${LATEST_MIGRATION}"
+          # マイグレーションファイル名からDB接続なしで最新のMigrationIdを取得
+          LATEST_MIGRATION=$(ls -1 IdentityProvider/Migrations/*.cs | grep -v Designer | grep -v Snapshot | sed 's/.*\///' | sed 's/_.*//' | sort | tail -1)
+          LATEST_MIGRATION_ID=$(ls -1 IdentityProvider/Migrations/${LATEST_MIGRATION}_*.cs | grep -v Designer | sed 's/.*\///' | sed 's/\.cs$//')
+          echo "Latest migration: ${LATEST_MIGRATION_ID}"
           sqlcmd -S "tcp:${SQL_HOST},1433" -d "${SQL_DATABASE}" -U "${SQL_USERNAME}" -P "${SQL_PASSWORD}" -C -b -Q \
-            "IF NOT EXISTS (SELECT 1 FROM [__EFMigrationsHistory] WHERE [MigrationId] = '${LATEST_MIGRATION}') THROW 50000, 'Migration ${LATEST_MIGRATION} was not applied', 1;"
-          echo "Migration verification passed: ${LATEST_MIGRATION} exists in __EFMigrationsHistory"
+            "IF NOT EXISTS (SELECT 1 FROM [__EFMigrationsHistory] WHERE [MigrationId] = '${LATEST_MIGRATION_ID}') THROW 50000, 'Migration ${LATEST_MIGRATION_ID} was not applied', 1;"
+          echo "Migration verification passed: ${LATEST_MIGRATION_ID} exists in __EFMigrationsHistory"
 
       - name: Dry run - Skip migration apply
         if: ${{ (inputs.dry_run || false) == true }}
