@@ -21,22 +21,26 @@ namespace IdentityProvider.Migrations
             var publicKeyBase64 = Convert.ToBase64String(publicKeyBytes);
             var privateKeyBase64 = Convert.ToBase64String(privateKeyBytes);
 
+            // EXEC() でラップし、冪等スクリプトでのパース時カラム解決エラーを回避
+            // (後続マイグレーションで client_id → organization_id にリネームされるため)
             migrationBuilder.Sql($@"
-                IF NOT EXISTS (SELECT 1 FROM dbo.rsa_key_pair WHERE client_id = 1)
-                BEGIN
-                    EXEC(N'INSERT INTO [dbo].[rsa_key_pair] ([client_id], [public_key], [private_key])
-                    VALUES (1, N''{publicKeyBase64}'', N''{privateKeyBase64}'')')
-                END
+                EXEC(N'
+                    IF NOT EXISTS (SELECT 1 FROM dbo.rsa_key_pair WHERE client_id = 1)
+                    BEGIN
+                        INSERT INTO [dbo].[rsa_key_pair] ([client_id], [public_key], [private_key])
+                        VALUES (1, N''{publicKeyBase64}'', N''{privateKeyBase64}'')
+                    END
+                ')
             ");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DeleteData(
-                table: "rsa_key_pair",
-                keyColumn: "client_id",
-                keyValue: 1);
+            // EXEC() でラップし、冪等スクリプトでのパース時カラム解決エラーを回避
+            migrationBuilder.Sql(@"
+                EXEC(N'DELETE FROM [dbo].[rsa_key_pair] WHERE [client_id] = 1')
+            ");
         }
     }
 }
