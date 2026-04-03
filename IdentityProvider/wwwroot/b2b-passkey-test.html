@@ -331,7 +331,7 @@
 
                 // Step 1: Get registration options
                 log('Step 1: Getting registration options from server...');
-                const optionsResponse = await fetch('/b2b/passkey/register/options', {
+                const optionsResponse = await fetch('/v1/b2b/passkey/register/options', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -396,7 +396,7 @@
 
                 // Step 4: Verify registration
                 log('Step 4: Verifying registration with server...');
-                const verifyResponse = await fetch('/b2b/passkey/register/verify', {
+                const verifyResponse = await fetch('/v1/b2b/passkey/register/verify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -446,7 +446,7 @@
 
                 // Step 1: Get authentication options
                 log('Step 1: Getting authentication options from server...');
-                const optionsResponse = await fetch('/b2b/passkey/authenticate/options', {
+                const optionsResponse = await fetch('/v1/b2b/passkey/authenticate/options', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -494,7 +494,7 @@
 
                 // Step 4: Verify authentication
                 log('Step 4: Verifying authentication with server...');
-                const verifyResponse = await fetch('/b2b/passkey/authenticate/verify', {
+                const verifyResponse = await fetch('/v1/b2b/passkey/authenticate/verify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -544,7 +544,7 @@
             try {
                 log('Listing passkeys...');
 
-                const response = await fetch('/b2b/passkey/list', {
+                const response = await fetch('/v1/b2b/passkey/list', {
                     method: 'GET',
                     headers: {
                         'Authorization': `Bearer ${accessToken}`

@@ -83,7 +83,7 @@ main() {
 
   # Step 1: EcAuth 認可エンドポイント
   log_step "Step 1: EcAuth 認可エンドポイント"
-  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=${MOCK_IDP_PROVIDER_NAME}&state=test123" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/v1/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fv1%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=${MOCK_IDP_PROVIDER_NAME}&state=test123" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
 
   if [ -z "$MOCKIDP_URL" ]; then
     log_error "Failed to get MockIdP redirect URL"
@@ -123,7 +123,7 @@ main() {
     exit 1
   fi
 
-  FINAL_REDIRECT=$(curl -s -i -X POST "${ECAUTH_BASE_URL}/auth/callback" \
+  FINAL_REDIRECT=$(curl -s -i -X POST "${ECAUTH_BASE_URL}/v1/auth/callback" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "code=${MOCKIDP_CODE}" \
     -d "state=${STATE}" \
@@ -144,11 +144,11 @@ main() {
 
   # Step 4: トークン取得
   log_step "Step 4: トークン取得"
-  TOKEN_RESPONSE=$(curl -s -X POST "${ECAUTH_BASE_URL}/token" \
+  TOKEN_RESPONSE=$(curl -s -X POST "${ECAUTH_BASE_URL}/v1/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=authorization_code" \
     -d "code=${ECAUTH_CODE}" \
-    -d "redirect_uri=https://localhost:8081/auth/callback" \
+    -d "redirect_uri=https://localhost:8081/v1/auth/callback" \
     -d "client_id=${CLIENT_ID}" \
     -d "client_secret=${CLIENT_SECRET}")
 
@@ -172,7 +172,7 @@ main() {
 
   # Step 5: ユーザー情報取得
   log_step "Step 5: ユーザー情報取得"
-  USERINFO_RESPONSE=$(curl -s "${ECAUTH_BASE_URL}/userinfo" \
+  USERINFO_RESPONSE=$(curl -s "${ECAUTH_BASE_URL}/v1/userinfo" \
     -H "Authorization: Bearer ${ACCESS_TOKEN}")
 
   SUB=$(echo "$USERINFO_RESPONSE" | jq -r '.sub')

@@ -1,12 +1,14 @@
 using IdentityProvider.Models;
 using IdentityProvider.Services;
+using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using System.Net.Http.Headers;
 
 namespace IdentityProvider.Controllers
 {
-    [Route("userinfo")]
+    [Route("v{version:apiVersion}/userinfo")]
     [ApiController]
+    [ApiVersion("1.0")]
     public class UserinfoController : ControllerBase
     {
         private readonly ITokenService _tokenService;

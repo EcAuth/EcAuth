@@ -1,6 +1,7 @@
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdpUtilities;
+using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
@@ -8,8 +9,9 @@ using System.ComponentModel.DataAnnotations;
 
 namespace IdentityProvider.Controllers
 {
-    [Route("token")]
+    [Route("v{version:apiVersion}/token")]
     [ApiController]
+    [ApiVersion("1.0")]
     public class TokenController : ControllerBase
     {
         private readonly EcAuthDbContext _context;
@@ -75,7 +77,7 @@ namespace IdentityProvider.Controllers
                     {
                         { "grant_type", "authorization_code" },
                         { "code", code },
-                        { "redirect_uri", _configuration["DEFAULT_ORGANIZATION_REDIRECT_URI"] ?? "https://localhost:8081/auth/callback" },
+                        { "redirect_uri", _configuration["DEFAULT_ORGANIZATION_REDIRECT_URI"] ?? "https://localhost:8081/v1/auth/callback" },
                         { "client_id", IdentityProvider.IdpClientId },
                         { "client_secret", IdentityProvider.IdpClientSecret },
                         { "state", state }

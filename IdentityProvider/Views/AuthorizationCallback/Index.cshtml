@@ -21,7 +21,7 @@
                     <br />
                     <strong>Scope:</strong> @ViewData["Scope"]
                 </div>
-                <form method="post" action="/auth/callback">
+                <form method="post" action="/v1/auth/callback">
                     <input type="hidden" name="code" value="@ViewData["Code"]" />
                     <input type="hidden" name="state" value="@ViewData["State"]" />
                     <input type="hidden" name="scope" value="@ViewData["Scope"]" />

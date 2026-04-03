@@ -5,6 +5,7 @@ using IdentityProvider.Filters;
 using IdentityProvider.Middlewares;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
+using Asp.Versioning;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -54,6 +55,16 @@ builder.Services.AddDbContext<EcAuthDbContext>((sp, options) =>
     // 参照: https://learn.microsoft.com/en-us/ef/core/what-is-new/ef-core-9.0/breaking-changes
     // これにより、マイグレーション内でDbContextを作成する既存のパターンが動作します
     options.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.MigrationsUserTransactionWarning));
+});
+builder.Services.AddApiVersioning(options =>
+{
+    options.DefaultApiVersion = new ApiVersion(1, 0);
+    options.AssumeDefaultVersionWhenUnspecified = true;
+    options.ReportApiVersions = true;
+    options.ApiVersionReader = new UrlSegmentApiVersionReader();
+}).AddApiExplorer(options =>
+{
+    options.SubstituteApiVersionInUrl = true;
 });
 builder.Services.AddControllers();
 builder.Services.AddMvc();

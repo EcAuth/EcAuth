@@ -1,6 +1,7 @@
 using Fido2NetLib;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
+using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Net.Http.Headers;
@@ -12,8 +13,9 @@ namespace IdentityProvider.Controllers
     /// <summary>
     /// B2Bパスキー認証APIコントローラー
     /// </summary>
-    [Route("b2b/passkey")]
+    [Route("v{version:apiVersion}/b2b/passkey")]
     [ApiController]
+    [ApiVersion("1.0")]
     public class B2BPasskeyController : ControllerBase
     {
         private readonly IB2BPasskeyService _passkeyService;
