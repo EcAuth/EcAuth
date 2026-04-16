@@ -71,10 +71,14 @@ test.describe('Platform API: client-resolve エンドポイントのE2Eテスト
   });
 
   test('CORS: Origin ヘッダ付きリクエストで CORS レスポンスヘッダが返る', async () => {
+    // CI 環境（Development）では AllowedOrigins に baseUrl が含まれる
+    // 本番環境では https://ec-auth.io が含まれる
+    const origin = new URL(baseUrl).origin;
+
     const corsContext = await request.newContext({
       ignoreHTTPSErrors: true,
       extraHTTPHeaders: {
-        'Origin': 'https://ec-auth.io',
+        'Origin': origin,
       },
     });
 
@@ -87,7 +91,7 @@ test.describe('Platform API: client-resolve エンドポイントのE2Eテスト
     const headers = response.headers();
     console.log('CORS response headers:', JSON.stringify(headers, null, 2));
 
-    expect(headers['access-control-allow-origin']).toBe('https://ec-auth.io');
+    expect(headers['access-control-allow-origin']).toBe(origin);
 
     await corsContext.dispose();
   });
