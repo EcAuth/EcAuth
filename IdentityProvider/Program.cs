@@ -1,4 +1,5 @@
 using Fido2NetLib;
+using IdentityProvider.Constants;
 using IdentityProvider.Data;
 using IdentityProvider.Data.Seeders;
 using IdentityProvider.Filters;
@@ -66,6 +67,19 @@ builder.Services.AddApiVersioning(options =>
 {
     options.SubstituteApiVersionInUrl = true;
 });
+// Platform API（テナント横断）の CORS 設定
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(PlatformApiConstants.CorsPolicy, policy =>
+    {
+        var allowedOrigins = builder.Configuration.GetSection("PlatformApi:AllowedOrigins")
+            .Get<string[]>() ?? new[] { "https://ec-auth.io", "https://*.ec-auth.io" };
+        policy.WithOrigins(allowedOrigins)
+              .SetIsOriginAllowedToAllowWildcardSubdomains()
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+    });
+});
 builder.Services.AddControllers();
 builder.Services.AddMvc();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -128,6 +142,12 @@ else
 {
     app.UseStaticFiles();
 }
+
+// Platform API の CORS ミドルウェア（/platform/ パスのみ適用）
+app.UseWhen(
+    context => context.Request.Path.StartsWithSegments(PlatformApiConstants.PathPrefix),
+    appBuilder => appBuilder.UseCors(PlatformApiConstants.CorsPolicy)
+);
 
 app.UseMiddleware<TenantMiddleware>();
 
