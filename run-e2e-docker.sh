@@ -35,30 +35,8 @@ for i in {1..30}; do
     sleep 2
 done
 
-# マイグレーションを実行
-echo "🔄 データベースマイグレーションを実行します..."
-
-# IdentityProvider のマイグレーション
-echo "   IdentityProvider のマイグレーション..."
-docker compose --env-file="$ENV_FILE" -p ec-auth exec identityprovider dotnet ef database update || {
-    echo "   ⚠️ コンテナ内でのマイグレーションが失敗しました。ローカルで実行します..."
-    cd IdentityProvider
-    export $(cat ../"$ENV_FILE" | grep -v '^#' | xargs)
-    export ConnectionStrings__EcAuthDbContext="Server=localhost;Database=${DB_NAME};User Id=${DB_USER};Password=${DB_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true"
-    dotnet ef database update
-    cd ..
-}
-
-# MockOpenIdProvider のマイグレーション
-echo "   MockOpenIdProvider のマイグレーション..."
-docker compose --env-file="$ENV_FILE" -p ec-auth exec mockopenidprovider dotnet ef database update || {
-    echo "   ⚠️ コンテナ内でのマイグレーションが失敗しました。ローカルで実行します..."
-    cd MockOpenIdProvider
-    export $(cat ../"$ENV_FILE" | grep -v '^#' | xargs)
-    export ConnectionStrings__MockIdpDbContext="Server=localhost;Database=${MOCK_IDP_DB_NAME};User Id=${DB_USER};Password=${DB_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true"
-    dotnet ef database update
-    cd ..
-}
+# マイグレーションは identityprovider 起動時に RUN_MIGRATIONS_ON_STARTUP=true により自動適用される
+# （MockOpenIdProvider は Azure 環境で運用しているためローカルマイグレーション不要）
 
 # HTTPSポートが応答するまで待つ
 echo "⏳ アプリケーションの起動を待っています..."
@@ -73,21 +51,6 @@ for i in {1..30}; do
     if [ $i -eq 30 ]; then
         echo "   ❌ IdentityProvider の起動がタイムアウトしました"
         docker compose --env-file="$ENV_FILE" -p ec-auth logs identityprovider
-        exit 1
-    fi
-    sleep 2
-done
-
-# MockOpenIdProvider (9091) の起動を待つ
-echo "   MockOpenIdProvider (https://localhost:9091) を待っています..."
-for i in {1..30}; do
-    if curl -k -s -o /dev/null -w '%{http_code}' https://localhost:9091/.well-known/openid-configuration | grep -q '200\|404'; then
-        echo "   ✅ MockOpenIdProvider が起動しました"
-        break
-    fi
-    if [ $i -eq 30 ]; then
-        echo "   ❌ MockOpenIdProvider の起動がタイムアウトしました"
-        docker compose --env-file="$ENV_FILE" -p ec-auth logs mockopenidprovider
         exit 1
     fi
     sleep 2
@@ -119,9 +82,6 @@ else
     echo ""
     echo "IdentityProvider のログ:"
     docker compose --env-file="$ENV_FILE" -p ec-auth logs --tail=50 identityprovider
-    echo ""
-    echo "MockOpenIdProvider のログ:"
-    docker compose --env-file="$ENV_FILE" -p ec-auth logs --tail=50 mockopenidprovider
 fi
 
 exit $TEST_EXIT_CODE
