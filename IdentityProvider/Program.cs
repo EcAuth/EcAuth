@@ -1,4 +1,5 @@
 using Fido2NetLib;
+using IdentityProvider.Constants;
 using IdentityProvider.Data;
 using IdentityProvider.Data.Seeders;
 using IdentityProvider.Filters;
@@ -66,6 +67,19 @@ builder.Services.AddApiVersioning(options =>
 {
     options.SubstituteApiVersionInUrl = true;
 });
+// Platform API（テナント横断）の CORS 設定
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(PlatformApiConstants.CorsPolicy, policy =>
+    {
+        var allowedOrigins = builder.Configuration.GetSection("PlatformApi:AllowedOrigins").Get<string[]>()
+            ?? throw new InvalidOperationException("PlatformApi:AllowedOrigins が appsettings に定義されていません。");
+        policy.WithOrigins(allowedOrigins)
+              .SetIsOriginAllowedToAllowWildcardSubdomains()
+              .AllowAnyHeader()
+              .WithMethods("GET", "OPTIONS");
+    });
+});
 builder.Services.AddControllers();
 builder.Services.AddMvc();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -84,6 +98,14 @@ using (var scope = app.Services.CreateScope())
 
     try
     {
+        // RUN_MIGRATIONS_ON_STARTUP=true の場合のみマイグレーションを自動適用する。
+        // compose.yaml のみで設定しており、ローカル dev / CI / Azure の本番環境では適用されない。
+        if (configuration.GetValue<bool>("RUN_MIGRATIONS_ON_STARTUP"))
+        {
+            logger.LogInformation("Applying database migrations on startup...");
+            await context.Database.MigrateAsync();
+        }
+
         await dbInitializer.InitializeAsync(context, configuration);
     }
     catch (Exception ex)
@@ -128,6 +150,12 @@ else
 {
     app.UseStaticFiles();
 }
+
+// Platform API の CORS ミドルウェア（/platform/ パスのみ適用）
+app.UseWhen(
+    context => context.Request.Path.StartsWithSegments(PlatformApiConstants.PathPrefix),
+    appBuilder => appBuilder.UseCors(PlatformApiConstants.CorsPolicy)
+);
 
 app.UseMiddleware<TenantMiddleware>();
 

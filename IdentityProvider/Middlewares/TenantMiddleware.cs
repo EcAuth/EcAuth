@@ -1,3 +1,4 @@
+using IdentityProvider.Constants;
 using IdentityProvider.Services;
 using System.Net;
 
@@ -16,6 +17,13 @@ namespace IdentityProvider.Middlewares
 
         public async Task InvokeAsync(HttpContext context, ITenantService tenantService)
         {
+            // 共通APIパスはテナント解決をスキップ
+            if (context.Request.Path.StartsWithSegments(PlatformApiConstants.PathPrefix))
+            {
+                await _next(context);
+                return;
+            }
+
             var host = context.Request.Host.Host;
             var tenantName = ExtractTenantNameFromHost(host);
             var defaultOrganizationTenantName = Environment.GetEnvironmentVariable("DEFAULT_ORGANIZATION_TENANT_NAME") ?? string.Empty;
