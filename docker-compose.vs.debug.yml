@@ -1,3 +1,0 @@
-# services:
-   # migration:
-   #  entrypoint: sh -c '/app/publish/bundle'
