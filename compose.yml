@@ -12,12 +12,18 @@ services:
     build:
       context: .
       dockerfile: IdentityProvider/Dockerfile
+      target: final-with-https
       args:
-        - GITHUB_USER=${GITHUB_USER}
+        - GITHUB_USERNAME=${GITHUB_USERNAME}
         - GITHUB_TOKEN=${GITHUB_TOKEN}
     depends_on:
       - db
     environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_HTTPS_PORTS: "8081"
+      ASPNETCORE_Kestrel__Certificates__Default__Password: changeit
+      ASPNETCORE_Kestrel__Certificates__Default__Path: /https/aspnetapp.pfx
       ConnectionStrings__EcAuthDbContext: "Server=${DB_HOST};Database=${DB_NAME};User Id=${DB_USER};Password=${DB_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true"
       STATE_PASSWORD: ${STATE_PASSWORD:-strong_password_string_of_at_least_32_characters}
       GOOGLE_OAUTH2_APP_NAME: ${GOOGLE_OAUTH2_APP_NAME}
@@ -53,13 +59,20 @@ services:
       E2E_TOKEN_ENDPOINT: ${E2E_TOKEN_ENDPOINT}
       E2E_USERINFO_ENDPOINT: ${E2E_USERINFO_ENDPOINT}
       E2E_REDIRECT_URI: ${E2E_REDIRECT_URI}
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    volumes:
+      - ${HOME}/.microsoft/usersecrets:/home/app/.microsoft/usersecrets:ro
+    command: ["dotnet", "ef", "database", "update"]
     networks:
       - backend
+
   db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: ${DB_PASSWORD}
-    image: mcr.microsoft.com/mssql/server:2022-latest
     volumes:
       - sql1data:/var/opt/mssql
       - ./docker/db/backup:/var/opt/mssql/backup
@@ -74,19 +87,3 @@ services:
       retries: 10
       start_period: 10s
       timeout: 3s
-    # volumes:
-
-    #     - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    # command: /bin/bash -c "/opt/mssql/bin/sqlservr & sleep 30s & /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P '<YourStrong@Passw0rd>' -d master -i /docker-entrypoint-initdb.d/init.sql"
-
-  # マイグレーション用のサービス
-  # 事前に `dotnet ef migrations bundle -f --output publish/bundle` で bundle を作成しておく
-  # migration:
-  #   build:
-  #     context: .
-  #     dockerfile: IdentityProvider/Dockerfile
-  #   depends_on:
-  #     - db
-  #   environment:
-  #     ConnectionStrings__EcAuthDbContext: "Server=${DB_HOST};Database=${DB_NAME};User Id=${DB_USER};Password=${DB_PASSWORD};TrustServerCertificate=true;MultipleActiveResultSets=true"
-

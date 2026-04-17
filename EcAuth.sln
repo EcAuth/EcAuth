@@ -5,8 +5,6 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IdentityProvider", "IdentityProvider\IdentityProvider.csproj", "{0A8FF96F-B2D9-4DA0-8DBB-974A1A0AAD8A}"
 EndProject
-Project("{E53339B2-1760-4266-BCC7-CA923CBCF16C}") = "docker-compose", "docker-compose.dcproj", "{ABF86F20-E9EC-4A3B-8133-8B092A4A563F}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EcAuthConsoleApp", "ConsoleApp\EcAuthConsoleApp.csproj", "{B7E7DC18-F950-4B1B-A024-49A9F36EF7B3}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IdentityProvider.Test", "IdentityProvider.Test\IdentityProvider.Test.csproj", "{DC886767-8777-E1AD-B4C4-09FCB2A4E4B1}"
@@ -33,14 +31,6 @@ Global
 		{0A8FF96F-B2D9-4DA0-8DBB-974A1A0AAD8A}.Release|x64.Build.0 = Release|Any CPU
 		{0A8FF96F-B2D9-4DA0-8DBB-974A1A0AAD8A}.Release|x86.ActiveCfg = Release|Any CPU
 		{0A8FF96F-B2D9-4DA0-8DBB-974A1A0AAD8A}.Release|x86.Build.0 = Release|Any CPU
-		{ABF86F20-E9EC-4A3B-8133-8B092A4A563F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{ABF86F20-E9EC-4A3B-8133-8B092A4A563F}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{ABF86F20-E9EC-4A3B-8133-8B092A4A563F}.Debug|x64.ActiveCfg = Debug|x64
-		{ABF86F20-E9EC-4A3B-8133-8B092A4A563F}.Debug|x86.ActiveCfg = Debug|x86
-		{ABF86F20-E9EC-4A3B-8133-8B092A4A563F}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{ABF86F20-E9EC-4A3B-8133-8B092A4A563F}.Release|Any CPU.Build.0 = Release|Any CPU
-		{ABF86F20-E9EC-4A3B-8133-8B092A4A563F}.Release|x64.ActiveCfg = Release|x64
-		{ABF86F20-E9EC-4A3B-8133-8B092A4A563F}.Release|x86.ActiveCfg = Release|x86
 		{B7E7DC18-F950-4B1B-A024-49A9F36EF7B3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{B7E7DC18-F950-4B1B-A024-49A9F36EF7B3}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B7E7DC18-F950-4B1B-A024-49A9F36EF7B3}.Debug|x64.ActiveCfg = Debug|Any CPU

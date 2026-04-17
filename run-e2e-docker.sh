@@ -17,10 +17,7 @@ echo "🛑 既存のコンテナを停止します..."
 docker compose --env-file="$ENV_FILE" -p ec-auth down
 
 echo "🚀 コンテナを起動します..."
-docker compose --env-file="$ENV_FILE" \
-    -f docker-compose.yml \
-    -f docker-compose.override.yml \
-    -p ec-auth up -d --build
+docker compose --env-file="$ENV_FILE" -p ec-auth up -d --build
 
 echo "⏳ サービスの起動を待っています..."
 
