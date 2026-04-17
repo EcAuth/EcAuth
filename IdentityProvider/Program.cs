@@ -99,7 +99,7 @@ using (var scope = app.Services.CreateScope())
     try
     {
         // RUN_MIGRATIONS_ON_STARTUP=true の場合のみマイグレーションを自動適用する。
-        // compose.yml のみで設定しており、ローカル dev / CI / Azure の本番環境では適用されない。
+        // compose.yaml のみで設定しており、ローカル dev / CI / Azure の本番環境では適用されない。
         if (configuration.GetValue<bool>("RUN_MIGRATIONS_ON_STARTUP"))
         {
             logger.LogInformation("Applying database migrations on startup...");
