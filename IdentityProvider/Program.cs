@@ -72,12 +72,12 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy(PlatformApiConstants.CorsPolicy, policy =>
     {
-        var allowedOrigins = builder.Configuration.GetSection("PlatformApi:AllowedOrigins")
-            .Get<string[]>() ?? new[] { "https://ec-auth.io", "https://*.ec-auth.io" };
+        var allowedOrigins = builder.Configuration.GetSection("PlatformApi:AllowedOrigins").Get<string[]>()
+            ?? throw new InvalidOperationException("PlatformApi:AllowedOrigins が appsettings に定義されていません。");
         policy.WithOrigins(allowedOrigins)
               .SetIsOriginAllowedToAllowWildcardSubdomains()
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .WithMethods("GET", "OPTIONS");
     });
 });
 builder.Services.AddControllers();
