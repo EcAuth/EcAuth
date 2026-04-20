@@ -44,7 +44,7 @@ FROM build AS publish
 ARG BUILD_CONFIGURATION=Release
 ENV PATH="$PATH:/root/.dotnet/tools"
 RUN dotnet publish "./IdentityProvider.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false \
-    && dotnet tool install --global dotnet-ef --version 10.0.6 && dotnet tool restore \
+    && dotnet tool restore \
     && dotnet ef migrations bundle --output /app/publish/bundle && chmod +x /app/publish/bundle
 
 # このステージは、運用環境または VS から通常モードで実行している場合に使用されます (デバッグ構成を使用しない場合の既定)
