@@ -1,6 +1,7 @@
 using Fido2NetLib;
 using Fido2NetLib.Objects;
 using IdentityProvider.Controllers;
+using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using Microsoft.AspNetCore.Http;
@@ -202,6 +203,87 @@ namespace IdentityProvider.Test.Controllers
 
             var error = response.GetType().GetProperty("error")?.GetValue(response);
             Assert.Equal("server_error", error);
+        }
+
+        [Fact]
+        public async Task RegisterOptions_ValidRequest_ReturnsResolvedSubjectAndResolution()
+        {
+            // Arrange
+            var client = await CreateTestClientAsync();
+
+            var request = new B2BPasskeyController.RegisterOptionsRequest
+            {
+                ClientId = client.ClientId,
+                ClientSecret = client.ClientSecret!,
+                RpId = "shop.example.com",
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                ExternalId = "test-admin"
+            };
+
+            var expectedResult = new RegistrationOptionsResult
+            {
+                SessionId = "sess-id",
+                Options = CreateMockCredentialCreateOptions(),
+                IsProvisioned = false,
+                ResolvedSubject = "550e8400-e29b-41d4-a716-446655440000",
+                SubjectResolution = SubjectResolutions.AsRequested
+            };
+
+            _mockPasskeyService.Setup(x => x.CreateRegistrationOptionsAsync(It.IsAny<RegistrationOptionsRequest>()))
+                .ReturnsAsync(expectedResult);
+
+            // Act
+            var result = await _controller.RegisterOptions(request);
+
+            // Assert
+            var okResult = Assert.IsType<OkObjectResult>(result);
+            var response = okResult.Value;
+            Assert.NotNull(response);
+
+            var resolvedSubject = response.GetType().GetProperty("resolved_subject")?.GetValue(response);
+            Assert.Equal("550e8400-e29b-41d4-a716-446655440000", resolvedSubject);
+
+            var subjectResolution = response.GetType().GetProperty("subject_resolution")?.GetValue(response);
+            Assert.Equal("as_requested", subjectResolution);
+        }
+
+        [Fact]
+        public async Task RegisterOptions_ExternalIdConflict_Returns409Conflict()
+        {
+            // Arrange
+            var client = await CreateTestClientAsync();
+
+            var request = new B2BPasskeyController.RegisterOptionsRequest
+            {
+                ClientId = client.ClientId,
+                ClientSecret = client.ClientSecret!,
+                RpId = "shop.example.com",
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                ExternalId = "conflicting-id"
+            };
+
+            _mockPasskeyService.Setup(x => x.CreateRegistrationOptionsAsync(It.IsAny<RegistrationOptionsRequest>()))
+                .ThrowsAsync(new ExternalIdConflictException(
+                    "ExternalId 'conflicting-id' is already used by another user in this organization."));
+
+            // Act
+            var result = await _controller.RegisterOptions(request);
+
+            // Assert
+            var conflictResult = Assert.IsType<ConflictObjectResult>(result);
+            Assert.Equal(409, conflictResult.StatusCode);
+
+            var response = conflictResult.Value;
+            Assert.NotNull(response);
+
+            var error = response.GetType().GetProperty("error")?.GetValue(response);
+            Assert.Equal("external_id_conflict", error);
+
+            // レスポンスには external_id 値を含めず固定文言を返す（列挙攻撃対策）
+            var errorDescription = response.GetType().GetProperty("error_description")?.GetValue(response) as string;
+            Assert.NotNull(errorDescription);
+            Assert.DoesNotContain("conflicting-id", errorDescription);
+            Assert.Contains("another user", errorDescription);
         }
 
         [Fact]

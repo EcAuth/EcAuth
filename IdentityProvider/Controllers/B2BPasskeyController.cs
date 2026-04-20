@@ -1,4 +1,5 @@
 using Fido2NetLib;
+using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using Asp.Versioning;
@@ -185,7 +186,20 @@ namespace IdentityProvider.Controllers
                 {
                     session_id = result.SessionId,
                     options = result.Options,
-                    is_provisioned = result.IsProvisioned
+                    is_provisioned = result.IsProvisioned,
+                    resolved_subject = result.ResolvedSubject,
+                    subject_resolution = result.SubjectResolution
+                });
+            }
+            catch (ExternalIdConflictException ex)
+            {
+                // ex.Message には external_id 値が含まれるためサーバーログには残すが、
+                // レスポンスボディに返すとマルチテナント環境で external_id 列挙に悪用され得るので固定文言化する
+                _logger.LogWarning("ExternalId conflict in RegisterOptions: {Message}", ex.Message);
+                return Conflict(new
+                {
+                    error = "external_id_conflict",
+                    error_description = "The requested external_id is already associated with another user in this organization."
                 });
             }
             catch (ArgumentException ex)

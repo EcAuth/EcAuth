@@ -1,5 +1,6 @@
 using Fido2NetLib;
 using Fido2NetLib.Objects;
+using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
@@ -90,51 +91,79 @@ namespace IdentityProvider.Services
             // B2Bユーザー取得、存在しない場合は JIT プロビジョニング
             var user = await _userService.GetBySubjectAsync(b2bSubject);
             bool isProvisioned = false;
-            if (user == null)
+            string subjectResolution;
+
+            if (user != null)
+            {
+                // Organization 境界チェック: B2BUser クエリフィルターは TenantName ベースなので、
+                // 同一テナント内の別 Organization の subject がヒットし得る。
+                // これを許すと cross-organization での external_id 上書きや credential 紐付けが可能になるため遮断する。
+                EnsureUserBelongsToClientOrganization(user, client.OrganizationId.Value, b2bSubject);
+
+                // Subject が一致: external_id が変わっていたら自動同期（EC-CUBE login_id 変更への追随）
+                user = await SyncExternalIdIfChangedAsync(user, request.ExternalId, client.OrganizationId.Value);
+                subjectResolution = IB2BPasskeyService.SubjectResolutions.AsRequested;
+            }
+            else
             {
                 // ExternalId で既存ユーザーを検索（EC-CUBEプラグイン再インストール時の復旧）
                 user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
                 if (user != null)
                 {
+                    // external_id は login_id 等 PII を含み得るため Information ログには含めない
                     _logger.LogInformation(
-                        "Found existing B2BUser by ExternalId: ExternalId={ExternalId}, Subject={Subject}",
-                        request.ExternalId, user.Subject);
+                        "Resolved B2BUser via ExternalId fallback: RequestedSubject={RequestedSubject}, ResolvedSubject={ResolvedSubject}, OrganizationId={OrganizationId}",
+                        b2bSubject, user.Subject, user.OrganizationId);
+                    subjectResolution = IB2BPasskeyService.SubjectResolutions.FallbackByExternalId;
                 }
-            }
-
-            if (user == null)
-            {
-                try
+                else
                 {
-                    _logger.LogInformation(
-                        "JIT provisioning B2BUser: Subject={Subject}, ExternalId={ExternalId}, OrganizationId={OrganizationId}",
-                        b2bSubject, request.ExternalId, client.OrganizationId);
-
-                    var createResult = await _userService.CreateAsync(new IB2BUserService.CreateUserRequest
+                    try
                     {
-                        Subject = b2bSubject,
-                        ExternalId = request.ExternalId,
-                        UserType = "admin",
-                        OrganizationId = client.OrganizationId.Value
-                    });
-                    user = createResult.User;
-                    isProvisioned = true;
+                        _logger.LogInformation(
+                            "JIT provisioning B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
+                            b2bSubject, client.OrganizationId);
 
-                    _logger.LogInformation(
-                        "JIT provisioned B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
-                        user.Subject, user.OrganizationId);
-                }
-                catch (DbUpdateException)
-                {
-                    // 並行リクエストで Subject または ExternalId の一意制約違反が発生した場合、再取得を試みる。
-                    _logger.LogInformation(
-                        "B2BUser already created by concurrent request, re-fetching: Subject={Subject}",
-                        b2bSubject);
-                    user = await _userService.GetBySubjectAsync(b2bSubject);
-                    if (user == null)
-                        user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
-                    if (user == null)
-                        throw new InvalidOperationException($"Failed to create or retrieve B2BUser: {b2bSubject}");
+                        var createResult = await _userService.CreateAsync(new IB2BUserService.CreateUserRequest
+                        {
+                            Subject = b2bSubject,
+                            ExternalId = request.ExternalId,
+                            UserType = "admin",
+                            OrganizationId = client.OrganizationId.Value
+                        });
+                        user = createResult.User;
+                        isProvisioned = true;
+                        subjectResolution = IB2BPasskeyService.SubjectResolutions.Provisioned;
+
+                        _logger.LogInformation(
+                            "JIT provisioned B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
+                            user.Subject, user.OrganizationId);
+                    }
+                    catch (DbUpdateException)
+                    {
+                        // 並行リクエストで Subject または ExternalId の一意制約違反が発生した場合、再取得を試みる。
+                        _logger.LogInformation(
+                            "B2BUser already created by concurrent request, re-fetching: Subject={Subject}",
+                            b2bSubject);
+                        user = await _userService.GetBySubjectAsync(b2bSubject);
+                        if (user == null)
+                        {
+                            user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
+                            subjectResolution = user != null
+                                ? IB2BPasskeyService.SubjectResolutions.FallbackByExternalId
+                                : throw new InvalidOperationException($"Failed to create or retrieve B2BUser: {b2bSubject}");
+                        }
+                        else
+                        {
+                            // race 経由でも別組織の subject が返りうるため、メインフローと同じ境界チェックを適用
+                            EnsureUserBelongsToClientOrganization(user, client.OrganizationId.Value, b2bSubject);
+
+                            // 並行リクエストが先に書き込んだ external_id と、今回のリクエストの external_id が
+                            // 異なる場合があるため、メインフローと同じく同期ロジックを適用する。
+                            user = await SyncExternalIdIfChangedAsync(user, request.ExternalId, client.OrganizationId.Value);
+                            subjectResolution = IB2BPasskeyService.SubjectResolutions.AsRequested;
+                        }
+                    }
                 }
             }
 
@@ -199,8 +228,93 @@ namespace IdentityProvider.Services
             {
                 SessionId = challengeResult.SessionId,
                 Options = options,
-                IsProvisioned = isProvisioned
+                IsProvisioned = isProvisioned,
+                ResolvedSubject = resolvedSubject,
+                SubjectResolution = subjectResolution
             };
+        }
+
+        /// <summary>
+        /// subject で解決した B2BUser が、呼び出し元クライアントの Organization に属しているかを検証する。
+        /// B2BUser の QueryFilter は TenantName ベースなので、同一テナント内の別 Organization の
+        /// subject がヒットする可能性があり、それを許すと cross-organization 書き換えに繋がるため遮断する。
+        /// ログ・例外メッセージには requestedSubject の値を含めない（別組織 subject の存在有無を漏らさないため）。
+        /// </summary>
+        private void EnsureUserBelongsToClientOrganization(B2BUser user, int clientOrganizationId, string requestedSubject)
+        {
+            if (user.OrganizationId == clientOrganizationId)
+            {
+                return;
+            }
+
+            _logger.LogWarning(
+                "B2BSubject does not belong to the client's organization. ClientOrganizationId={ClientOrganizationId}, UserOrganizationId={UserOrganizationId}",
+                clientOrganizationId, user.OrganizationId);
+
+            throw new InvalidOperationException("B2BSubject is not associated with this client's organization.");
+        }
+
+        /// <summary>
+        /// 既存 B2BUser の external_id が引数の requestedExternalId と異なる場合、
+        /// 同一 Organization 内の衝突を確認したうえで external_id を同期する。
+        /// 衝突がある場合は <see cref="ExternalIdConflictException"/> をスロー。
+        /// </summary>
+        private async Task<B2BUser> SyncExternalIdIfChangedAsync(
+            B2BUser user, string requestedExternalId, int organizationId)
+        {
+            if (string.Equals(user.ExternalId, requestedExternalId, StringComparison.Ordinal))
+            {
+                return user;
+            }
+
+            // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409
+            var conflictingUser = await _userService.GetByExternalIdAsync(requestedExternalId, organizationId);
+            if (conflictingUser != null
+                && !string.Equals(conflictingUser.Subject, user.Subject, StringComparison.Ordinal))
+            {
+                throw new ExternalIdConflictException(
+                    $"ExternalId '{requestedExternalId}' is already used by another user in this organization.");
+            }
+
+            // external_id の具体値は PII を含み得るため Information ログには含めない。
+            // 調査時の Old/New 追跡は Debug ログで opt-in、恒久追跡は DB の updated_at 等に委ねる。
+            _logger.LogInformation(
+                "Syncing ExternalId for B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
+                user.Subject, user.OrganizationId);
+            _logger.LogDebug(
+                "ExternalId sync values: Subject={Subject}, Old={OldExternalId}, New={NewExternalId}",
+                user.Subject, user.ExternalId, requestedExternalId);
+
+            try
+            {
+                var updated = await _userService.UpdateAsync(new IB2BUserService.UpdateUserRequest
+                {
+                    Subject = user.Subject,
+                    ExternalId = requestedExternalId
+                });
+                // 事前に GetBySubjectAsync で取得済みの user の subject で呼んでいるため、
+                // 通常 null は返らない。並行削除等で null になった場合は silent 失敗を避けて例外化。
+                return updated ?? throw new InvalidOperationException(
+                    $"UpdateAsync returned null while syncing ExternalId for Subject '{user.Subject}'.");
+            }
+            catch (DbUpdateException ex)
+            {
+                // DB 更新失敗の原因を実状態で再確認する。
+                // UNIQUE 制約違反（race で別ユーザーが同じ external_id を取得）なら 409 相当として
+                // ExternalIdConflictException にラップするが、それ以外（タイムアウト、接続断、
+                // 別制約違反など 500 相当 / 再試行対象）の障害までは 409 に吸収せず元例外を再スローする。
+                // SQL エラーコード判定ではなく「現時点で別ユーザーが当該 external_id を保有しているか」で
+                // 判定することで、DB プロバイダー非依存に race condition を検出できる。
+                var owner = await _userService.GetByExternalIdAsync(requestedExternalId, organizationId);
+                if (owner != null
+                    && !string.Equals(owner.Subject, user.Subject, StringComparison.Ordinal))
+                {
+                    throw new ExternalIdConflictException(
+                        "ExternalId is already used by another user in this organization.", ex);
+                }
+
+                throw;
+            }
         }
 
         /// <inheritdoc />
