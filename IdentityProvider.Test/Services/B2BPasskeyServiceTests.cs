@@ -634,6 +634,49 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
+        public async Task CreateRegistrationOptionsAsync_SubjectHit_UserBelongsToDifferentOrganization_ThrowsInvalidOperation()
+        {
+            // Arrange: B2BUser の QueryFilter は TenantName ベースなので、
+            // 同一テナント内の別 Organization の subject が GetBySubjectAsync で返り得る。
+            // このクロス組織ケースで external_id の自動同期や credential 発行を許してはならない。
+            var crossOrgUser = new B2BUser
+            {
+                Id = 999,
+                Subject = TestB2BSubject,
+                ExternalId = "other-org-admin@example.com",
+                UserType = "admin",
+                OrganizationId = 999, // _client.OrganizationId = 1 とは異なる組織
+                Organization = new Organization
+                {
+                    Id = 999,
+                    Code = "other-org",
+                    Name = "別組織",
+                    TenantName = "test-tenant"
+                }
+            };
+
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = "admin@example.com"
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(crossOrgUser);
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+            Assert.Contains("not associated with this client's organization", ex.Message);
+
+            // 同期・衝突チェックは一切呼ばれないこと
+            _mockUserService.Verify(x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()), Times.Never);
+            _mockUserService.Verify(x => x.GetByExternalIdAsync(It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [Fact]
         public async Task CreateRegistrationOptionsAsync_SubjectMissExternalIdHit_ReturnsFallbackResolution()
         {
             // Arrange: 新 subject UUID だが external_id は既存ユーザーに紐付いている

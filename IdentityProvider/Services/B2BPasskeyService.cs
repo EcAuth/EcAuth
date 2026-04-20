@@ -95,6 +95,11 @@ namespace IdentityProvider.Services
 
             if (user != null)
             {
+                // Organization 境界チェック: B2BUser クエリフィルターは TenantName ベースなので、
+                // 同一テナント内の別 Organization の subject がヒットし得る。
+                // これを許すと cross-organization での external_id 上書きや credential 紐付けが可能になるため遮断する。
+                EnsureUserBelongsToClientOrganization(user, client.OrganizationId.Value, b2bSubject);
+
                 // Subject が一致: external_id が変わっていたら自動同期（EC-CUBE login_id 変更への追随）
                 user = await SyncExternalIdIfChangedAsync(user, request.ExternalId, client.OrganizationId.Value);
                 subjectResolution = IB2BPasskeyService.SubjectResolutions.AsRequested;
@@ -149,6 +154,9 @@ namespace IdentityProvider.Services
                         }
                         else
                         {
+                            // race 経由でも別組織の subject が返りうるため、メインフローと同じ境界チェックを適用
+                            EnsureUserBelongsToClientOrganization(user, client.OrganizationId.Value, b2bSubject);
+
                             // 並行リクエストが先に書き込んだ external_id と、今回のリクエストの external_id が
                             // 異なる場合があるため、メインフローと同じく同期ロジックを適用する。
                             user = await SyncExternalIdIfChangedAsync(user, request.ExternalId, client.OrganizationId.Value);
@@ -223,6 +231,26 @@ namespace IdentityProvider.Services
                 ResolvedSubject = resolvedSubject,
                 SubjectResolution = subjectResolution
             };
+        }
+
+        /// <summary>
+        /// subject で解決した B2BUser が、呼び出し元クライアントの Organization に属しているかを検証する。
+        /// B2BUser の QueryFilter は TenantName ベースなので、同一テナント内の別 Organization の
+        /// subject がヒットする可能性があり、それを許すと cross-organization 書き換えに繋がるため遮断する。
+        /// ログ・例外メッセージには requestedSubject の値を含めない（別組織 subject の存在有無を漏らさないため）。
+        /// </summary>
+        private void EnsureUserBelongsToClientOrganization(B2BUser user, int clientOrganizationId, string requestedSubject)
+        {
+            if (user.OrganizationId == clientOrganizationId)
+            {
+                return;
+            }
+
+            _logger.LogWarning(
+                "B2BSubject does not belong to the client's organization. ClientOrganizationId={ClientOrganizationId}, UserOrganizationId={UserOrganizationId}",
+                clientOrganizationId, user.OrganizationId);
+
+            throw new InvalidOperationException("B2BSubject is not associated with this client's organization.");
         }
 
         /// <summary>
