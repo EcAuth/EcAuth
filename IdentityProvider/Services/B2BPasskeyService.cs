@@ -299,9 +299,21 @@ namespace IdentityProvider.Services
             }
             catch (DbUpdateException ex)
             {
-                // 事前チェックと UpdateAsync の間に race で別ユーザーが同じ external_id を持った場合の保険
-                throw new ExternalIdConflictException(
-                    $"ExternalId '{requestedExternalId}' conflict while syncing for Subject '{user.Subject}'.", ex);
+                // DB 更新失敗の原因を実状態で再確認する。
+                // UNIQUE 制約違反（race で別ユーザーが同じ external_id を取得）なら 409 相当として
+                // ExternalIdConflictException にラップするが、それ以外（タイムアウト、接続断、
+                // 別制約違反など 500 相当 / 再試行対象）の障害までは 409 に吸収せず元例外を再スローする。
+                // SQL エラーコード判定ではなく「現時点で別ユーザーが当該 external_id を保有しているか」で
+                // 判定することで、DB プロバイダー非依存に race condition を検出できる。
+                var owner = await _userService.GetByExternalIdAsync(requestedExternalId, organizationId);
+                if (owner != null
+                    && !string.Equals(owner.Subject, user.Subject, StringComparison.Ordinal))
+                {
+                    throw new ExternalIdConflictException(
+                        "ExternalId is already used by another user in this organization.", ex);
+                }
+
+                throw;
             }
         }
 

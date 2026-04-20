@@ -634,6 +634,82 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
+        public async Task CreateRegistrationOptionsAsync_SyncUpdateAsyncThrowsTransientError_RethrowsOriginalException()
+        {
+            // Arrange: UpdateAsync で DbUpdateException が発生するが、実状態再確認で
+            // 別ユーザーによる external_id の使用は無い（= 一意制約違反以外の過渡的障害）。
+            // このケースは 409 に吸収せず元の DbUpdateException を再スローすべき。
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = "renamed-admin@example.com"
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(_testUser);
+
+            // 事前チェック・再確認の両方で別ユーザーは見つからない
+            _mockUserService.Setup(x => x.GetByExternalIdAsync("renamed-admin@example.com", 1))
+                .ReturnsAsync((B2BUser?)null);
+
+            var transientError = new DbUpdateException(
+                "transient DB error (e.g. timeout / deadlock)",
+                new Exception("inner"));
+            _mockUserService.Setup(x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()))
+                .ThrowsAsync(transientError);
+
+            // Act & Assert: ExternalIdConflictException ではなく元の DbUpdateException が再スローされる
+            var ex = await Assert.ThrowsAsync<DbUpdateException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+            Assert.Same(transientError, ex);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_SyncUpdateAsyncThrowsRaceConflict_ConvertsToExternalIdConflict()
+        {
+            // Arrange: 事前チェック時点では衝突無し → UpdateAsync で DbUpdateException →
+            // 再確認したら別ユーザーが同じ external_id を取得していた（race condition）。
+            // このケースのみ ExternalIdConflictException にラップされる。
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = "race-target@example.com"
+            };
+
+            var raceWinner = new B2BUser
+            {
+                Id = 77,
+                Subject = TestB2BSubject2,
+                ExternalId = "race-target@example.com",
+                UserType = "admin",
+                OrganizationId = 1,
+                Organization = _organization
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(_testUser);
+
+            // 1回目(事前チェック): null、2回目(DbUpdateException 後の再確認): raceWinner
+            _mockUserService.SetupSequence(x => x.GetByExternalIdAsync("race-target@example.com", 1))
+                .ReturnsAsync((B2BUser?)null)
+                .ReturnsAsync(raceWinner);
+
+            _mockUserService.Setup(x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()))
+                .ThrowsAsync(new DbUpdateException("unique constraint violation", new Exception()));
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<ExternalIdConflictException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+            Assert.Contains("another user", ex.Message);
+            // メッセージに external_id 値は含めない（情報漏洩対策）
+            Assert.DoesNotContain("race-target@example.com", ex.Message);
+        }
+
+        [Fact]
         public async Task CreateRegistrationOptionsAsync_SubjectHit_UserBelongsToDifferentOrganization_ThrowsInvalidOperation()
         {
             // Arrange: B2BUser の QueryFilter は TenantName ベースなので、
