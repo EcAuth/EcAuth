@@ -719,6 +719,77 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
+        public async Task CreateRegistrationOptionsAsync_JitRaceRefetch_SyncsExternalIdWhenDiffers()
+        {
+            // Arrange: 並行リクエストで先に別の external_id で user が作られ、
+            // 今回のリクエストは DbUpdateException → re-fetch で既存 user を取得するシナリオ。
+            // re-fetch で得た user.ExternalId が今回のリクエストと異なる場合、メインフロー同様に同期されること。
+            var contestedSubject = "990e8400-e29b-41d4-a716-446655440099";
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = contestedSubject,
+                ExternalId = "winner@example.com" // re-fetch で取れる user の ExternalId と異なる
+            };
+
+            var preExistingUser = new B2BUser
+            {
+                Id = 50,
+                Subject = contestedSubject,
+                ExternalId = "loser@example.com", // 並行リクエストが先に書き込んだ値
+                UserType = "admin",
+                OrganizationId = 1,
+                Organization = _organization
+            };
+
+            // 1回目: null → JIT パスに入る。2回目(re-fetch): preExistingUser を返す。
+            _mockUserService.SetupSequence(x => x.GetBySubjectAsync(contestedSubject))
+                .ReturnsAsync((B2BUser?)null)
+                .ReturnsAsync(preExistingUser);
+
+            // JIT 前の external_id fallback 検索は null（まだ書かれていないタイミング）
+            _mockUserService.Setup(x => x.GetByExternalIdAsync("winner@example.com", 1))
+                .ReturnsAsync((B2BUser?)null);
+
+            // CreateAsync は並行リクエストが先に書いたため UNIQUE 違反
+            _mockUserService.Setup(x => x.CreateAsync(It.IsAny<IB2BUserService.CreateUserRequest>()))
+                .ThrowsAsync(new DbUpdateException("concurrent create", new Exception()));
+
+            // re-fetch 後の同期で呼ばれる UpdateAsync
+            var syncedUser = new B2BUser
+            {
+                Id = preExistingUser.Id,
+                Subject = contestedSubject,
+                ExternalId = "winner@example.com",
+                UserType = "admin",
+                OrganizationId = 1,
+                Organization = _organization
+            };
+            _mockUserService.Setup(x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()))
+                .ReturnsAsync(syncedUser);
+
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "sess-race-sync",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert: race 経路でも external_id が同期され、AsRequested として返る
+            Assert.Equal(contestedSubject, result.ResolvedSubject);
+            Assert.Equal(IB2BPasskeyService.SubjectResolutions.AsRequested, result.SubjectResolution);
+            Assert.False(result.IsProvisioned);
+            _mockUserService.Verify(x => x.UpdateAsync(It.Is<IB2BUserService.UpdateUserRequest>(r =>
+                r.Subject == contestedSubject && r.ExternalId == "winner@example.com")), Times.Once);
+        }
+
+        [Fact]
         public async Task CreateRegistrationOptionsAsync_MissingExternalId_ShouldThrowArgumentException()
         {
             // Arrange

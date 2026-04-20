@@ -96,40 +96,7 @@ namespace IdentityProvider.Services
             if (user != null)
             {
                 // Subject が一致: external_id が変わっていたら自動同期（EC-CUBE login_id 変更への追随）
-                if (!string.Equals(user.ExternalId, request.ExternalId, StringComparison.Ordinal))
-                {
-                    // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409
-                    var conflictingUser = await _userService.GetByExternalIdAsync(
-                        request.ExternalId, client.OrganizationId.Value);
-                    if (conflictingUser != null && conflictingUser.Subject != user.Subject)
-                    {
-                        throw new ExternalIdConflictException(
-                            $"ExternalId '{request.ExternalId}' is already used by another user in this organization.");
-                    }
-
-                    _logger.LogInformation(
-                        "Syncing ExternalId for B2BUser: Subject={Subject}, Old={OldExternalId}, New={NewExternalId}",
-                        user.Subject, user.ExternalId, request.ExternalId);
-
-                    try
-                    {
-                        var updated = await _userService.UpdateAsync(new IB2BUserService.UpdateUserRequest
-                        {
-                            Subject = user.Subject,
-                            ExternalId = request.ExternalId
-                        });
-                        if (updated != null)
-                        {
-                            user = updated;
-                        }
-                    }
-                    catch (DbUpdateException ex)
-                    {
-                        // 事前チェックと UpdateAsync の間に race で別ユーザーが同じ external_id を持った場合の保険
-                        throw new ExternalIdConflictException(
-                            $"ExternalId '{request.ExternalId}' conflict while syncing for Subject '{user.Subject}'.", ex);
-                    }
-                }
+                user = await SyncExternalIdIfChangedAsync(user, request.ExternalId, client.OrganizationId.Value);
                 subjectResolution = IB2BPasskeyService.SubjectResolutions.AsRequested;
             }
             else
@@ -182,6 +149,9 @@ namespace IdentityProvider.Services
                         }
                         else
                         {
+                            // 並行リクエストが先に書き込んだ external_id と、今回のリクエストの external_id が
+                            // 異なる場合があるため、メインフローと同じく同期ロジックを適用する。
+                            user = await SyncExternalIdIfChangedAsync(user, request.ExternalId, client.OrganizationId.Value);
                             subjectResolution = IB2BPasskeyService.SubjectResolutions.AsRequested;
                         }
                     }
@@ -253,6 +223,48 @@ namespace IdentityProvider.Services
                 ResolvedSubject = resolvedSubject,
                 SubjectResolution = subjectResolution
             };
+        }
+
+        /// <summary>
+        /// 既存 B2BUser の external_id が引数の requestedExternalId と異なる場合、
+        /// 同一 Organization 内の衝突を確認したうえで external_id を同期する。
+        /// 衝突がある場合は <see cref="ExternalIdConflictException"/> をスロー。
+        /// </summary>
+        private async Task<B2BUser> SyncExternalIdIfChangedAsync(
+            B2BUser user, string requestedExternalId, int organizationId)
+        {
+            if (string.Equals(user.ExternalId, requestedExternalId, StringComparison.Ordinal))
+            {
+                return user;
+            }
+
+            // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409
+            var conflictingUser = await _userService.GetByExternalIdAsync(requestedExternalId, organizationId);
+            if (conflictingUser != null && conflictingUser.Subject != user.Subject)
+            {
+                throw new ExternalIdConflictException(
+                    $"ExternalId '{requestedExternalId}' is already used by another user in this organization.");
+            }
+
+            _logger.LogInformation(
+                "Syncing ExternalId for B2BUser: Subject={Subject}, Old={OldExternalId}, New={NewExternalId}",
+                user.Subject, user.ExternalId, requestedExternalId);
+
+            try
+            {
+                var updated = await _userService.UpdateAsync(new IB2BUserService.UpdateUserRequest
+                {
+                    Subject = user.Subject,
+                    ExternalId = requestedExternalId
+                });
+                return updated ?? user;
+            }
+            catch (DbUpdateException ex)
+            {
+                // 事前チェックと UpdateAsync の間に race で別ユーザーが同じ external_id を持った場合の保険
+                throw new ExternalIdConflictException(
+                    $"ExternalId '{requestedExternalId}' conflict while syncing for Subject '{user.Subject}'.", ex);
+            }
         }
 
         /// <inheritdoc />
