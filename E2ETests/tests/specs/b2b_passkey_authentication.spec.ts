@@ -1,4 +1,5 @@
 import { test, expect, BrowserContext, Page, CDPSession, APIRequestContext, request } from '@playwright/test';
+import { randomUUID } from 'crypto';
 
 test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   const baseUrl = process.env.E2E_BASE_URL || 'https://localhost:8081';
@@ -6,9 +7,17 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   const clientId = process.env.DEFAULT_CLIENT_ID || 'client_id';
   const clientSecret = process.env.DEFAULT_CLIENT_SECRET || 'client_secret';
   const rpId = process.env.DEV_B2B_ALLOWED_RP_IDS || 'localhost';
-  const b2bSubject = process.env.DEV_B2B_USER_SUBJECT || '3f7c0ab4-b004-4102-b6ed-a730369dd237';
-  const externalId = process.env.DEV_B2B_USER_EXTERNAL_ID || 'test-admin';
   const redirectUri = process.env.DEV_B2B_REDIRECT_URI || 'https://localhost:8081/admin/ecauth/callback';
+
+  // Run ごとに unique な識別子を生成して冪等化する。
+  // 前回 run で staging DB に残存した external_id / subject との衝突を避けるため、
+  // 環境変数 DEV_B2B_USER_SUBJECT / DEV_B2B_USER_EXTERNAL_ID は base としてのみ使い、
+  // 実際の登録値には毎回 suffix を付与する。
+  const runSuffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const baseSubject = process.env.DEV_B2B_USER_SUBJECT || randomUUID();
+  const baseExternalId = process.env.DEV_B2B_USER_EXTERNAL_ID || 'test-admin';
+  const b2bSubject = `${baseSubject}-${runSuffix}`;
+  const externalId = `${baseExternalId}-${runSuffix}`;
 
   let context: BrowserContext;
   let page: Page;
