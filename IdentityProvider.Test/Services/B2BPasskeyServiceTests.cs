@@ -396,7 +396,7 @@ namespace IdentityProvider.Test.Services
                 B2BSubject = TestB2BSubject,
                 DisplayName = "テスト管理者",
                 DeviceName = "MacBook Pro",
-                ExternalId = "test-admin"
+                ExternalId = "admin@example.com"
             };
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
@@ -438,7 +438,7 @@ namespace IdentityProvider.Test.Services
                 B2BSubject = TestB2BSubject,
                 DisplayName = "テスト管理者",
                 DeviceName = "E2E Test Device",
-                ExternalId = "test-admin"
+                ExternalId = "admin@example.com"
             };
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))

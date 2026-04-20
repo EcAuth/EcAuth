@@ -279,8 +279,11 @@ namespace IdentityProvider.Test.Controllers
             var error = response.GetType().GetProperty("error")?.GetValue(response);
             Assert.Equal("external_id_conflict", error);
 
-            var errorDescription = response.GetType().GetProperty("error_description")?.GetValue(response);
-            Assert.Contains("conflicting-id", (string?)errorDescription);
+            // レスポンスには external_id 値を含めず固定文言を返す（列挙攻撃対策）
+            var errorDescription = response.GetType().GetProperty("error_description")?.GetValue(response) as string;
+            Assert.NotNull(errorDescription);
+            Assert.DoesNotContain("conflicting-id", errorDescription);
+            Assert.Contains("another user", errorDescription);
         }
 
         [Fact]

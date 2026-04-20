@@ -193,11 +193,13 @@ namespace IdentityProvider.Controllers
             }
             catch (ExternalIdConflictException ex)
             {
+                // ex.Message には external_id 値が含まれるためサーバーログには残すが、
+                // レスポンスボディに返すとマルチテナント環境で external_id 列挙に悪用され得るので固定文言化する
                 _logger.LogWarning("ExternalId conflict in RegisterOptions: {Message}", ex.Message);
                 return Conflict(new
                 {
                     error = "external_id_conflict",
-                    error_description = ex.Message
+                    error_description = "The requested external_id is already associated with another user in this organization."
                 });
             }
             catch (ArgumentException ex)

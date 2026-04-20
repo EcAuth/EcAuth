@@ -240,7 +240,8 @@ namespace IdentityProvider.Services
 
             // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409
             var conflictingUser = await _userService.GetByExternalIdAsync(requestedExternalId, organizationId);
-            if (conflictingUser != null && conflictingUser.Subject != user.Subject)
+            if (conflictingUser != null
+                && !string.Equals(conflictingUser.Subject, user.Subject, StringComparison.Ordinal))
             {
                 throw new ExternalIdConflictException(
                     $"ExternalId '{requestedExternalId}' is already used by another user in this organization.");
@@ -257,7 +258,10 @@ namespace IdentityProvider.Services
                     Subject = user.Subject,
                     ExternalId = requestedExternalId
                 });
-                return updated ?? user;
+                // 事前に GetBySubjectAsync で取得済みの user の subject で呼んでいるため、
+                // 通常 null は返らない。並行削除等で null になった場合は silent 失敗を避けて例外化。
+                return updated ?? throw new InvalidOperationException(
+                    $"UpdateAsync returned null while syncing ExternalId for Subject '{user.Subject}'.");
             }
             catch (DbUpdateException ex)
             {
