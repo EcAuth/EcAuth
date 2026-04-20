@@ -110,9 +110,10 @@ namespace IdentityProvider.Services
                 user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
                 if (user != null)
                 {
+                    // external_id は login_id 等 PII を含み得るため Information ログには含めない
                     _logger.LogInformation(
-                        "Resolved B2BUser via ExternalId fallback: ExternalId={ExternalId}, RequestedSubject={RequestedSubject}, ResolvedSubject={ResolvedSubject}",
-                        request.ExternalId, b2bSubject, user.Subject);
+                        "Resolved B2BUser via ExternalId fallback: RequestedSubject={RequestedSubject}, ResolvedSubject={ResolvedSubject}, OrganizationId={OrganizationId}",
+                        b2bSubject, user.Subject, user.OrganizationId);
                     subjectResolution = IB2BPasskeyService.SubjectResolutions.FallbackByExternalId;
                 }
                 else
@@ -120,8 +121,8 @@ namespace IdentityProvider.Services
                     try
                     {
                         _logger.LogInformation(
-                            "JIT provisioning B2BUser: Subject={Subject}, ExternalId={ExternalId}, OrganizationId={OrganizationId}",
-                            b2bSubject, request.ExternalId, client.OrganizationId);
+                            "JIT provisioning B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
+                            b2bSubject, client.OrganizationId);
 
                         var createResult = await _userService.CreateAsync(new IB2BUserService.CreateUserRequest
                         {
@@ -275,8 +276,13 @@ namespace IdentityProvider.Services
                     $"ExternalId '{requestedExternalId}' is already used by another user in this organization.");
             }
 
+            // external_id の具体値は PII を含み得るため Information ログには含めない。
+            // 調査時の Old/New 追跡は Debug ログで opt-in、恒久追跡は DB の updated_at 等に委ねる。
             _logger.LogInformation(
-                "Syncing ExternalId for B2BUser: Subject={Subject}, Old={OldExternalId}, New={NewExternalId}",
+                "Syncing ExternalId for B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
+                user.Subject, user.OrganizationId);
+            _logger.LogDebug(
+                "ExternalId sync values: Subject={Subject}, Old={OldExternalId}, New={NewExternalId}",
                 user.Subject, user.ExternalId, requestedExternalId);
 
             try
