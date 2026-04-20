@@ -1,5 +1,6 @@
 using Fido2NetLib;
 using Fido2NetLib.Objects;
+using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdentityProvider.Test.TestHelpers;
@@ -511,6 +512,210 @@ namespace IdentityProvider.Test.Services
             // resolvedSubject（既存ユーザーのSubject）がチャレンジに使われること
             Assert.NotNull(capturedChallengeRequest);
             Assert.Equal(existingSubject, capturedChallengeRequest.Subject);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_SubjectHit_ExternalIdMatches_ReturnsAsRequestedResolution()
+        {
+            // Arrange: subject 一致 + external_id 一致 → 同期なし、subject_resolution = "as_requested"
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = "admin@example.com" // _testUser と一致
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(_testUser);
+
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "sess-as-req",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert
+            Assert.Equal(TestB2BSubject, result.ResolvedSubject);
+            Assert.Equal(IB2BPasskeyService.SubjectResolutions.AsRequested, result.SubjectResolution);
+            Assert.False(result.IsProvisioned);
+            // external_id が一致しているので UpdateAsync は呼ばれない
+            _mockUserService.Verify(x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_SubjectHit_ExternalIdDiffers_SyncsExternalId()
+        {
+            // Arrange: subject 一致 + external_id 差分 → UpdateAsync が呼ばれ external_id が新値に同期
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = "renamed-admin@example.com" // _testUser.ExternalId = "admin@example.com" と異なる
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(_testUser);
+            // 衝突する他ユーザーはいない
+            _mockUserService.Setup(x => x.GetByExternalIdAsync("renamed-admin@example.com", 1))
+                .ReturnsAsync((B2BUser?)null);
+
+            var updatedUser = new B2BUser
+            {
+                Id = _testUser.Id,
+                Subject = _testUser.Subject,
+                ExternalId = "renamed-admin@example.com",
+                UserType = _testUser.UserType,
+                OrganizationId = _testUser.OrganizationId,
+                Organization = _organization
+            };
+            _mockUserService.Setup(x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()))
+                .ReturnsAsync(updatedUser);
+
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "sess-sync",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert
+            Assert.Equal(TestB2BSubject, result.ResolvedSubject);
+            Assert.Equal(IB2BPasskeyService.SubjectResolutions.AsRequested, result.SubjectResolution);
+            _mockUserService.Verify(x => x.UpdateAsync(It.Is<IB2BUserService.UpdateUserRequest>(r =>
+                r.Subject == TestB2BSubject && r.ExternalId == "renamed-admin@example.com")), Times.Once);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_SubjectHit_ExternalIdCollidesWithOtherUser_ThrowsExternalIdConflict()
+        {
+            // Arrange: subject A は external_id X、別ユーザー subject B が既に external_id Y を持っている。
+            // A に Y を同期しようとすると 409 相当の衝突
+            var otherUser = new B2BUser
+            {
+                Id = 2,
+                Subject = TestB2BSubject2,
+                ExternalId = "other-admin@example.com",
+                UserType = "admin",
+                OrganizationId = 1,
+                Organization = _organization
+            };
+
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = "other-admin@example.com" // 既に otherUser が使用中
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(_testUser);
+            _mockUserService.Setup(x => x.GetByExternalIdAsync("other-admin@example.com", 1))
+                .ReturnsAsync(otherUser);
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<ExternalIdConflictException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+            Assert.Contains("other-admin@example.com", ex.Message);
+            _mockUserService.Verify(x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_SubjectMissExternalIdHit_ReturnsFallbackResolution()
+        {
+            // Arrange: 新 subject UUID だが external_id は既存ユーザーに紐付いている
+            var newSubject = "770e8400-e29b-41d4-a716-446655440099";
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = newSubject,
+                ExternalId = "admin@example.com"
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(newSubject))
+                .ReturnsAsync((B2BUser?)null);
+            _mockUserService.Setup(x => x.GetByExternalIdAsync("admin@example.com", 1))
+                .ReturnsAsync(_testUser);
+
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "sess-fallback",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert: resolved_subject はリクエストの新 UUID ではなく既存ユーザーの subject
+            Assert.Equal(TestB2BSubject, result.ResolvedSubject);
+            Assert.NotEqual(newSubject, result.ResolvedSubject);
+            Assert.Equal(IB2BPasskeyService.SubjectResolutions.FallbackByExternalId, result.SubjectResolution);
+            Assert.False(result.IsProvisioned);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_SubjectMissExternalIdMiss_ReturnsProvisionedResolution()
+        {
+            // Arrange: JIT プロビジョニングで新規作成
+            var newSubject = "880e8400-e29b-41d4-a716-446655440099";
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = newSubject,
+                ExternalId = "brand-new@example.com"
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(newSubject))
+                .ReturnsAsync((B2BUser?)null);
+            _mockUserService.Setup(x => x.GetByExternalIdAsync("brand-new@example.com", 1))
+                .ReturnsAsync((B2BUser?)null);
+
+            var newUser = new B2BUser
+            {
+                Id = 99,
+                Subject = newSubject,
+                ExternalId = "brand-new@example.com",
+                UserType = "admin",
+                OrganizationId = 1,
+                Organization = _organization
+            };
+            _mockUserService.Setup(x => x.CreateAsync(It.IsAny<IB2BUserService.CreateUserRequest>()))
+                .ReturnsAsync(new IB2BUserService.CreateUserResult { User = newUser });
+
+            var challengeResult = new IWebAuthnChallengeService.ChallengeResult
+            {
+                SessionId = "sess-provisioned",
+                Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(challengeResult);
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert
+            Assert.Equal(newSubject, result.ResolvedSubject);
+            Assert.Equal(IB2BPasskeyService.SubjectResolutions.Provisioned, result.SubjectResolution);
+            Assert.True(result.IsProvisioned);
         }
 
         [Fact]

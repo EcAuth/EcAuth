@@ -1,4 +1,5 @@
 using Fido2NetLib;
+using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using Asp.Versioning;
@@ -185,7 +186,18 @@ namespace IdentityProvider.Controllers
                 {
                     session_id = result.SessionId,
                     options = result.Options,
-                    is_provisioned = result.IsProvisioned
+                    is_provisioned = result.IsProvisioned,
+                    resolved_subject = result.ResolvedSubject,
+                    subject_resolution = result.SubjectResolution
+                });
+            }
+            catch (ExternalIdConflictException ex)
+            {
+                _logger.LogWarning("ExternalId conflict in RegisterOptions: {Message}", ex.Message);
+                return Conflict(new
+                {
+                    error = "external_id_conflict",
+                    error_description = ex.Message
                 });
             }
             catch (ArgumentException ex)

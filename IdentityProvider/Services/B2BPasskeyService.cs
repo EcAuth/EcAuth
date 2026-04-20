@@ -1,5 +1,6 @@
 using Fido2NetLib;
 using Fido2NetLib.Objects;
+using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
@@ -90,51 +91,100 @@ namespace IdentityProvider.Services
             // B2Bユーザー取得、存在しない場合は JIT プロビジョニング
             var user = await _userService.GetBySubjectAsync(b2bSubject);
             bool isProvisioned = false;
-            if (user == null)
+            string subjectResolution;
+
+            if (user != null)
+            {
+                // Subject が一致: external_id が変わっていたら自動同期（EC-CUBE login_id 変更への追随）
+                if (!string.Equals(user.ExternalId, request.ExternalId, StringComparison.Ordinal))
+                {
+                    // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409
+                    var conflictingUser = await _userService.GetByExternalIdAsync(
+                        request.ExternalId, client.OrganizationId.Value);
+                    if (conflictingUser != null && conflictingUser.Subject != user.Subject)
+                    {
+                        throw new ExternalIdConflictException(
+                            $"ExternalId '{request.ExternalId}' is already used by another user in this organization.");
+                    }
+
+                    _logger.LogInformation(
+                        "Syncing ExternalId for B2BUser: Subject={Subject}, Old={OldExternalId}, New={NewExternalId}",
+                        user.Subject, user.ExternalId, request.ExternalId);
+
+                    try
+                    {
+                        var updated = await _userService.UpdateAsync(new IB2BUserService.UpdateUserRequest
+                        {
+                            Subject = user.Subject,
+                            ExternalId = request.ExternalId
+                        });
+                        if (updated != null)
+                        {
+                            user = updated;
+                        }
+                    }
+                    catch (DbUpdateException ex)
+                    {
+                        // 事前チェックと UpdateAsync の間に race で別ユーザーが同じ external_id を持った場合の保険
+                        throw new ExternalIdConflictException(
+                            $"ExternalId '{request.ExternalId}' conflict while syncing for Subject '{user.Subject}'.", ex);
+                    }
+                }
+                subjectResolution = IB2BPasskeyService.SubjectResolutions.AsRequested;
+            }
+            else
             {
                 // ExternalId で既存ユーザーを検索（EC-CUBEプラグイン再インストール時の復旧）
                 user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
                 if (user != null)
                 {
                     _logger.LogInformation(
-                        "Found existing B2BUser by ExternalId: ExternalId={ExternalId}, Subject={Subject}",
-                        request.ExternalId, user.Subject);
+                        "Resolved B2BUser via ExternalId fallback: ExternalId={ExternalId}, RequestedSubject={RequestedSubject}, ResolvedSubject={ResolvedSubject}",
+                        request.ExternalId, b2bSubject, user.Subject);
+                    subjectResolution = IB2BPasskeyService.SubjectResolutions.FallbackByExternalId;
                 }
-            }
-
-            if (user == null)
-            {
-                try
+                else
                 {
-                    _logger.LogInformation(
-                        "JIT provisioning B2BUser: Subject={Subject}, ExternalId={ExternalId}, OrganizationId={OrganizationId}",
-                        b2bSubject, request.ExternalId, client.OrganizationId);
-
-                    var createResult = await _userService.CreateAsync(new IB2BUserService.CreateUserRequest
+                    try
                     {
-                        Subject = b2bSubject,
-                        ExternalId = request.ExternalId,
-                        UserType = "admin",
-                        OrganizationId = client.OrganizationId.Value
-                    });
-                    user = createResult.User;
-                    isProvisioned = true;
+                        _logger.LogInformation(
+                            "JIT provisioning B2BUser: Subject={Subject}, ExternalId={ExternalId}, OrganizationId={OrganizationId}",
+                            b2bSubject, request.ExternalId, client.OrganizationId);
 
-                    _logger.LogInformation(
-                        "JIT provisioned B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
-                        user.Subject, user.OrganizationId);
-                }
-                catch (DbUpdateException)
-                {
-                    // 並行リクエストで Subject または ExternalId の一意制約違反が発生した場合、再取得を試みる。
-                    _logger.LogInformation(
-                        "B2BUser already created by concurrent request, re-fetching: Subject={Subject}",
-                        b2bSubject);
-                    user = await _userService.GetBySubjectAsync(b2bSubject);
-                    if (user == null)
-                        user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
-                    if (user == null)
-                        throw new InvalidOperationException($"Failed to create or retrieve B2BUser: {b2bSubject}");
+                        var createResult = await _userService.CreateAsync(new IB2BUserService.CreateUserRequest
+                        {
+                            Subject = b2bSubject,
+                            ExternalId = request.ExternalId,
+                            UserType = "admin",
+                            OrganizationId = client.OrganizationId.Value
+                        });
+                        user = createResult.User;
+                        isProvisioned = true;
+                        subjectResolution = IB2BPasskeyService.SubjectResolutions.Provisioned;
+
+                        _logger.LogInformation(
+                            "JIT provisioned B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
+                            user.Subject, user.OrganizationId);
+                    }
+                    catch (DbUpdateException)
+                    {
+                        // 並行リクエストで Subject または ExternalId の一意制約違反が発生した場合、再取得を試みる。
+                        _logger.LogInformation(
+                            "B2BUser already created by concurrent request, re-fetching: Subject={Subject}",
+                            b2bSubject);
+                        user = await _userService.GetBySubjectAsync(b2bSubject);
+                        if (user == null)
+                        {
+                            user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
+                            subjectResolution = user != null
+                                ? IB2BPasskeyService.SubjectResolutions.FallbackByExternalId
+                                : throw new InvalidOperationException($"Failed to create or retrieve B2BUser: {b2bSubject}");
+                        }
+                        else
+                        {
+                            subjectResolution = IB2BPasskeyService.SubjectResolutions.AsRequested;
+                        }
+                    }
                 }
             }
 
@@ -199,7 +249,9 @@ namespace IdentityProvider.Services
             {
                 SessionId = challengeResult.SessionId,
                 Options = options,
-                IsProvisioned = isProvisioned
+                IsProvisioned = isProvisioned,
+                ResolvedSubject = resolvedSubject,
+                SubjectResolution = subjectResolution
             };
         }
 
