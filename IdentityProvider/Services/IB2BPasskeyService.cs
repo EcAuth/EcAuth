@@ -66,6 +66,34 @@ namespace IdentityProvider.Services
             /// JITプロビジョニングでB2BUserが新規作成されたか
             /// </summary>
             public bool IsProvisioned { get; set; }
+
+            /// <summary>
+            /// 解決済み B2B subject。
+            /// external_id フォールバックで resolve された場合、リクエストの b2b_subject と異なる値になる。
+            /// 呼び出し元（プラグイン）は local の subject と不一致なら再同期するべき。
+            /// </summary>
+            public string ResolvedSubject { get; set; } = string.Empty;
+
+            /// <summary>
+            /// subject 解決経路。値は <see cref="SubjectResolutions"/> 参照。
+            /// 文字列型にしているのは将来 Phase 4 で "rejected_by_policy" 等の値を追加できる余地を残すため。
+            /// </summary>
+            public string SubjectResolution { get; set; } = string.Empty;
+        }
+
+        /// <summary>
+        /// <see cref="RegistrationOptionsResult.SubjectResolution"/> が取りうる値の定数定義。
+        /// </summary>
+        public static class SubjectResolutions
+        {
+            /// <summary>リクエストの b2b_subject がそのまま一致した。</summary>
+            public const string AsRequested = "as_requested";
+
+            /// <summary>b2b_subject では見つからず、external_id フォールバックで resolve された。</summary>
+            public const string FallbackByExternalId = "fallback_by_external_id";
+
+            /// <summary>該当ユーザーが存在せず、JIT プロビジョニングで新規作成された。</summary>
+            public const string Provisioned = "provisioned";
         }
 
         /// <summary>
