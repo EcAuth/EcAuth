@@ -25,6 +25,21 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    # 公式 actions/* と azure/* を種類ごとに 1 PR に集約
+    # major は breaking change の可能性があるため個別 PR を維持
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "actions/*"
+        update-types:
+          - "minor"
+          - "patch"
+      azure-minor-patch:
+        patterns:
+          - "azure/*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # .NET NuGet パッケージの自動更新
   - package-ecosystem: "nuget"
