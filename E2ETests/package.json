@@ -5,7 +5,7 @@
   "license": "MIT",
   "devDependencies": {
     "@playwright/test": "^1.59.1",
-    "@types/node": "^25.5.0"
+    "@types/node": "^25.6.0"
   },
   "scripts": {},
   "packageManager": "pnpm@10.33.0"
