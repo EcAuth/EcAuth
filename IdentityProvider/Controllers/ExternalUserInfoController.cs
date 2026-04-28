@@ -72,7 +72,8 @@ namespace IdentityProvider.Controllers
                     }
                     catch (FormatException)
                     {
-                        _logger.LogWarning("Invalid Authorization header format: {Header}", authorizationHeader);
+                        // Authorization ヘッダーの生値はアクセストークンを含み得るためログに出力しない
+                        _logger.LogWarning("Invalid Authorization header format");
                         return Unauthorized(new
                         {
                             error = "invalid_token",
