@@ -1,5 +1,6 @@
 using IdentityProvider.Telemetry;
 using System.Diagnostics;
+using System.Globalization;
 
 namespace IdentityProvider.Test.Telemetry
 {
@@ -34,10 +35,13 @@ namespace IdentityProvider.Test.Telemetry
                 Thread.Sleep(2);
             }
 
+            // Azure Monitor が customDimensions にマッピングできるよう、値は文字列で記録される。
+            // クエリ側は todouble() で数値として扱う想定。
             var tag = activity.GetTagItem("step.sample_step.elapsed_ms");
             Assert.NotNull(tag);
-            Assert.IsType<double>(tag);
-            Assert.True((double)tag! >= 0.0);
+            var tagString = Assert.IsType<string>(tag);
+            Assert.True(double.TryParse(tagString, NumberStyles.Float, CultureInfo.InvariantCulture, out var elapsed));
+            Assert.True(elapsed >= 0.0);
         }
 
         [Fact]

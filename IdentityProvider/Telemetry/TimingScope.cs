@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 
 namespace IdentityProvider.Telemetry
 {
@@ -38,7 +39,13 @@ namespace IdentityProvider.Telemetry
             }
 
             var elapsedMs = Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
-            _activity.SetTag($"step.{_stepName}.elapsed_ms", elapsedMs);
+            // Azure Monitor の OpenTelemetry エクスポーター (Azure.Monitor.OpenTelemetry.AspNetCore)
+            // は Activity タグの数値型 (double) を customDimensions にマッピングしないため、
+            // 明示的に文字列化する。クエリ側は todouble(customDimensions["..."]) で数値として扱う。
+            // フォーマットはロケール非依存にするため InvariantCulture を指定。
+            _activity.SetTag(
+                $"step.{_stepName}.elapsed_ms",
+                elapsedMs.ToString("F3", CultureInfo.InvariantCulture));
         }
     }
 }
