@@ -46,7 +46,7 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 
 `/token` `/userinfo` `register/verify` `authenticate/verify` の各エンドポイントは、`IdentityProvider.Telemetry.TimingScope` を使った `using` ブロックで処理ステップ毎の所要時間を `Activity.Current` のタグとして記録している。Azure Monitor が `Activity` タグを自動的に `customDimensions` にマッピングするため、本番テレメトリ上で内訳をクエリできる。
 
-タグキーは `step.{step_name}.elapsed_ms`（値は `double` ms）。
+タグキーは `step.{step_name}.elapsed_ms`。値はミリ秒単位の文字列（`InvariantCulture` の `F3` フォーマット、例: `"12.345"`）。Azure Monitor の OpenTelemetry エクスポーターは数値型の Activity タグを customDimensions に出力しないため、SDK 側で文字列化してから `SetTag` する。クエリ側は `todouble(customDimensions["..."])` で数値として扱う。
 
 #### 計測対象（2026-04 時点）
 
