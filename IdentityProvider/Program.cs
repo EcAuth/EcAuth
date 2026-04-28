@@ -90,8 +90,14 @@ builder.Services.AddSwaggerGen();
 
 // Application Insights / OpenTelemetry
 // 接続文字列は環境変数 APPLICATIONINSIGHTS_CONNECTION_STRING 経由で供給される。
-// 未設定（ローカル dev 等）の場合 SDK は no-op となり起動・動作には影響しない。
-builder.Services.AddOpenTelemetry().UseAzureMonitor();
+// SDK は接続文字列未設定時に起動失敗例外を投げるため、設定がある場合のみ有効化する。
+// （ローカル dev / CI 等では未設定 → SDK 無効、Azure staging/production では設定あり → 有効）
+var appInsightsConnectionString =
+    Environment.GetEnvironmentVariable("APPLICATIONINSIGHTS_CONNECTION_STRING");
+if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
+{
+    builder.Services.AddOpenTelemetry().UseAzureMonitor();
+}
 
 var app = builder.Build();
 
