@@ -14,6 +14,14 @@ namespace IdentityProvider.Services
     /// </summary>
     public class B2BPasskeyService : IB2BPasskeyService
     {
+        // Application Insights / traces テーブルでの集計クエリ
+        // (`traces | where message startswith "Passkey.Verify.Failed"`) で利用するため、
+        // メッセージテンプレートをクラス定数として一元化する。
+        private const string PasskeyVerifyFailedLogTemplate =
+            "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason} detail={ErrorDetail}";
+        private const string PasskeyVerifyFailedExceptionLogTemplate =
+            "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason}";
+
         private readonly EcAuthDbContext _context;
         private readonly IFido2 _fido2;
         private readonly IWebAuthnChallengeService _challengeService;
@@ -328,7 +336,7 @@ namespace IdentityProvider.Services
                 if (challenge == null)
                 {
                     _logger.LogWarning(
-                        "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason} detail={ErrorDetail}",
+                        PasskeyVerifyFailedLogTemplate,
                         request.ClientId, request.SessionId, "session_not_found", "Session not found or expired");
                     return new IB2BPasskeyService.RegistrationVerifyResult
                     {
@@ -343,7 +351,7 @@ namespace IdentityProvider.Services
                 if (challenge.ExpiresAt < DateTimeOffset.UtcNow)
                 {
                     _logger.LogWarning(
-                        "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason} detail={ErrorDetail}",
+                        PasskeyVerifyFailedLogTemplate,
                         request.ClientId, request.SessionId, "challenge_expired", "Challenge has expired");
                     return new IB2BPasskeyService.RegistrationVerifyResult
                     {
@@ -356,7 +364,7 @@ namespace IdentityProvider.Services
                 if (challenge.Type != "registration")
                 {
                     _logger.LogWarning(
-                        "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason} detail={ErrorDetail}",
+                        PasskeyVerifyFailedLogTemplate,
                         request.ClientId, request.SessionId, "challenge_type_invalid", "Invalid challenge type");
                     return new IB2BPasskeyService.RegistrationVerifyResult
                     {
@@ -452,7 +460,7 @@ namespace IdentityProvider.Services
             {
                 _logger.LogError(
                     ex,
-                    "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason}",
+                    PasskeyVerifyFailedExceptionLogTemplate,
                     request.ClientId, request.SessionId, "fido2_error");
                 return new IB2BPasskeyService.RegistrationVerifyResult
                 {
@@ -573,7 +581,7 @@ namespace IdentityProvider.Services
                 if (challenge == null)
                 {
                     _logger.LogWarning(
-                        "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason} detail={ErrorDetail}",
+                        PasskeyVerifyFailedLogTemplate,
                         request.ClientId, request.SessionId, "session_not_found", "Session not found or expired");
                     return new IB2BPasskeyService.AuthenticationVerifyResult
                     {
@@ -588,7 +596,7 @@ namespace IdentityProvider.Services
                 if (challenge.ExpiresAt < DateTimeOffset.UtcNow)
                 {
                     _logger.LogWarning(
-                        "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason} detail={ErrorDetail}",
+                        PasskeyVerifyFailedLogTemplate,
                         request.ClientId, request.SessionId, "challenge_expired", "Challenge has expired");
                     return new IB2BPasskeyService.AuthenticationVerifyResult
                     {
@@ -601,7 +609,7 @@ namespace IdentityProvider.Services
                 if (challenge.Type != "authentication")
                 {
                     _logger.LogWarning(
-                        "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason} detail={ErrorDetail}",
+                        PasskeyVerifyFailedLogTemplate,
                         request.ClientId, request.SessionId, "challenge_type_invalid", "Invalid challenge type");
                     return new IB2BPasskeyService.AuthenticationVerifyResult
                     {
@@ -621,7 +629,7 @@ namespace IdentityProvider.Services
                 if (credential == null)
                 {
                     _logger.LogWarning(
-                        "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason} detail={ErrorDetail}",
+                        PasskeyVerifyFailedLogTemplate,
                         request.ClientId, request.SessionId, "credential_not_found", "Credential not found");
                     return new IB2BPasskeyService.AuthenticationVerifyResult
                     {
@@ -696,7 +704,7 @@ namespace IdentityProvider.Services
             {
                 _logger.LogError(
                     ex,
-                    "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason}",
+                    PasskeyVerifyFailedExceptionLogTemplate,
                     request.ClientId, request.SessionId, "fido2_error");
                 return new IB2BPasskeyService.AuthenticationVerifyResult
                 {
