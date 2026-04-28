@@ -1,5 +1,6 @@
 using IdentityProvider.Constants;
 using IdentityProvider.Services;
+using System.Diagnostics;
 using System.Net;
 
 namespace IdentityProvider.Middlewares
@@ -34,6 +35,7 @@ namespace IdentityProvider.Middlewares
                 host, tenantName, defaultOrganizationTenantName, finalTenantName);
 
             tenantService.SetTenant(finalTenantName);
+            Activity.Current?.SetTag("tenant.name", finalTenantName);
 
             await _next(context);
         }

@@ -7,7 +7,9 @@ using IdentityProvider.Middlewares;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using Asp.Versioning;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -85,6 +87,11 @@ builder.Services.AddMvc();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+// Application Insights / OpenTelemetry
+// 接続文字列は環境変数 APPLICATIONINSIGHTS_CONNECTION_STRING 経由で供給される。
+// 未設定（ローカル dev 等）の場合 SDK は no-op となり起動・動作には影響しない。
+builder.Services.AddOpenTelemetry().UseAzureMonitor();
 
 var app = builder.Build();
 

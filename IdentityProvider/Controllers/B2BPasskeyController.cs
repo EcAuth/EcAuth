@@ -5,6 +5,7 @@ using IdentityProvider.Services;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json.Serialization;
 using System.Web;
@@ -125,6 +126,7 @@ namespace IdentityProvider.Controllers
         {
             try
             {
+                Activity.Current?.SetTag("client.id", request.ClientId);
                 _logger.LogInformation("B2B Passkey RegisterOptions requested for client: {ClientId}", request.ClientId);
 
                 // バリデーション
@@ -240,6 +242,7 @@ namespace IdentityProvider.Controllers
         {
             try
             {
+                Activity.Current?.SetTag("client.id", request.ClientId);
                 _logger.LogInformation("B2B Passkey RegisterVerify requested. SessionId: {SessionId}", request.SessionId);
 
                 // バリデーション
@@ -317,6 +320,7 @@ namespace IdentityProvider.Controllers
         {
             try
             {
+                Activity.Current?.SetTag("client.id", request.ClientId);
                 _logger.LogInformation("B2B Passkey AuthenticateOptions requested for client: {ClientId}", request.ClientId);
 
                 // バリデーション
@@ -400,6 +404,7 @@ namespace IdentityProvider.Controllers
         {
             try
             {
+                Activity.Current?.SetTag("client.id", request.ClientId);
                 _logger.LogInformation("B2B Passkey AuthenticateVerify requested. SessionId: {SessionId}", request.SessionId);
 
                 // バリデーション
