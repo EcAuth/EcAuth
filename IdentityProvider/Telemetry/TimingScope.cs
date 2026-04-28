@@ -16,25 +16,29 @@ namespace IdentityProvider.Telemetry
     {
         private readonly string _stepName;
         private readonly long _startTimestamp;
+        private readonly Activity? _activity;
 
         private TimingScope(string stepName)
         {
             _stepName = stepName;
-            _startTimestamp = Stopwatch.GetTimestamp();
+            // 開始時点の Activity.Current を捕捉する。AsyncLocal ベースの Activity.Current は
+            // using ブロック内の await や子 Activity の Start/Stop で変化し得るため、
+            // Dispose 時に取得すると意図と異なる Activity（または子 Activity）にタグが付く可能性がある。
+            _activity = Activity.Current;
+            _startTimestamp = _activity != null ? Stopwatch.GetTimestamp() : 0;
         }
 
         public static TimingScope Begin(string stepName) => new(stepName);
 
         public void Dispose()
         {
-            var activity = Activity.Current;
-            if (activity == null)
+            if (_activity == null)
             {
                 return;
             }
 
             var elapsedMs = Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
-            activity.SetTag($"step.{_stepName}.elapsed_ms", elapsedMs);
+            _activity.SetTag($"step.{_stepName}.elapsed_ms", elapsedMs);
         }
     }
 }

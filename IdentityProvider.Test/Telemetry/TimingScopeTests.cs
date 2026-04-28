@@ -64,5 +64,33 @@ namespace IdentityProvider.Test.Telemetry
             Assert.NotNull(activity.GetTagItem("step.outer.elapsed_ms"));
             Assert.NotNull(activity.GetTagItem("step.inner.elapsed_ms"));
         }
+
+        [Fact]
+        public void Dispose_AfterActivityCurrentChanged_TagsTheCapturedActivity()
+        {
+            // スコープ開始時にアクティブだった Activity に対してタグが付与され、
+            // ブロック内で Activity.Current が変化（子 Activity の Start 等）しても
+            // 子 Activity 側にタグが漏れないことを保証する（PR #375 レビュー対応）。
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = _ => true,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            using var source = new ActivitySource(nameof(TimingScopeTests));
+            using var outer = source.StartActivity("outer_capture")!;
+
+            using (TimingScope.Begin("captured_step"))
+            {
+                // スコープ内で子 Activity を Start/Stop し、Activity.Current を一時的に差し替える
+                using (var inner = source.StartActivity("inner_should_not_get_tag"))
+                {
+                    Thread.Sleep(1);
+                }
+            }
+
+            Assert.NotNull(outer.GetTagItem("step.captured_step.elapsed_ms"));
+        }
     }
 }
