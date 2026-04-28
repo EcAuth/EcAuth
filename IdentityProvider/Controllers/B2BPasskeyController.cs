@@ -126,7 +126,6 @@ namespace IdentityProvider.Controllers
         {
             try
             {
-                Activity.Current?.SetTag("client.id", request.ClientId);
                 _logger.LogInformation("B2B Passkey RegisterOptions requested for client: {ClientId}", request.ClientId);
 
                 // バリデーション
@@ -168,6 +167,8 @@ namespace IdentityProvider.Controllers
                         error_description = "クライアント認証に失敗しました。"
                     });
                 }
+
+                Activity.Current?.SetTag("client.id", client.ClientId);
 
                 // サービス呼び出し
                 var serviceRequest = new IB2BPasskeyService.RegistrationOptionsRequest
@@ -242,7 +243,6 @@ namespace IdentityProvider.Controllers
         {
             try
             {
-                Activity.Current?.SetTag("client.id", request.ClientId);
                 _logger.LogInformation("B2B Passkey RegisterVerify requested. SessionId: {SessionId}", request.SessionId);
 
                 // バリデーション
@@ -266,6 +266,8 @@ namespace IdentityProvider.Controllers
                         error_description = "クライアント認証に失敗しました。"
                     });
                 }
+
+                Activity.Current?.SetTag("client.id", client.ClientId);
 
                 // サービス呼び出し
                 var serviceRequest = new IB2BPasskeyService.RegistrationVerifyRequest
@@ -320,7 +322,6 @@ namespace IdentityProvider.Controllers
         {
             try
             {
-                Activity.Current?.SetTag("client.id", request.ClientId);
                 _logger.LogInformation("B2B Passkey AuthenticateOptions requested for client: {ClientId}", request.ClientId);
 
                 // バリデーション
@@ -347,6 +348,8 @@ namespace IdentityProvider.Controllers
                         error_description = "クライアントが見つかりません。"
                     });
                 }
+
+                Activity.Current?.SetTag("client.id", client.ClientId);
 
                 // サービス呼び出し
                 var serviceRequest = new IB2BPasskeyService.AuthenticationOptionsRequest
@@ -404,7 +407,6 @@ namespace IdentityProvider.Controllers
         {
             try
             {
-                Activity.Current?.SetTag("client.id", request.ClientId);
                 _logger.LogInformation("B2B Passkey AuthenticateVerify requested. SessionId: {SessionId}", request.SessionId);
 
                 // バリデーション
@@ -441,6 +443,8 @@ namespace IdentityProvider.Controllers
                         error_description = "クライアントが見つかりません。"
                     });
                 }
+
+                Activity.Current?.SetTag("client.id", client.ClientId);
 
                 // redirect_uri 検証
                 var allowedRedirectUris = client.RedirectUris?
