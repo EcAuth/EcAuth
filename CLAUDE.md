@@ -42,6 +42,74 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 - DbInitializer / シーダーが参照する環境変数は **Azure ランタイム（Terraform `app_settings`）** に設定が必要。CI ワークフローに定義があっても、Terraform に漏れているとアプリ起動時にシーダーがスキップされる
 - B2BPasskeySeeder は DEV 環境では `DEFAULT_*` を、Staging/Production では `STAGING_*` / `PROD_*` プレフィックスの変数を参照する分岐がある。シーダーのコード（`B2BPasskeySeeder.cs`）で実際に参照される全変数名を確認すること
 
+### Application Insights 上のステップ別プロファイリング
+
+`/token` `/userinfo` `register/verify` `authenticate/verify` の各エンドポイントは、`IdentityProvider.Telemetry.TimingScope` を使った `using` ブロックで処理ステップ毎の所要時間を `Activity.Current` のタグとして記録している。Azure Monitor が `Activity` タグを自動的に `customDimensions` にマッピングするため、本番テレメトリ上で内訳をクエリできる。
+
+タグキーは `step.{step_name}.elapsed_ms`（値は `double` ms）。
+
+#### 計測対象（2026-04 時点）
+
+| エンドポイント | ステップ |
+|---|---|
+| `/token` | `client_lookup` / `auth_code_lookup` / `auth_code_mark_used` / `user_lookup` / `token_generate` |
+| `/userinfo` | `auth_header_parse` / `access_token_validate` / `user_lookup` |
+| `/api/external-userinfo` | `auth_header_parse` / `access_token_validate` / `external_userinfo_fetch` |
+| `register/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `fido2_make_credential` / `credential_persist` / `challenge_consume`） |
+| `authenticate/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `credential_lookup` / `fido2_make_assertion` / `signcount_persist` / `challenge_consume`） |
+
+#### Application Insights クエリ例
+
+`/token` の各ステップの p50 / p95 を分解:
+
+```kusto
+requests
+| where url has "/v1/token" and timestamp > ago(7d)
+| extend
+    step_client_lookup = todouble(customDimensions["step.client_lookup.elapsed_ms"]),
+    step_auth_code_lookup = todouble(customDimensions["step.auth_code_lookup.elapsed_ms"]),
+    step_auth_code_mark_used = todouble(customDimensions["step.auth_code_mark_used.elapsed_ms"]),
+    step_user_lookup = todouble(customDimensions["step.user_lookup.elapsed_ms"]),
+    step_token_generate = todouble(customDimensions["step.token_generate.elapsed_ms"])
+| summarize
+    p50_total = percentile(duration, 50),
+    p95_total = percentile(duration, 95),
+    p50_client = percentile(step_client_lookup, 50),
+    p50_auth_code = percentile(step_auth_code_lookup, 50),
+    p50_user = percentile(step_user_lookup, 50),
+    p50_token = percentile(step_token_generate, 50)
+```
+
+`authenticate/verify` の Fido2 検証本体（`fido2_make_assertion`）が主因かを確認:
+
+```kusto
+requests
+| where url has "authenticate/verify" and timestamp > ago(7d)
+| extend
+    step_fido2 = todouble(customDimensions["step.fido2_make_assertion.elapsed_ms"]),
+    step_lookup = todouble(customDimensions["step.credential_lookup.elapsed_ms"])
+| summarize
+    p50_total = percentile(duration, 50),
+    p50_fido2 = percentile(step_fido2, 50),
+    p50_lookup = percentile(step_lookup, 50)
+| extend
+    fido2_share = round(p50_fido2 / p50_total * 100, 1)
+```
+
+#### 計測ポイントの追加方法
+
+```csharp
+using IdentityProvider.Telemetry;
+
+using (TimingScope.Begin("my_step"))
+{
+    await SomeAsyncWork();
+}
+```
+
+- `Activity.Current` が null（ローカル開発で Application Insights 未設定など）の場合は no-op
+- ネスト可、各スコープが独立して `step.{name}.elapsed_ms` タグを付与
+
 ### マイグレーション設計ルール
 
 - `migrationBuilder.Sql()` でカラムを参照する UPDATE/INSERT 文を書く場合、`EXEC()` 動的 SQL でラップすること

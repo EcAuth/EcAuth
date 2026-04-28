@@ -1,4 +1,5 @@
 using IdentityProvider.Services;
+using IdentityProvider.Telemetry;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using System.Net.Http.Headers;
@@ -49,58 +50,66 @@ namespace IdentityProvider.Controllers
                     });
                 }
 
-                // 2. Authorization ヘッダーの取得
-                var authorizationHeader = HttpContext.Request.Headers["Authorization"].FirstOrDefault();
-                if (string.IsNullOrEmpty(authorizationHeader))
+                // 2. Authorization ヘッダーの取得 + Bearer Token 解析
+                string accessToken;
+                using (TimingScope.Begin("auth_header_parse"))
                 {
-                    _logger.LogWarning("Authorization header is missing");
-                    return Unauthorized(new
+                    var authorizationHeader = HttpContext.Request.Headers["Authorization"].FirstOrDefault();
+                    if (string.IsNullOrEmpty(authorizationHeader))
                     {
-                        error = "invalid_token",
-                        error_description = "アクセストークンが提供されていません。"
-                    });
+                        _logger.LogWarning("Authorization header is missing");
+                        return Unauthorized(new
+                        {
+                            error = "invalid_token",
+                            error_description = "アクセストークンが提供されていません。"
+                        });
+                    }
+
+                    AuthenticationHeaderValue authHeaderValue;
+                    try
+                    {
+                        authHeaderValue = AuthenticationHeaderValue.Parse(authorizationHeader);
+                    }
+                    catch (FormatException)
+                    {
+                        _logger.LogWarning("Invalid Authorization header format: {Header}", authorizationHeader);
+                        return Unauthorized(new
+                        {
+                            error = "invalid_token",
+                            error_description = "Authorizationヘッダーの形式が正しくありません。"
+                        });
+                    }
+
+                    if (authHeaderValue.Scheme != "Bearer")
+                    {
+                        _logger.LogWarning("Unsupported authentication scheme: {Scheme}", authHeaderValue.Scheme);
+                        return Unauthorized(new
+                        {
+                            error = "invalid_token",
+                            error_description = "Bearer認証のみサポートされています。"
+                        });
+                    }
+
+                    var token = authHeaderValue.Parameter;
+                    if (string.IsNullOrEmpty(token))
+                    {
+                        _logger.LogWarning("Access token is empty");
+                        return Unauthorized(new
+                        {
+                            error = "invalid_token",
+                            error_description = "アクセストークンが空です。"
+                        });
+                    }
+                    accessToken = token;
                 }
 
-                // 3. Bearer Token の解析
-                AuthenticationHeaderValue authHeaderValue;
-                try
-                {
-                    authHeaderValue = AuthenticationHeaderValue.Parse(authorizationHeader);
-                }
-                catch (FormatException)
-                {
-                    _logger.LogWarning("Invalid Authorization header format: {Header}", authorizationHeader);
-                    return Unauthorized(new
-                    {
-                        error = "invalid_token",
-                        error_description = "Authorizationヘッダーの形式が正しくありません。"
-                    });
-                }
-
-                if (authHeaderValue.Scheme != "Bearer")
-                {
-                    _logger.LogWarning("Unsupported authentication scheme: {Scheme}", authHeaderValue.Scheme);
-                    return Unauthorized(new
-                    {
-                        error = "invalid_token",
-                        error_description = "Bearer認証のみサポートされています。"
-                    });
-                }
-
-                var accessToken = authHeaderValue.Parameter;
-                if (string.IsNullOrEmpty(accessToken))
-                {
-                    _logger.LogWarning("Access token is empty");
-                    return Unauthorized(new
-                    {
-                        error = "invalid_token",
-                        error_description = "アクセストークンが空です。"
-                    });
-                }
-
-                // 4. アクセストークンの検証
+                // 3. アクセストークンの検証
                 _logger.LogInformation("Validating access token");
-                var subject = await _tokenService.ValidateAccessTokenAsync(accessToken);
+                string? subject;
+                using (TimingScope.Begin("access_token_validate"))
+                {
+                    subject = await _tokenService.ValidateAccessTokenAsync(accessToken);
+                }
 
                 if (subject == null)
                 {
@@ -112,16 +121,20 @@ namespace IdentityProvider.Controllers
                     });
                 }
 
-                // 5. 外部IdPユーザー情報の取得
+                // 4. 外部IdPユーザー情報の取得
                 _logger.LogInformation("Fetching external user info for subject {Subject} and provider {Provider}",
                     subject, provider);
 
-                var externalUserInfo = await _externalUserInfoService.GetExternalUserInfoAsync(
-                    new IExternalUserInfoService.GetExternalUserInfoRequest
-                    {
-                        EcAuthSubject = subject,
-                        ExternalProvider = provider
-                    });
+                IExternalUserInfoService.ExternalUserInfo? externalUserInfo;
+                using (TimingScope.Begin("external_userinfo_fetch"))
+                {
+                    externalUserInfo = await _externalUserInfoService.GetExternalUserInfoAsync(
+                        new IExternalUserInfoService.GetExternalUserInfoRequest
+                        {
+                            EcAuthSubject = subject,
+                            ExternalProvider = provider
+                        });
+                }
 
                 if (externalUserInfo == null)
                 {

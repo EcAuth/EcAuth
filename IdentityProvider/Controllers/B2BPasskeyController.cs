@@ -2,6 +2,7 @@ using Fido2NetLib;
 using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
+using IdentityProvider.Telemetry;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -256,7 +257,11 @@ namespace IdentityProvider.Controllers
                 }
 
                 // クライアント認証
-                var client = await AuthenticateClientAsync(request.ClientId, request.ClientSecret);
+                Client? client;
+                using (TimingScope.Begin("client_authenticate"))
+                {
+                    client = await AuthenticateClientAsync(request.ClientId, request.ClientSecret);
+                }
                 if (client == null)
                 {
                     _logger.LogWarning("Client authentication failed for: {ClientId}", request.ClientId);
@@ -278,7 +283,11 @@ namespace IdentityProvider.Controllers
                     DeviceName = request.DeviceName
                 };
 
-                var result = await _passkeyService.VerifyRegistrationAsync(serviceRequest);
+                IB2BPasskeyService.RegistrationVerifyResult result;
+                using (TimingScope.Begin("service_call"))
+                {
+                    result = await _passkeyService.VerifyRegistrationAsync(serviceRequest);
+                }
 
                 if (!result.Success)
                 {
@@ -429,10 +438,14 @@ namespace IdentityProvider.Controllers
                 }
 
                 // クライアント存在確認・redirect_uri検証
-                var client = await _context.Clients
-                    .IgnoreQueryFilters()
-                    .Include(c => c.RedirectUris)
-                    .FirstOrDefaultAsync(c => c.ClientId == request.ClientId);
+                Client? client;
+                using (TimingScope.Begin("client_authenticate"))
+                {
+                    client = await _context.Clients
+                        .IgnoreQueryFilters()
+                        .Include(c => c.RedirectUris)
+                        .FirstOrDefaultAsync(c => c.ClientId == request.ClientId);
+                }
 
                 if (client == null)
                 {
@@ -469,7 +482,11 @@ namespace IdentityProvider.Controllers
                     AssertionResponse = request.Response
                 };
 
-                var result = await _passkeyService.VerifyAuthenticationAsync(serviceRequest);
+                IB2BPasskeyService.AuthenticationVerifyResult result;
+                using (TimingScope.Begin("service_call"))
+                {
+                    result = await _passkeyService.VerifyAuthenticationAsync(serviceRequest);
+                }
 
                 if (!result.Success)
                 {
