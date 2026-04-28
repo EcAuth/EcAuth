@@ -5,6 +5,7 @@ using IdentityProvider.Services;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json.Serialization;
 using System.Web;
@@ -167,6 +168,8 @@ namespace IdentityProvider.Controllers
                     });
                 }
 
+                Activity.Current?.SetTag("client.id", client.ClientId);
+
                 // サービス呼び出し
                 var serviceRequest = new IB2BPasskeyService.RegistrationOptionsRequest
                 {
@@ -264,6 +267,8 @@ namespace IdentityProvider.Controllers
                     });
                 }
 
+                Activity.Current?.SetTag("client.id", client.ClientId);
+
                 // サービス呼び出し
                 var serviceRequest = new IB2BPasskeyService.RegistrationVerifyRequest
                 {
@@ -343,6 +348,8 @@ namespace IdentityProvider.Controllers
                         error_description = "クライアントが見つかりません。"
                     });
                 }
+
+                Activity.Current?.SetTag("client.id", client.ClientId);
 
                 // サービス呼び出し
                 var serviceRequest = new IB2BPasskeyService.AuthenticationOptionsRequest
@@ -436,6 +443,8 @@ namespace IdentityProvider.Controllers
                         error_description = "クライアントが見つかりません。"
                     });
                 }
+
+                Activity.Current?.SetTag("client.id", client.ClientId);
 
                 // redirect_uri 検証
                 var allowedRedirectUris = client.RedirectUris?

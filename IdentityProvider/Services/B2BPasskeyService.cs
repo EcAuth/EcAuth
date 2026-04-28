@@ -14,6 +14,14 @@ namespace IdentityProvider.Services
     /// </summary>
     public class B2BPasskeyService : IB2BPasskeyService
     {
+        // Application Insights / traces テーブルでの集計クエリ
+        // (`traces | where message startswith "Passkey.Verify.Failed"`) で利用するため、
+        // メッセージテンプレートをクラス定数として一元化する。
+        private const string PasskeyVerifyFailedLogTemplate =
+            "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason} detail={ErrorDetail}";
+        private const string PasskeyVerifyFailedExceptionLogTemplate =
+            "Passkey.Verify.Failed: clientId={ClientId} sessionId={SessionId} reason={FailureReason}";
+
         private readonly EcAuthDbContext _context;
         private readonly IFido2 _fido2;
         private readonly IWebAuthnChallengeService _challengeService;
@@ -327,6 +335,9 @@ namespace IdentityProvider.Services
                 var challenge = await _challengeService.GetChallengeBySessionIdAsync(request.SessionId);
                 if (challenge == null)
                 {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "session_not_found", "Session not found or expired");
                     return new IB2BPasskeyService.RegistrationVerifyResult
                     {
                         Success = false,
@@ -339,6 +350,9 @@ namespace IdentityProvider.Services
                 // 多層防御として明示的に検証。将来の実装変更に対する安全性を確保。
                 if (challenge.ExpiresAt < DateTimeOffset.UtcNow)
                 {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "challenge_expired", "Challenge has expired");
                     return new IB2BPasskeyService.RegistrationVerifyResult
                     {
                         Success = false,
@@ -349,6 +363,9 @@ namespace IdentityProvider.Services
                 // タイプチェック
                 if (challenge.Type != "registration")
                 {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "challenge_type_invalid", "Invalid challenge type");
                     return new IB2BPasskeyService.RegistrationVerifyResult
                     {
                         Success = false,
@@ -441,7 +458,10 @@ namespace IdentityProvider.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to verify registration for session {SessionId}", request.SessionId);
+                _logger.LogError(
+                    ex,
+                    PasskeyVerifyFailedExceptionLogTemplate,
+                    request.ClientId, request.SessionId, "fido2_error");
                 return new IB2BPasskeyService.RegistrationVerifyResult
                 {
                     Success = false,
@@ -560,6 +580,9 @@ namespace IdentityProvider.Services
                 var challenge = await _challengeService.GetChallengeBySessionIdAsync(request.SessionId);
                 if (challenge == null)
                 {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "session_not_found", "Session not found or expired");
                     return new IB2BPasskeyService.AuthenticationVerifyResult
                     {
                         Success = false,
@@ -572,6 +595,9 @@ namespace IdentityProvider.Services
                 // 多層防御として明示的に検証。将来の実装変更に対する安全性を確保。
                 if (challenge.ExpiresAt < DateTimeOffset.UtcNow)
                 {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "challenge_expired", "Challenge has expired");
                     return new IB2BPasskeyService.AuthenticationVerifyResult
                     {
                         Success = false,
@@ -582,6 +608,9 @@ namespace IdentityProvider.Services
                 // タイプチェック
                 if (challenge.Type != "authentication")
                 {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "challenge_type_invalid", "Invalid challenge type");
                     return new IB2BPasskeyService.AuthenticationVerifyResult
                     {
                         Success = false,
@@ -599,6 +628,9 @@ namespace IdentityProvider.Services
 
                 if (credential == null)
                 {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "credential_not_found", "Credential not found");
                     return new IB2BPasskeyService.AuthenticationVerifyResult
                     {
                         Success = false,
@@ -670,7 +702,10 @@ namespace IdentityProvider.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to verify authentication for session {SessionId}", request.SessionId);
+                _logger.LogError(
+                    ex,
+                    PasskeyVerifyFailedExceptionLogTemplate,
+                    request.ClientId, request.SessionId, "fido2_error");
                 return new IB2BPasskeyService.AuthenticationVerifyResult
                 {
                     Success = false,
