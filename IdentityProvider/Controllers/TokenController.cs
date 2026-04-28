@@ -1,5 +1,6 @@
 using IdentityProvider.Models;
 using IdentityProvider.Services;
+using IdentityProvider.Telemetry;
 using IdpUtilities;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
@@ -124,8 +125,12 @@ namespace IdentityProvider.Controllers
                 }
 
                 // 2. クライアントの存在確認
-                var client = await _context.Clients
-                    .FirstOrDefaultAsync(c => c.ClientId == client_id);
+                Client? client;
+                using (TimingScope.Begin("client_lookup"))
+                {
+                    client = await _context.Clients
+                        .FirstOrDefaultAsync(c => c.ClientId == client_id);
+                }
 
                 if (client == null)
                 {
@@ -152,8 +157,12 @@ namespace IdentityProvider.Controllers
                 }
 
                 // 5. 認可コードの取得・検証
-                var authorizationCode = await _context.AuthorizationCodes
-                    .FirstOrDefaultAsync(ac => ac.Code == code);
+                AuthorizationCode? authorizationCode;
+                using (TimingScope.Begin("auth_code_lookup"))
+                {
+                    authorizationCode = await _context.AuthorizationCodes
+                        .FirstOrDefaultAsync(ac => ac.Code == code);
+                }
 
                 if (authorizationCode == null)
                 {
@@ -214,7 +223,10 @@ namespace IdentityProvider.Controllers
                 // 10. 認可コードを使用済みにマーキング
                 authorizationCode.IsUsed = true;
                 authorizationCode.UsedAt = DateTimeOffset.UtcNow;
-                await _context.SaveChangesAsync();
+                using (TimingScope.Begin("auth_code_mark_used"))
+                {
+                    await _context.SaveChangesAsync();
+                }
 
                 // 11. SubjectType に応じたユーザー情報の取得
                 var subjectType = authorizationCode.SubjectType;
@@ -242,7 +254,11 @@ namespace IdentityProvider.Controllers
                 if (subjectType == SubjectType.B2B)
                 {
                     // B2B認証の場合: B2BUserを取得
-                    var b2bUser = await _b2bUserService.GetBySubjectAsync(subject);
+                    B2BUser? b2bUser;
+                    using (TimingScope.Begin("user_lookup"))
+                    {
+                        b2bUser = await _b2bUserService.GetBySubjectAsync(subject);
+                    }
                     if (b2bUser == null)
                     {
                         _logger.LogError("B2B user not found for subject: {Subject}", subject);
@@ -267,7 +283,11 @@ namespace IdentityProvider.Controllers
                 else if (subjectType == SubjectType.B2C)
                 {
                     // B2C認証の場合: EcAuthUserを取得（従来の処理）
-                    var user = await _userService.GetUserBySubjectAsync(subject);
+                    EcAuthUser? user;
+                    using (TimingScope.Begin("user_lookup"))
+                    {
+                        user = await _userService.GetUserBySubjectAsync(subject);
+                    }
                     if (user == null)
                     {
                         _logger.LogError("User not found for subject: {Subject}", subject);
@@ -304,7 +324,10 @@ namespace IdentityProvider.Controllers
                 ITokenService.TokenResponse tokenResponse;
                 try
                 {
-                    tokenResponse = await _tokenService.GenerateTokensAsync(tokenRequest);
+                    using (TimingScope.Begin("token_generate"))
+                    {
+                        tokenResponse = await _tokenService.GenerateTokensAsync(tokenRequest);
+                    }
                     _logger.LogInformation("Tokens generated successfully for subject: {Subject}, SubjectType: {SubjectType}, client: {ClientId}",
                         subject, subjectType, client_id);
                 }

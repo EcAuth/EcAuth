@@ -2,6 +2,7 @@ using Fido2NetLib;
 using Fido2NetLib.Objects;
 using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
+using IdentityProvider.Telemetry;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -332,7 +333,11 @@ namespace IdentityProvider.Services
             try
             {
                 // チャレンジ取得
-                var challenge = await _challengeService.GetChallengeBySessionIdAsync(request.SessionId);
+                WebAuthnChallenge? challenge;
+                using (TimingScope.Begin("challenge_lookup"))
+                {
+                    challenge = await _challengeService.GetChallengeBySessionIdAsync(request.SessionId);
+                }
                 if (challenge == null)
                 {
                     _logger.LogWarning(
@@ -418,12 +423,16 @@ namespace IdentityProvider.Services
                 var dynamicFido2 = _fido2Factory(dynamicConfig);
 
                 // 登録検証（Fido2.NetLib 4.0.0 API）
-                var result = await dynamicFido2.MakeNewCredentialAsync(new MakeNewCredentialParams
+                RegisteredPublicKeyCredential result;
+                using (TimingScope.Begin("fido2_make_credential"))
                 {
-                    AttestationResponse = request.AttestationResponse,
-                    OriginalOptions = options,
-                    IsCredentialIdUniqueToUserCallback = isCredentialIdUnique
-                });
+                    result = await dynamicFido2.MakeNewCredentialAsync(new MakeNewCredentialParams
+                    {
+                        AttestationResponse = request.AttestationResponse,
+                        OriginalOptions = options,
+                        IsCredentialIdUniqueToUserCallback = isCredentialIdUnique
+                    });
+                }
 
                 // クレデンシャル保存
                 var credential = new B2BPasskeyCredential
@@ -440,10 +449,16 @@ namespace IdentityProvider.Services
                 };
 
                 _context.B2BPasskeyCredentials.Add(credential);
-                await _context.SaveChangesAsync();
+                using (TimingScope.Begin("credential_persist"))
+                {
+                    await _context.SaveChangesAsync();
+                }
 
                 // チャレンジ消費
-                await _challengeService.ConsumeChallengeAsync(request.SessionId);
+                using (TimingScope.Begin("challenge_consume"))
+                {
+                    await _challengeService.ConsumeChallengeAsync(request.SessionId);
+                }
 
                 _logger.LogInformation(
                     "Registered passkey for B2BUser {Subject}, CredentialId: {CredentialId}",
@@ -577,7 +592,11 @@ namespace IdentityProvider.Services
             try
             {
                 // チャレンジ取得
-                var challenge = await _challengeService.GetChallengeBySessionIdAsync(request.SessionId);
+                WebAuthnChallenge? challenge;
+                using (TimingScope.Begin("challenge_lookup"))
+                {
+                    challenge = await _challengeService.GetChallengeBySessionIdAsync(request.SessionId);
+                }
                 if (challenge == null)
                 {
                     _logger.LogWarning(
@@ -622,9 +641,13 @@ namespace IdentityProvider.Services
                 // Fido2.NetLib 4.0.0では Id は Base64URL文字列なのでデコードが必要
                 var assertionCredentialIdBytes = WebEncoders.Base64UrlDecode(request.AssertionResponse.Id);
                 // EF Coreは byte[] の == 演算子をSQLに変換可能（SequenceEqualは不可）
-                var credential = await _context.B2BPasskeyCredentials
-                    .IgnoreQueryFilters()
-                    .FirstOrDefaultAsync(c => c.CredentialId == assertionCredentialIdBytes);
+                B2BPasskeyCredential? credential;
+                using (TimingScope.Begin("credential_lookup"))
+                {
+                    credential = await _context.B2BPasskeyCredentials
+                        .IgnoreQueryFilters()
+                        .FirstOrDefaultAsync(c => c.CredentialId == assertionCredentialIdBytes);
+                }
 
                 if (credential == null)
                 {
@@ -671,22 +694,32 @@ namespace IdentityProvider.Services
                 var dynamicFido2 = _fido2Factory(dynamicConfig);
 
                 // 認証検証（Fido2.NetLib 4.0.0 API）
-                var result = await dynamicFido2.MakeAssertionAsync(new MakeAssertionParams
+                VerifyAssertionResult result;
+                using (TimingScope.Begin("fido2_make_assertion"))
                 {
-                    AssertionResponse = request.AssertionResponse,
-                    OriginalOptions = options,
-                    StoredPublicKey = credential.PublicKey,
-                    StoredSignatureCounter = credential.SignCount,
-                    IsUserHandleOwnerOfCredentialIdCallback = isUserHandleOwner
-                });
+                    result = await dynamicFido2.MakeAssertionAsync(new MakeAssertionParams
+                    {
+                        AssertionResponse = request.AssertionResponse,
+                        OriginalOptions = options,
+                        StoredPublicKey = credential.PublicKey,
+                        StoredSignatureCounter = credential.SignCount,
+                        IsUserHandleOwnerOfCredentialIdCallback = isUserHandleOwner
+                    });
+                }
 
                 // SignCount更新
                 credential.SignCount = result.SignCount;
                 credential.LastUsedAt = DateTimeOffset.UtcNow;
-                await _context.SaveChangesAsync();
+                using (TimingScope.Begin("signcount_persist"))
+                {
+                    await _context.SaveChangesAsync();
+                }
 
                 // チャレンジ消費
-                await _challengeService.ConsumeChallengeAsync(request.SessionId);
+                using (TimingScope.Begin("challenge_consume"))
+                {
+                    await _challengeService.ConsumeChallengeAsync(request.SessionId);
+                }
 
                 _logger.LogInformation(
                     "Authenticated B2BUser {Subject} with credential {CredentialId}",

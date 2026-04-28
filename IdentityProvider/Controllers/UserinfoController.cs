@@ -1,5 +1,6 @@
 using IdentityProvider.Models;
 using IdentityProvider.Services;
+using IdentityProvider.Telemetry;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using System.Net.Http.Headers;
@@ -61,58 +62,67 @@ namespace IdentityProvider.Controllers
             {
                 _logger.LogInformation("UserInfo endpoint accessed");
 
-                // 1. Authorization ヘッダーの取得
-                var authorizationHeader = HttpContext.Request.Headers["Authorization"].FirstOrDefault();
-                if (string.IsNullOrEmpty(authorizationHeader))
+                // 1. Authorization ヘッダーの取得 + Bearer Token 解析
+                string accessToken;
+                using (TimingScope.Begin("auth_header_parse"))
                 {
-                    _logger.LogWarning("Authorization header is missing");
-                    return Unauthorized(new
+                    var authorizationHeader = HttpContext.Request.Headers["Authorization"].FirstOrDefault();
+                    if (string.IsNullOrEmpty(authorizationHeader))
                     {
-                        error = "invalid_token",
-                        error_description = "アクセストークンが提供されていません。"
-                    });
+                        _logger.LogWarning("Authorization header is missing");
+                        return Unauthorized(new
+                        {
+                            error = "invalid_token",
+                            error_description = "アクセストークンが提供されていません。"
+                        });
+                    }
+
+                    AuthenticationHeaderValue authHeaderValue;
+                    try
+                    {
+                        authHeaderValue = AuthenticationHeaderValue.Parse(authorizationHeader);
+                    }
+                    catch (FormatException)
+                    {
+                        // Authorization ヘッダーの生値はアクセストークンを含み得るためログに出力しない
+                        _logger.LogWarning("Invalid Authorization header format");
+                        return Unauthorized(new
+                        {
+                            error = "invalid_token",
+                            error_description = "Authorizationヘッダーの形式が正しくありません。"
+                        });
+                    }
+
+                    if (authHeaderValue.Scheme != "Bearer")
+                    {
+                        _logger.LogWarning("Unsupported authentication scheme: {Scheme}", authHeaderValue.Scheme);
+                        return Unauthorized(new
+                        {
+                            error = "invalid_token",
+                            error_description = "Bearer認証のみサポートされています。"
+                        });
+                    }
+
+                    var token = authHeaderValue.Parameter;
+                    if (string.IsNullOrEmpty(token))
+                    {
+                        _logger.LogWarning("Access token is empty");
+                        return Unauthorized(new
+                        {
+                            error = "invalid_token",
+                            error_description = "アクセストークンが空です。"
+                        });
+                    }
+                    accessToken = token;
                 }
 
-                // 2. Bearer Token の解析
-                AuthenticationHeaderValue authHeaderValue;
-                try
-                {
-                    authHeaderValue = AuthenticationHeaderValue.Parse(authorizationHeader);
-                }
-                catch (FormatException)
-                {
-                    _logger.LogWarning("Invalid Authorization header format: {Header}", authorizationHeader);
-                    return Unauthorized(new
-                    {
-                        error = "invalid_token",
-                        error_description = "Authorizationヘッダーの形式が正しくありません。"
-                    });
-                }
-
-                if (authHeaderValue.Scheme != "Bearer")
-                {
-                    _logger.LogWarning("Unsupported authentication scheme: {Scheme}", authHeaderValue.Scheme);
-                    return Unauthorized(new
-                    {
-                        error = "invalid_token",
-                        error_description = "Bearer認証のみサポートされています。"
-                    });
-                }
-
-                var accessToken = authHeaderValue.Parameter;
-                if (string.IsNullOrEmpty(accessToken))
-                {
-                    _logger.LogWarning("Access token is empty");
-                    return Unauthorized(new
-                    {
-                        error = "invalid_token",
-                        error_description = "アクセストークンが空です。"
-                    });
-                }
-
-                // 3. アクセストークンの検証（SubjectType を含む詳細な結果を取得）
+                // 2. アクセストークンの検証（SubjectType を含む詳細な結果を取得）
                 _logger.LogInformation("Validating access token");
-                var validationResult = await _tokenService.ValidateAccessTokenWithTypeAsync(accessToken);
+                ITokenService.AccessTokenValidationResult validationResult;
+                using (TimingScope.Begin("access_token_validate"))
+                {
+                    validationResult = await _tokenService.ValidateAccessTokenWithTypeAsync(accessToken);
+                }
 
                 if (!validationResult.IsValid || validationResult.Subject == null)
                 {
@@ -127,28 +137,31 @@ namespace IdentityProvider.Controllers
                 var subject = validationResult.Subject;
                 var subjectType = validationResult.SubjectType ?? SubjectType.B2C;
 
-                // 4. SubjectType に応じたユーザー情報の取得
+                // 3. SubjectType に応じたユーザー情報の取得
                 _logger.LogInformation("Fetching user info for subject: {Subject}, SubjectType: {SubjectType}", subject, subjectType);
 
                 string? userSubject = null;
-                switch (subjectType)
+                using (TimingScope.Begin("user_lookup"))
                 {
-                    case SubjectType.B2B:
-                        var b2bUser = await _b2bUserService.GetBySubjectAsync(subject);
-                        if (b2bUser != null)
-                        {
-                            userSubject = b2bUser.Subject;
-                        }
-                        break;
+                    switch (subjectType)
+                    {
+                        case SubjectType.B2B:
+                            var b2bUser = await _b2bUserService.GetBySubjectAsync(subject);
+                            if (b2bUser != null)
+                            {
+                                userSubject = b2bUser.Subject;
+                            }
+                            break;
 
-                    case SubjectType.B2C:
-                    default:
-                        var ecAuthUser = await _userService.GetUserBySubjectAsync(subject);
-                        if (ecAuthUser != null)
-                        {
-                            userSubject = ecAuthUser.Subject;
-                        }
-                        break;
+                        case SubjectType.B2C:
+                        default:
+                            var ecAuthUser = await _userService.GetUserBySubjectAsync(subject);
+                            if (ecAuthUser != null)
+                            {
+                                userSubject = ecAuthUser.Subject;
+                            }
+                            break;
+                    }
                 }
 
                 if (userSubject == null)
