@@ -28,6 +28,8 @@ namespace IdentityProvider.Models
         public DbSet<B2BUser> B2BUsers { get; set; }
         public DbSet<B2BPasskeyCredential> B2BPasskeyCredentials { get; set; }
         public DbSet<WebAuthnChallenge> WebAuthnChallenges { get; set; }
+        public DbSet<AccountOrganization> AccountOrganizations { get; set; }
+        public DbSet<MagicLoginToken> MagicLoginTokens { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -195,6 +197,64 @@ namespace IdentityProvider.Models
             modelBuilder.Entity<RsaKeyPair>()
                 .HasIndex(k => new { k.OrganizationId, k.Kid })
                 .IsUnique();
+
+            // Account: 所属 Org のテナント (accounts / stg-accounts) のみ参照可能
+            modelBuilder.Entity<Account>()
+                .HasQueryFilter(a => a.Organization != null
+                    && a.Organization.TenantName == _tenantService.TenantName);
+
+            modelBuilder.Entity<Account>()
+                .HasAlternateKey(a => a.Subject);
+
+            modelBuilder.Entity<Account>()
+                .HasOne(a => a.Organization)
+                .WithMany()
+                .HasForeignKey(a => a.OrganizationId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<Account>()
+                .HasIndex(a => new { a.OrganizationId, a.Email })
+                .IsUnique();
+
+            // AccountOrganization: テナント横断 (クエリフィルター対象外)
+            modelBuilder.Entity<AccountOrganization>()
+                .HasKey(ao => new { ao.AccountSubject, ao.OrganizationId });
+
+            modelBuilder.Entity<AccountOrganization>()
+                .HasOne(ao => ao.Account)
+                .WithMany(a => a.ManagedOrganizations)
+                .HasForeignKey(ao => ao.AccountSubject)
+                .HasPrincipalKey(a => a.Subject)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<AccountOrganization>()
+                .HasOne(ao => ao.Organization)
+                .WithMany()
+                .HasForeignKey(ao => ao.OrganizationId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // MagicLoginToken: テナント横断のレート制限判定を行うため QueryFilter は設定しない
+            modelBuilder.Entity<MagicLoginToken>()
+                .HasOne(t => t.Account)
+                .WithMany()
+                .HasForeignKey(t => t.AccountSubject)
+                .HasPrincipalKey(a => a.Subject)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<MagicLoginToken>()
+                .HasIndex(t => t.TokenHash)
+                .IsUnique();
+
+            modelBuilder.Entity<MagicLoginToken>()
+                .HasIndex(t => t.ExpiresAt);
+
+            // レート制限判定用の複合インデックス (Redis 不使用、DB ベース実装)
+            modelBuilder.Entity<MagicLoginToken>()
+                .HasIndex(t => new { t.RequestedEmailHash, t.CreatedAt });
+
+            modelBuilder.Entity<MagicLoginToken>()
+                .HasIndex(t => new { t.RequestedIp, t.CreatedAt });
 
             base.OnModelCreating(modelBuilder);
         }

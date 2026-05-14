@@ -26,6 +26,11 @@ namespace IdentityProvider.Models
         public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
         [Column("organization_id")]
         public int? OrganizationId { get; set; }
+
+        [Column("subject_type")]
+        [Required]
+        public SubjectType SubjectType { get; set; } = SubjectType.B2C;
+
         public Organization? Organization { get; set; }
         public ICollection<RedirectUri>? RedirectUris { get; } = new List<RedirectUri>();
         public ICollection<OpenIdProvider>? OpenIdProviders { get; } = new List<OpenIdProvider>();
