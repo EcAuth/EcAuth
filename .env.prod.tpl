@@ -1,5 +1,11 @@
 # 1Password テンプレートファイル（production 環境用）
-# 使用方法: op inject -i .env.prod.tpl -o .env
+# 使用方法: op run --env-file=.env.prod.tpl -- <command>
+#   例: op run --env-file=.env.prod.tpl -- dotnet ef database update
+#
+# op run はシークレットをサブプロセスの環境変数としてのみ注入し、平文 .env を生成しない。
+# シークレット参照を割り当てた変数を「コマンド内で展開」する場合（例: SQL_* から
+# ConnectionStrings を組み立てる）は、置換が展開より先に行われるようサブシェルで実行する:
+#   op run --env-file=.env.prod.tpl -- bash -c '... "${SQL_PASSWORD}" ...'
 #
 # EcAuth DB: Azure SQL Database（1Password から取得）
 # MockIdP: Azure production 環境（1Password から取得）

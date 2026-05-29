@@ -1,5 +1,10 @@
 # 1Password テンプレートファイル（ローカル Docker 開発環境用）
-# 使用方法: op inject -i .env.dev.tpl -o .env
+# 使用方法: op run --env-file=.env.dev.tpl -- <command>
+#   例: op run --env-file=.env.dev.tpl -- docker compose -p ec-auth up -d --build
+#
+# op run はシークレットをサブプロセスの環境変数としてのみ注入し、平文 .env を生成しない。
+# GITHUB_USERNAME / GITHUB_TOKEN は 1Password Environments 経由で shell に設定済みのため
+# このテンプレートには含めない（env-file > shell の precedence により shell 値が通過する）。
 #
 # EcAuth DB: Docker 内（固定値）
 # MockIdP: Azure dev 環境（1Password から取得）
@@ -104,3 +109,12 @@ DEV_B2B_USER_SUBJECT=3f7c0ab4-b004-4102-b6ed-a730369dd237
 DEV_B2B_USER_EXTERNAL_ID=test-admin
 DEV_B2B_REDIRECT_URI=https://localhost:8081/admin/ecauth/callback
 DEV_B2B_ALLOWED_RP_IDS=localhost
+
+# =============================================================================
+# E2E Test Settings (ローカル Docker + Azure dev MockIdP)
+# =============================================================================
+# EcAuth 自身のエンドポイント（HTTPS 8081）。外部 IdP userinfo は Azure dev MockIdP を参照。
+E2E_AUTHORIZATION_ENDPOINT=https://localhost:8081/v1/authorization
+E2E_TOKEN_ENDPOINT=https://localhost:8081/v1/token
+E2E_USERINFO_ENDPOINT=op://EcAuth/mockidp-dev/userinfo_endpoint
+E2E_REDIRECT_URI=https://localhost:8081/v1/auth/callback
