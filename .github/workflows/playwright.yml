@@ -32,10 +32,63 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Load environment variables from .env.dist
+      - name: Load base environment variables
         run: |
-          # .env.dist を読み込み（変数展開を含むものは除外）
-          grep -v '^\$' .env.dist | grep -v '^#' | grep -v '^$' | grep -v '\${' >> $GITHUB_ENV
+          # E2E 用の非機密のローカル/ダミー設定値（旧 .env.dist 相当）。
+          # クレデンシャルは含まない。MOCK_IDP_BASE_URL 等の機密は後続 step で
+          # secrets から注入する。変数展開を含む値（FEDERATE_OAUTH2_* / STAGING_MOCK_IDP_*_ENDPOINT）は
+          # 旧 .env.dist でも除外されていたため、ここでも展開済みの値を後続 step で組み立てる。
+          cat <<'EOF' >> $GITHUB_ENV
+          DB_HOST=db
+          MIGRATION_DB_HOST=localhost
+          DB_NAME=EcAuthDb
+          DB_USER=SA
+          DB_PASSWORD='<YourStrong@Passw0rd>'
+          STATE_PASSWORD='<strong_password_string_of_at_least_32_characters>'
+          MOCK_IDP_DB_NAME=MockIdp
+          MOCK_IDP_DEFAULT_USER_PASSWORD=password
+          MOCK_IDP_DEFAULT_CLIENT_ID=mockclientid
+          MOCK_IDP_DEFAULT_CLIENT_SECRET=mock-client-secret
+          MOCK_IDP_DEFAULT_CLIENT_NAME=MockClient
+          MOCK_IDP_DEFAULT_USER_EMAIL=defaultuser@example.com
+          MOCK_IDP_FEDERATE_CLIENT_ID=federateclientid
+          MOCK_IDP_FEDERATE_CLIENT_SECRET=federate-client-secret
+          MOCK_IDP_FEDERATE_CLIENT_NAME=FederateClient
+          MOCK_IDP_FEDERATE_USER_EMAIL=federate@example.jp
+          MOCK_IDP_BASE_URL=https://localhost:9091
+          FEDERATE_OAUTH2_APP_NAME=federate-oauth2
+          DEFAULT_ORGANIZATION_CODE=example
+          DEFAULT_ORGANIZATION_NAME=example
+          DEFAULT_ORGANIZATION_TENANT_NAME=example
+          DEFAULT_ORGANIZATION_REDIRECT_URI=https://localhost:8081/v1/auth/callback
+          DEFAULT_CLIENT_ID=client_id
+          DEFAULT_CLIENT_SECRET=client_secret
+          DEFAULT_APP_NAME=app_name
+          GOOGLE_OAUTH2_APP_NAME=google-oauth2
+          GOOGLE_OAUTH2_CLIENT_ID=<Google OAuth2 client_id>
+          GOOGLE_OAUTH2_CLIENT_SECRET=<Google OAuth2 client_secret>
+          GOOGLE_OAUTH2_DISCOVERY_URL=https://accounts.google.com/.well-known/openid-configuration
+          AMAZON_OAUTH2_APP_NAME=amazon-oauth2
+          AMAZON_OAUTH2_CLIENT_ID=<Amazon OAuth2 client_id>
+          AMAZON_OAUTH2_CLIENT_SECRET=<Amazon OAuth2 client_secret>
+          AMAZON_OAUTH2_AUTHORIZATION_ENDPOINT=https://www.amazon.com/ap/oa
+          AMAZON_OAUTH2_TOKEN_ENDPOINT=https://api.amazon.co.jp/auth/o2/token
+          AMAZON_OAUTH2_USERINFO_ENDPOINT=https://api.amazon.com/user/profile
+          STAGING_ORGANIZATION_CODE=staging
+          STAGING_ORGANIZATION_NAME=staging
+          STAGING_ORGANIZATION_TENANT_NAME=staging
+          STAGING_CLIENT_ID=<staging_client_id>
+          STAGING_CLIENT_SECRET=<staging_client_secret>
+          STAGING_APP_NAME=EC-CUBE4 Staging
+          STAGING_REDIRECT_URI=https://localhost:4430/callback
+          STAGING_MOCK_IDP_APP_NAME=staging-mock-idp
+          STAGING_MOCK_IDP_CLIENT_ID=<staging_mock_idp_client_id>
+          STAGING_MOCK_IDP_CLIENT_SECRET=<staging_mock_idp_client_secret>
+          DEV_B2B_USER_SUBJECT=3f7c0ab4-b004-4102-b6ed-a730369dd237
+          DEV_B2B_USER_EXTERNAL_ID=test-admin
+          DEV_B2B_REDIRECT_URI=https://localhost:8081/admin/ecauth/callback
+          DEV_B2B_ALLOWED_RP_IDS=localhost
+          EOF
 
       - name: Set up environment variables
         run: |

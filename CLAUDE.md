@@ -33,7 +33,7 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 
 | 配線先 | ファイル | 用途 |
 |--------|----------|------|
-| ローカル開発 | `.env.dev.tpl`, `.env.staging.tpl` | `op inject` でローカル `.env` を生成 |
+| ローカル開発 | `.env.dev.tpl`, `.env.staging.tpl` | `op run --env-file=...` でサブプロセスに注入（平文 `.env` は生成しない） |
 | CI（Staging） | `.github/workflows/staging.yml` | `1password/load-secrets-action` で CI 環境変数に展開 |
 | CI（Production） | `.github/workflows/production.yml` | 同上 |
 | Azure ランタイム | `ecauth-infrastructure/environments/staging/main.tf` | Terraform `onepassword_item` → `app_settings` |
