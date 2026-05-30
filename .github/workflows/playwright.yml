@@ -55,6 +55,8 @@ jobs:
           MOCK_IDP_FEDERATE_CLIENT_SECRET=federate-client-secret
           MOCK_IDP_FEDERATE_CLIENT_NAME=FederateClient
           MOCK_IDP_FEDERATE_USER_EMAIL=federate@example.jp
+          MOCK_IDP_BASE_URL=https://localhost:9091
+          FEDERATE_OAUTH2_APP_NAME=federate-oauth2
           DEFAULT_ORGANIZATION_CODE=example
           DEFAULT_ORGANIZATION_NAME=example
           DEFAULT_ORGANIZATION_TENANT_NAME=example
