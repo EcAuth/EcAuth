@@ -14,6 +14,7 @@ using OpenTelemetry;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<IIssuerResolver, IssuerResolver>();
 builder.Services.AddScoped<ITenantService, TenantService>();
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<ITokenService, TokenService>();

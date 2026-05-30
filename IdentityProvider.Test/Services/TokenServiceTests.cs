@@ -15,7 +15,7 @@ namespace IdentityProvider.Test.Services
     public class TokenServiceTests
     {
         private readonly ILogger<TokenService> _logger;
-        private readonly IHttpContextAccessor _httpContextAccessor;
+        private readonly IIssuerResolver _issuerResolver;
 
         public const string TestIssuer = "https://test.ec-cube.io";
 
@@ -24,17 +24,16 @@ namespace IdentityProvider.Test.Services
             var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
             _logger = loggerFactory.CreateLogger<TokenService>();
 
-            var httpContext = new DefaultHttpContext();
-            httpContext.Request.Scheme = "https";
-            httpContext.Request.Host = new HostString("test.ec-cube.io");
-            _httpContextAccessor = new HttpContextAccessor { HttpContext = httpContext };
+            // TokenService は IIssuerResolver 経由で issuer を取得する。
+            // host を "test.ec-cube.io" にすることで TestIssuer ("https://test.ec-cube.io") と一致させる。
+            _issuerResolver = TestDbContextHelper.CreateIssuerResolver(host: "test.ec-cube.io");
         }
 
         [Fact]
         public async Task GenerateIdTokenAsync_ValidRequest_ShouldGenerateValidJwtToken()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -70,7 +69,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_WithoutNonce_ShouldGenerateTokenWithoutNonceClaim()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -96,7 +95,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_WithoutEmailScope_ShouldNotIncludeEmailClaims()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -122,7 +121,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_NullUser_ShouldThrowArgumentException()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, _, _) = await SetupTestDataAsync(context);
@@ -141,7 +140,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_NullClient_ShouldThrowArgumentException()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (_, user, _) = await SetupTestDataAsync(context);
@@ -160,7 +159,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_NoRsaKeyPair_ShouldThrowInvalidOperationException()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange - Create client and user without RSA key pair
             var organization = new Organization { Id = 1, Code = "TESTORG", Name = "TestOrg", TenantName = "test-tenant" };
@@ -199,7 +198,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_ValidRequest_ShouldGenerateAccessToken()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -231,7 +230,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_ShouldContainCorrectJwtClaims()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -264,7 +263,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateTokensAsync_ValidRequest_ShouldGenerateBothTokens()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -301,7 +300,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateTokenAsync_ValidToken_ShouldReturnSubject()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -325,7 +324,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateTokenAsync_InvalidToken_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, _, _) = await SetupTestDataAsync(context);
@@ -341,7 +340,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateTokenAsync_NoRsaKeyPair_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange - Create client without RSA key pair
             var organization = new Organization { Id = 1, Code = "TESTORG", Name = "TestOrg", TenantName = "test-tenant" };
@@ -399,7 +398,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_ValidToken_ShouldReturnSubject()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -424,7 +423,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_InvalidToken_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Act
             var subject = await service.ValidateAccessTokenAsync("invalid-token");
@@ -437,7 +436,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_ExpiredToken_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -503,7 +502,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_RevokedJwt_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -532,7 +531,7 @@ namespace IdentityProvider.Test.Services
         public async Task RevokeAccessTokenAsync_ValidToken_ShouldRevokeSuccessfully()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
@@ -567,7 +566,7 @@ namespace IdentityProvider.Test.Services
         public async Task RevokeAccessTokenAsync_InvalidToken_ShouldReturnFalse()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Act
             var result = await service.RevokeAccessTokenAsync("invalid-token");
@@ -580,7 +579,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_DifferentClientKey_ShouldReturnInvalid()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange - Client A のデータを作成
             var (clientA, user, rsaKeyPairA) = await SetupTestDataAsync(context);
@@ -651,7 +650,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_WrongIssuer_ShouldReturnInvalid()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -716,7 +715,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_MissingJtiClaim_ShouldReturnInvalid()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -770,7 +769,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_ShouldSaveTokenToDatabase()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _httpContextAccessor);
+            var service = new TokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);

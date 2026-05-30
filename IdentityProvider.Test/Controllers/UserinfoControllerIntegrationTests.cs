@@ -34,12 +34,9 @@ namespace IdentityProvider.Test.Controllers
             var mockLogger = new Mock<ILogger<TokenService>>();
             var mockUserLogger = new Mock<ILogger<UserService>>();
 
-            var httpContext = new DefaultHttpContext();
-            httpContext.Request.Scheme = "https";
-            httpContext.Request.Host = new HostString("test.ec-cube.io");
-            var httpContextAccessor = new HttpContextAccessor { HttpContext = httpContext };
+            var issuerResolver = TestDbContextHelper.CreateIssuerResolver(host: "test.ec-cube.io");
 
-            _tokenService = new TokenService(_context, mockLogger.Object, httpContextAccessor);
+            _tokenService = new TokenService(_context, mockLogger.Object, issuerResolver);
             _userService = new UserService(_context, mockUserLogger.Object);
             _mockB2BUserService = new Mock<IB2BUserService>();
 
