@@ -247,19 +247,28 @@ jobs:
       - name: Health check
         env:
           HEALTH_CHECK_URL: https://ecauth-staging-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net/healthz
+          # /healthz は新旧両方のコードに存在するため、デプロイ伝播中は旧リビジョンでも 200 を返す。
+          # 新コードが live になったことを保証するため、新設エンドポイント Discovery の 200 も合わせて待つ。
+          DISCOVERY_URL: https://ecauth-staging-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net/.well-known/openid-configuration
+          # /healthz は CanConnectAsync の軽量チェックのみで実 DB クエリ経路を温めない。
+          # JWKS は実際に DB を引くため、ここで 200 を待つことで verify 実行前に DB を
+          # ウォームアップし、コールド DB によるオリジンタイムアウト(Cloudflare 524)を防ぐ。
+          JWKS_URL: https://ecauth-staging-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net/.well-known/jwks.json
         run: |
           echo "Waiting for deployment to complete..."
           sleep 30
           for i in {1..10}; do
-            response=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" || echo "000")
-            if [ "$response" = "200" ]; then
-              echo "Health check passed!"
+            health=$(curl -s -m 30 -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" || echo "000")
+            discovery=$(curl -s -m 30 -o /dev/null -w "%{http_code}" "$DISCOVERY_URL" || echo "000")
+            jwks=$(curl -s -m 30 -o /dev/null -w "%{http_code}" "$JWKS_URL" || echo "000")
+            if [ "$health" = "200" ] && [ "$discovery" = "200" ] && [ "$jwks" = "200" ]; then
+              echo "Health check passed! (healthz=200, discovery=200, jwks=200)"
               exit 0
             fi
-            echo "Attempt $i: Health check returned $response, retrying in 30 seconds..."
+            echo "Attempt $i: healthz=$health discovery=$discovery jwks=$jwks, retrying in 30 seconds..."
             sleep 30
           done
-          echo "Health check failed after 10 attempts"
+          echo "Health check failed after 10 attempts (last: healthz=$health discovery=$discovery jwks=$jwks)"
           exit 1
 
   verify:
