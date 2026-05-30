@@ -247,19 +247,23 @@ jobs:
       - name: Health check
         env:
           HEALTH_CHECK_URL: https://ecauth-staging-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net/healthz
+          # /healthz は新旧両方のコードに存在するため、デプロイ伝播中は旧リビジョンでも 200 を返す。
+          # 新コードが live になったことを保証するため、新設エンドポイント Discovery の 200 も合わせて待つ。
+          DISCOVERY_URL: https://ecauth-staging-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net/.well-known/openid-configuration
         run: |
           echo "Waiting for deployment to complete..."
           sleep 30
           for i in {1..10}; do
-            response=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" || echo "000")
-            if [ "$response" = "200" ]; then
-              echo "Health check passed!"
+            health=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_CHECK_URL" || echo "000")
+            discovery=$(curl -s -o /dev/null -w "%{http_code}" "$DISCOVERY_URL" || echo "000")
+            if [ "$health" = "200" ] && [ "$discovery" = "200" ]; then
+              echo "Health check passed! (healthz=200, discovery=200)"
               exit 0
             fi
-            echo "Attempt $i: Health check returned $response, retrying in 30 seconds..."
+            echo "Attempt $i: healthz=$health discovery=$discovery, retrying in 30 seconds..."
             sleep 30
           done
-          echo "Health check failed after 10 attempts"
+          echo "Health check failed after 10 attempts (last: healthz=$health discovery=$discovery)"
           exit 1
 
   verify:
