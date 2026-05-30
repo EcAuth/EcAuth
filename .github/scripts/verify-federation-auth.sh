@@ -81,6 +81,53 @@ main() {
   write_summary "| ステップ | 結果 |"
   write_summary "|----------|------|"
 
+  # Step 0: OIDC Discovery / JWKS エンドポイント
+  # 以前は当該エンドポイントを 200|404 のいずれでも合格とみなしていたが、
+  # 実装後は 200 を厳格に要求する（EcAuthDocs#83）。
+  log_step "Step 0: OIDC Discovery / JWKS エンドポイント"
+
+  DISCOVERY_URL="${ECAUTH_BASE_URL}/.well-known/openid-configuration"
+  DISCOVERY_STATUS=$(curl -s -o /tmp/discovery.json -w "%{http_code}" "$DISCOVERY_URL" 2>/dev/null || echo "000")
+  if [ "$DISCOVERY_STATUS" != "200" ]; then
+    log_error "Discovery endpoint did not return 200 (got: $DISCOVERY_STATUS)"
+    write_summary "| OIDC Discovery | ❌ HTTP $DISCOVERY_STATUS |"
+    write_output "result" "failure"
+    write_output "failed_step" "discovery_endpoint"
+    exit 1
+  fi
+
+  ISSUER=$(jq -r '.issuer // empty' /tmp/discovery.json)
+  JWKS_URI=$(jq -r '.jwks_uri // empty' /tmp/discovery.json)
+  if [ -z "$ISSUER" ] || [ -z "$JWKS_URI" ]; then
+    log_error "Discovery metadata is missing issuer or jwks_uri"
+    write_summary "| OIDC Discovery | ❌ Missing issuer/jwks_uri |"
+    write_output "result" "failure"
+    write_output "failed_step" "discovery_metadata"
+    exit 1
+  fi
+  log_info "Discovery OK (issuer=$ISSUER)"
+  write_summary "| OIDC Discovery | ✅ |"
+
+  # jwks_uri を辿って JWKS が 200 で公開鍵を返すことを確認
+  JWKS_STATUS=$(curl -s -o /tmp/jwks.json -w "%{http_code}" "$JWKS_URI" 2>/dev/null || echo "000")
+  if [ "$JWKS_STATUS" != "200" ]; then
+    log_error "JWKS endpoint did not return 200 (got: $JWKS_STATUS)"
+    write_summary "| JWKS | ❌ HTTP $JWKS_STATUS |"
+    write_output "result" "failure"
+    write_output "failed_step" "jwks_endpoint"
+    exit 1
+  fi
+  JWKS_KEY_COUNT=$(jq '.keys | length' /tmp/jwks.json 2>/dev/null || echo "0")
+  if [ "$JWKS_KEY_COUNT" -lt 1 ]; then
+    log_error "JWKS returned no keys"
+    write_summary "| JWKS | ❌ No keys |"
+    write_output "result" "failure"
+    write_output "failed_step" "jwks_keys"
+    exit 1
+  fi
+  log_info "JWKS OK ($JWKS_KEY_COUNT key(s))"
+  write_summary "| JWKS | ✅ |"
+
   # Step 1: EcAuth 認可エンドポイント
   log_step "Step 1: EcAuth 認可エンドポイント"
   MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/v1/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fv1%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=${MOCK_IDP_PROVIDER_NAME}&state=test123" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
