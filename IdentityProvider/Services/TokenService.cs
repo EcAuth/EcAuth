@@ -12,13 +12,13 @@ namespace IdentityProvider.Services
     {
         private readonly EcAuthDbContext _context;
         private readonly ILogger<TokenService> _logger;
-        private readonly IHttpContextAccessor _httpContextAccessor;
+        private readonly IIssuerResolver _issuerResolver;
 
-        public TokenService(EcAuthDbContext context, ILogger<TokenService> logger, IHttpContextAccessor httpContextAccessor)
+        public TokenService(EcAuthDbContext context, ILogger<TokenService> logger, IIssuerResolver issuerResolver)
         {
             _context = context;
             _logger = logger;
-            _httpContextAccessor = httpContextAccessor;
+            _issuerResolver = issuerResolver;
         }
 
         public async Task<ITokenService.TokenResponse> GenerateTokensAsync(ITokenService.TokenRequest request)
@@ -297,16 +297,9 @@ namespace IdentityProvider.Services
             }
         }
 
-        private string GetIssuer()
-        {
-            var request = _httpContextAccessor.HttpContext?.Request;
-            if (request != null)
-            {
-                return $"{request.Scheme}://{request.Host}";
-            }
-
-            throw new InvalidOperationException("HttpContext is not available. Cannot determine issuer.");
-        }
+        // issuer 値は IIssuerResolver に単一ソース化した。
+        // 既存トークンとの後方互換のため出力（{Scheme}://{Host}）は不変。
+        private string GetIssuer() => _issuerResolver.GetIssuer();
 
         public async Task<string?> ValidateAccessTokenAsync(string token)
         {
