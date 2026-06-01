@@ -44,6 +44,7 @@ E2E_BASE_URL=https://localhost:8081 dotnet test E2ETests.Selenium/E2ETests.Selen
 ## CI
 
 [`.github/workflows/selenium.yml`](../.github/workflows/selenium.yml) が、SQL Server 起動 →
-.NET ビルド → DB マイグレーション → IdP 起動 → `nanasess/setup-chromedriver@v3` で ChromeDriver
+.NET ビルド → DB マイグレーション → IdP 起動 → `nanasess/setup-chromedriver` で ChromeDriver
 導入 → `dotnet test` の順で実行します。Playwright ワークフロー（`playwright.yml`）とは独立した
-ジョブです。
+ジョブです。サプライチェーン強化のため action は full commit SHA でピン留めし、末尾コメントに
+バージョン（`# v3.0.0`）を残しています。
