@@ -1,5 +1,6 @@
 using IdentityProvider.Models;
 using IdentityProvider.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 
@@ -7,6 +8,20 @@ namespace IdentityProvider.Test.TestHelpers
 {
     public static class TestDbContextHelper
     {
+        /// <summary>
+        /// 指定した scheme / host を返す IIssuerResolver を生成するテストヘルパー。
+        /// TokenService は IIssuerResolver 経由で issuer（"{scheme}://{host}"）を取得するため、
+        /// 既存テストの "https://test.ec-cube.io" 期待値を維持したまま注入できるようにする。
+        /// </summary>
+        public static IIssuerResolver CreateIssuerResolver(string scheme = "https", string host = "test.ec-cube.io")
+        {
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Scheme = scheme;
+            httpContext.Request.Host = new HostString(host);
+            var httpContextAccessor = new HttpContextAccessor { HttpContext = httpContext };
+            return new IssuerResolver(httpContextAccessor);
+        }
+
         public static EcAuthDbContext CreateInMemoryContext(string? databaseName = null, ITenantService? tenantService = null)
         {
             var dbName = databaseName ?? Guid.NewGuid().ToString();
