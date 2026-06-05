@@ -175,7 +175,9 @@ jobs:
       # PATH に通す。E2ETests.Selenium の ChromeDriverFixture は PATH 上の chromedriver を
       # 明示的に解決して使う（Selenium Manager の自動 DL には頼らない）。
       - name: Setup ChromeDriver
-        # main ブランチの最新ダイジェストに SHA ピンする（Renovate が # main を追従して digest を更新）。
+        # SHA ピン + `# main` コメントで main ブランチに追従する。既存の
+        # .github/dependabot.yml（github-actions）が # main を解釈し、SHA を main の
+        # HEAD へ自動更新する（EC-CUBE/ec-cube#6729 と同じ運用）。
         uses: nanasess/setup-chromedriver@5882f7a62ec779a2601e8c1dd2bddcc361126dd1 # main
 
       - name: Show Chrome / ChromeDriver versions

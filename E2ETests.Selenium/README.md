@@ -47,6 +47,7 @@ E2E_BASE_URL=https://localhost:8081 dotnet test E2ETests.Selenium/E2ETests.Selen
 .NET ビルド → DB マイグレーション → IdP 起動 → `nanasess/setup-chromedriver` で ChromeDriver
 導入 → `dotnet test` の順で実行します。Playwright ワークフロー（`playwright.yml`）とは独立した
 ジョブです。`nanasess/setup-chromedriver` は full commit SHA でピン留めしつつ、末尾コメント
-`# main` で action の `main` ブランチに追従させます（最新ダイジェストへの更新は `renovate.json`
-の `pinDigests` で Renovate が自動化）。これにより、リリース前の action 最新版を EcAuth の
+`# main` で action の `main` ブランチに追従させます。SHA の更新は既存の `.github/dependabot.yml`
+（`github-actions` エコシステム）が担い、`# main` を解釈して main の HEAD へ自動追従します
+（EC-CUBE/ec-cube#6729 と同じ運用）。これにより、リリース前の action 最新版を EcAuth の
 Selenium CI で継続的にドッグフーディングしながら、実行時は SHA 固定で再現性を担保できます。
