@@ -2,7 +2,8 @@ name: Selenium Smoke Tests - IdentityProvider
 
 # Playwright E2E（playwright.yml）とは別に、実ブラウザ（Chrome + ChromeDriver）で
 # 動かす軽量な smoke テストを実行する。ChromeDriver のセットアップには自作の
-# nanasess/setup-chromedriver@v3 を使用し、テスト本体は C#（Selenium.WebDriver /
+# nanasess/setup-chromedriver を使用する（main ブランチに追従する SHA ピン。詳細は
+# 下の Setup ChromeDriver step を参照）。テスト本体は C#（Selenium.WebDriver /
 # xUnit）の E2ETests.Selenium プロジェクトで管理する。
 
 on:
@@ -174,7 +175,8 @@ jobs:
       # PATH に通す。E2ETests.Selenium の ChromeDriverFixture は PATH 上の chromedriver を
       # 明示的に解決して使う（Selenium Manager の自動 DL には頼らない）。
       - name: Setup ChromeDriver
-        uses: nanasess/setup-chromedriver@e913548694400f275b4070efcd90f47dbbc8914c # v3.0.0
+        # main ブランチの最新ダイジェストに SHA ピンする（Renovate が # main を追従して digest を更新）。
+        uses: nanasess/setup-chromedriver@5882f7a62ec779a2601e8c1dd2bddcc361126dd1 # main
 
       - name: Show Chrome / ChromeDriver versions
         run: |
