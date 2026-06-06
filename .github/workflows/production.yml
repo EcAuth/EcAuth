@@ -71,6 +71,18 @@ jobs:
           PROD_B2B_USER_EXTERNAL_ID: op://EcAuth/ecauth-prod-app/b2b_user_external_id
           PROD_B2B_REDIRECT_URI: op://EcAuth/ecauth-prod-app/b2b_redirect_uri
           PROD_B2B_ALLOWED_RP_IDS: op://EcAuth/ecauth-prod-app/b2b_allowed_rp_ids
+          # Account management settings (accounts / stg-accounts Org)
+          # 実際のランタイム注入は Terraform app_settings (Phase E)。ここは CI 配線。
+          ACCOUNTS_CLIENT_ID: op://EcAuth/ecauth-prod-app/accounts_client_id
+          ACCOUNTS_CLIENT_SECRET: op://EcAuth/ecauth-prod-app/accounts_client_secret
+          ACCOUNTS_ALLOWED_RP_IDS: op://EcAuth/ecauth-prod-app/accounts_allowed_rp_ids
+          ACCOUNTS_REDIRECT_URI: op://EcAuth/ecauth-prod-app/accounts_redirect_uri
+          STG_ACCOUNTS_CLIENT_ID: op://EcAuth/ecauth-prod-app/stg_accounts_client_id
+          STG_ACCOUNTS_CLIENT_SECRET: op://EcAuth/ecauth-prod-app/stg_accounts_client_secret
+          STG_ACCOUNTS_ALLOWED_RP_IDS: op://EcAuth/ecauth-prod-app/stg_accounts_allowed_rp_ids
+          STG_ACCOUNTS_REDIRECT_URI: op://EcAuth/ecauth-prod-app/stg_accounts_redirect_uri
+          # Email delivery (signup / magic-link, Phase D)
+          SENDGRID_API_KEY: op://EcAuth/ecauth-prod-app/sendgrid_api_key
           # Staging variables (required for idempotent script generation of staging migration)
           STAGING_ORGANIZATION_CODE: op://EcAuth/ecauth-staging-app/organization_code
           STAGING_ORGANIZATION_NAME: op://EcAuth/ecauth-staging-app/organization_name

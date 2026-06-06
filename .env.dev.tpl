@@ -96,6 +96,25 @@ STAGING_MOCK_IDP_TOKEN_ENDPOINT=https://localhost:9091/token
 STAGING_MOCK_IDP_USERINFO_ENDPOINT=https://localhost:9091/userinfo
 
 # =============================================================================
+# Account Management Settings (ローカル開発用ダミー値)
+# =============================================================================
+# AccountsOrganizationSeeder が accounts / stg-accounts Org と管理コンソール Client を
+# 投入するために参照する。本番では Terraform app_settings (Phase E) から注入される。
+# Organization の code / tenant_name はサブドメイン解決と一致させるため Seeder 側で固定。
+ACCOUNTS_CLIENT_ID=ecauth-admin-console
+ACCOUNTS_CLIENT_SECRET=accounts_client_secret
+ACCOUNTS_ALLOWED_RP_IDS=localhost
+ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
+
+STG_ACCOUNTS_CLIENT_ID=ecauth-admin-console-stg
+STG_ACCOUNTS_CLIENT_SECRET=stg_accounts_client_secret
+STG_ACCOUNTS_ALLOWED_RP_IDS=localhost
+STG_ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
+
+# 申込・マジックリンクのメール送信 (Phase D で使用)。ローカルはダミー値。
+SENDGRID_API_KEY=dummy_sendgrid_api_key
+
+# =============================================================================
 # EC-CUBE 2系プラグイン Settings (ローカル開発用ダミー値)
 # =============================================================================
 ECCUBE2_CLIENT_ID=eccube2_client_id
