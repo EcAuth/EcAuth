@@ -1,8 +1,11 @@
 name: .NET Tests
 
+# Reusable workflow: main.yml から起動される。workflow_dispatch は Actions UI から
+# このスイートを単体で再実行できるように残している。push / pull_request トリガーは
+# main.yml に集約し、二重起動を避ける。
 on:
-  push:
-  pull_request:
+  workflow_call:
+  workflow_dispatch:
 
 jobs:
   build:

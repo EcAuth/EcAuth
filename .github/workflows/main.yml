@@ -1,0 +1,34 @@
+name: CI
+
+# オーケストレーター。push / pull_request トリガーはここだけに置き、各テストスイートは
+# reusable workflow（on: workflow_call）として呼び出す。これにより 1 回の CI 実行で
+# 全スイートが駆動され、各スイートが個別に push / PR イベントで多重起動するのを防ぐ。
+# （各スイートは workflow_dispatch も残しているので、Actions UI から個別に再実行できる。）
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# 最小権限: 全スイートで checkout / NuGet restore（GitHub Packages 読み取り）のみ。
+# reusable workflow 側の GITHUB_TOKEN 権限はここで定義した値が上限になる。
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  # 安価な fail-fast ゲート。ユニットテストと冪等マイグレーション検証を先に通し、
+  # 失敗すれば高コストな E2E スイート（IdP 起動を伴う playwright / selenium）を
+  # 起動せずに早期失敗させる。
+  dotnet-tests:
+    uses: ./.github/workflows/dotnet_tests.yml
+    secrets: inherit
+
+  # E2E スイート。dotnet-tests がグリーンになってから起動するが、互いには並列実行。
+  playwright:
+    needs: dotnet-tests
+    uses: ./.github/workflows/playwright.yml
+    secrets: inherit
+  selenium:
+    needs: dotnet-tests
+    uses: ./.github/workflows/selenium.yml
+    secrets: inherit
