@@ -82,7 +82,8 @@ public class AccountsOrganizationSeeder : IDbSeeder
         var redirectUri = configuration[$"{definition.ConfigPrefix}_REDIRECT_URI"];
 
         // Client ID が未設定の環境（staging 等）ではこの Org を投入しない
-        if (string.IsNullOrEmpty(clientId))
+        // 空白のみの値も未設定とみなす（誤設定による不正な Client ID 投入を防ぐ）
+        if (string.IsNullOrWhiteSpace(clientId))
         {
             logger.LogInformation(
                 "Skipped {Code} - {Prefix}_CLIENT_ID not configured",
@@ -165,7 +166,7 @@ public class AccountsOrganizationSeeder : IDbSeeder
             return (existing, false);
         }
 
-        if (string.IsNullOrEmpty(clientSecret))
+        if (string.IsNullOrWhiteSpace(clientSecret))
         {
             logger.LogWarning(
                 "Client creation skipped for {Code} - {Prefix}_CLIENT_SECRET not configured",
@@ -182,10 +183,11 @@ public class AccountsOrganizationSeeder : IDbSeeder
             SubjectType = SubjectType.Account
         };
 
-        if (!string.IsNullOrEmpty(allowedRpIds))
+        if (!string.IsNullOrWhiteSpace(allowedRpIds))
         {
             client.AllowedRpIds = allowedRpIds
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct()
                 .ToList();
         }
 
@@ -203,7 +205,7 @@ public class AccountsOrganizationSeeder : IDbSeeder
         string? redirectUri,
         ILogger logger)
     {
-        if (string.IsNullOrEmpty(redirectUri))
+        if (string.IsNullOrWhiteSpace(redirectUri))
         {
             return false;
         }
