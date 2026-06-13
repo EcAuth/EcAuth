@@ -129,6 +129,8 @@ namespace IdentityProvider.Test.Data.Seeders
             Assert.Equal(TestClientSecret, client.ClientSecret);
             Assert.Equal(TestAppName, client.AppName);
             Assert.NotNull(client.OrganizationId);
+            // EC-CUBE 管理画面用 Client は SubjectType.B2B を明示セットする
+            Assert.Equal(SubjectType.B2B, client.SubjectType);
         }
 
         [Fact]

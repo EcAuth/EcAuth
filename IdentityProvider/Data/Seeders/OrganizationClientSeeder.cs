@@ -160,7 +160,10 @@ public class OrganizationClientSeeder : IDbSeeder
             ClientId = clientId,
             ClientSecret = clientSecret,
             AppName = appName ?? clientId,
-            OrganizationId = organization.Id
+            OrganizationId = organization.Id,
+            // EC-CUBE 管理画面用の B2B パスキー Client。Client.SubjectType の
+            // デフォルトは B2C のため、ここで B2B を明示する。
+            SubjectType = SubjectType.B2B
         };
 
         context.Clients.Add(client);
