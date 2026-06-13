@@ -338,14 +338,14 @@ namespace IdentityProvider.Services
         /// </summary>
         private static Claim? BuildManagedOrgsClaim(ITokenService.TokenRequest request)
         {
-            if (request.SubjectType != SubjectType.Account || request.ManagedOrgs == null)
+            // 管理対象が無い場合は空配列を載せず、クレーム自体を省略してトークンサイズを抑える
+            if (request.SubjectType != SubjectType.Account || request.ManagedOrgs == null || request.ManagedOrgs.Count == 0)
             {
                 return null;
             }
 
             var payload = request.ManagedOrgs
-                .Select(m => new { org_id = m.OrganizationId, code = m.Code, role = m.Role })
-                .ToList();
+                .Select(m => new { org_id = m.OrganizationId, code = m.Code, role = m.Role });
 
             var json = JsonSerializer.Serialize(payload);
 

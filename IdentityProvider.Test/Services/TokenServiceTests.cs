@@ -948,6 +948,34 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
+        public async Task GenerateAccessTokenAsync_AccountSubjectType_EmptyManagedOrgs_ShouldOmitClaim()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            var service = new TokenService(context, _logger, _issuerResolver);
+
+            // Arrange - ManagedOrgs を空リストで指定（クレーム自体を省略する）
+            var (client, account, _) = await SetupAccountTestDataAsync(context);
+
+            var request = new ITokenService.TokenRequest
+            {
+                User = account,
+                Client = client,
+                RequestedScopes = new[] { "openid" },
+                SubjectType = SubjectType.Account,
+                ManagedOrgs = new List<IAccountService.ManagedOrganization>()
+            };
+
+            // Act
+            var accessToken = await service.GenerateAccessTokenAsync(request);
+
+            // Assert
+            var handler = new JwtSecurityTokenHandler();
+            var jwtToken = handler.ReadJwtToken(accessToken);
+            Assert.Equal("account", jwtToken.Claims.FirstOrDefault(c => c.Type == "sub_type")?.Value);
+            Assert.DoesNotContain(jwtToken.Claims, c => c.Type == "managed_orgs");
+        }
+
+        [Fact]
         public async Task ValidateAccessTokenWithTypeAsync_AccountToken_ShouldReturnAccountSubjectType()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
