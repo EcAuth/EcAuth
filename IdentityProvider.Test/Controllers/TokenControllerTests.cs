@@ -19,6 +19,7 @@ namespace IdentityProvider.Test.Controllers
         private readonly Mock<ITokenService> _mockTokenService;
         private readonly Mock<IUserService> _mockUserService;
         private readonly Mock<IB2BUserService> _mockB2BUserService;
+        private readonly Mock<IAccountService> _mockAccountService;
         private readonly Mock<ILogger<TokenController>> _mockLogger;
         private readonly Mock<IConfiguration> _mockConfiguration;
         private readonly TokenController _controller;
@@ -30,6 +31,7 @@ namespace IdentityProvider.Test.Controllers
             _mockTokenService = new Mock<ITokenService>();
             _mockUserService = new Mock<IUserService>();
             _mockB2BUserService = new Mock<IB2BUserService>();
+            _mockAccountService = new Mock<IAccountService>();
             _mockLogger = new Mock<ILogger<TokenController>>();
             _mockConfiguration = new Mock<IConfiguration>();
 
@@ -39,6 +41,7 @@ namespace IdentityProvider.Test.Controllers
                 _mockTokenService.Object,
                 _mockUserService.Object,
                 _mockB2BUserService.Object,
+                _mockAccountService.Object,
                 _mockLogger.Object,
                 _mockConfiguration.Object);
         }
@@ -122,6 +125,149 @@ namespace IdentityProvider.Test.Controllers
             var updatedAuthCode = await _context.AuthorizationCodes.FirstAsync(ac => ac.Code == "test-code");
             Assert.True(updatedAuthCode.IsUsed);
             Assert.NotNull(updatedAuthCode.UsedAt);
+        }
+
+        [Fact]
+        public async Task Token_AccountAuthorizationCode_ReturnsTokensWithManagedOrgs()
+        {
+            // Arrange
+            var organization = new Organization
+            {
+                Id = 1,
+                Code = "accounts",
+                Name = "EcAuth Accounts",
+                TenantName = "test-tenant",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            _context.Organizations.Add(organization);
+
+            var client = new Client
+            {
+                Id = 1,
+                ClientId = "ecauth-admin-console",
+                ClientSecret = "account-secret",
+                AppName = "EcAuth Admin Console",
+                OrganizationId = 1,
+                SubjectType = SubjectType.Account
+            };
+            _context.Clients.Add(client);
+
+            var authCode = new AuthorizationCode
+            {
+                Code = "account-code",
+                Subject = "account-subject",
+                SubjectType = SubjectType.Account,
+                ClientId = 1,
+                RedirectUri = "https://accounts.ec-auth.io/callback",
+                Scope = "openid b2b",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+                IsUsed = false
+            };
+            _context.AuthorizationCodes.Add(authCode);
+            await _context.SaveChangesAsync();
+
+            var account = new Account
+            {
+                Id = 1,
+                Subject = "account-subject",
+                Email = "owner@example.com",
+                OrganizationId = 1
+            };
+            var managedOrgs = new List<IAccountService.ManagedOrganization>
+            {
+                new(123, "customer-shop", "owner")
+            };
+
+            _mockAccountService.Setup(x => x.GetBySubjectAsync("account-subject"))
+                .ReturnsAsync(account);
+            _mockAccountService.Setup(x => x.GetManagedOrganizationsAsync("account-subject"))
+                .ReturnsAsync(managedOrgs);
+
+            ITokenService.TokenRequest? capturedRequest = null;
+            _mockTokenService.Setup(x => x.GenerateTokensAsync(It.IsAny<ITokenService.TokenRequest>()))
+                .Callback<ITokenService.TokenRequest>(r => capturedRequest = r)
+                .ReturnsAsync(new ITokenService.TokenResponse
+                {
+                    AccessToken = "access-token",
+                    IdToken = "id-token",
+                    ExpiresIn = 3600,
+                    TokenType = "Bearer"
+                });
+
+            // Act
+            var result = await _controller.Token(
+                "authorization_code",
+                "account-code",
+                "https://accounts.ec-auth.io/callback",
+                "ecauth-admin-console",
+                "account-secret");
+
+            // Assert
+            Assert.IsType<OkObjectResult>(result);
+            Assert.NotNull(capturedRequest);
+            Assert.Equal(SubjectType.Account, capturedRequest!.SubjectType);
+            Assert.Same(account, capturedRequest.User);
+            Assert.NotNull(capturedRequest.ManagedOrgs);
+            Assert.Single(capturedRequest.ManagedOrgs!);
+
+            var updatedAuthCode = await _context.AuthorizationCodes.FirstAsync(ac => ac.Code == "account-code");
+            Assert.True(updatedAuthCode.IsUsed);
+        }
+
+        [Fact]
+        public async Task Token_AccountNotFound_ReturnsBadRequest()
+        {
+            // Arrange
+            var organization = new Organization
+            {
+                Id = 1,
+                Code = "accounts",
+                Name = "EcAuth Accounts",
+                TenantName = "test-tenant",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            _context.Organizations.Add(organization);
+
+            var client = new Client
+            {
+                Id = 1,
+                ClientId = "ecauth-admin-console",
+                ClientSecret = "account-secret",
+                AppName = "EcAuth Admin Console",
+                OrganizationId = 1,
+                SubjectType = SubjectType.Account
+            };
+            _context.Clients.Add(client);
+
+            var authCode = new AuthorizationCode
+            {
+                Code = "account-code",
+                Subject = "missing-account-subject",
+                SubjectType = SubjectType.Account,
+                ClientId = 1,
+                RedirectUri = "https://accounts.ec-auth.io/callback",
+                Scope = "openid b2b",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+                IsUsed = false
+            };
+            _context.AuthorizationCodes.Add(authCode);
+            await _context.SaveChangesAsync();
+
+            _mockAccountService.Setup(x => x.GetBySubjectAsync("missing-account-subject"))
+                .ReturnsAsync((Account?)null);
+
+            // Act
+            var result = await _controller.Token(
+                "authorization_code",
+                "account-code",
+                "https://accounts.ec-auth.io/callback",
+                "ecauth-admin-console",
+                "account-secret");
+
+            // Assert
+            Assert.IsType<BadRequestObjectResult>(result);
         }
 
         [Fact]

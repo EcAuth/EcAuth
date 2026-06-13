@@ -145,7 +145,24 @@ public class OrganizationClientSeeder : IDbSeeder
 
         if (existing != null)
         {
-            logger.LogInformation("Client {ClientId} already exists, skipping", clientId);
+            // SubjectType 列の追加（Phase A）より前に作成された既存 Client は
+            // default の B2C のまま残っている。本 Seeder が管理する Client は
+            // EC-CUBE 管理画面用の B2B パスキー Client のため、B2C のまま残っていれば
+            // B2B へ補正する。既に B2B/Account のものは触らない（冪等）。
+            // フェデレーション（外部 IdP）フローは AuthorizationCallbackController が
+            // 認可コードを B2C 固定で発行するため、本補正の影響を受けない。
+            if (existing.SubjectType == SubjectType.B2C)
+            {
+                existing.SubjectType = SubjectType.B2B;
+                existing.UpdatedAt = DateTimeOffset.UtcNow;
+                await context.SaveChangesAsync();
+                logger.LogInformation(
+                    "Client {ClientId} の SubjectType を B2C から B2B へ補正しました", clientId);
+            }
+            else
+            {
+                logger.LogInformation("Client {ClientId} already exists, skipping", clientId);
+            }
             return (existing, false);
         }
 

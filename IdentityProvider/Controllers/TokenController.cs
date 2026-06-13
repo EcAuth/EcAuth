@@ -20,6 +20,7 @@ namespace IdentityProvider.Controllers
         private readonly ITokenService _tokenService;
         private readonly IUserService _userService;
         private readonly IB2BUserService _b2bUserService;
+        private readonly IAccountService _accountService;
         private readonly ILogger<TokenController> _logger;
         private readonly IConfiguration _configuration;
 
@@ -29,6 +30,7 @@ namespace IdentityProvider.Controllers
             ITokenService tokenService,
             IUserService userService,
             IB2BUserService b2bUserService,
+            IAccountService accountService,
             ILogger<TokenController> logger,
             IConfiguration configuration)
         {
@@ -37,6 +39,7 @@ namespace IdentityProvider.Controllers
             _tokenService = tokenService;
             _userService = userService;
             _b2bUserService = b2bUserService;
+            _accountService = accountService;
             _logger = logger;
             _configuration = configuration;
         }
@@ -309,9 +312,41 @@ namespace IdentityProvider.Controllers
                     _logger.LogInformation("Token request created for user: {Subject}, client: {ClientId}, scopes: {Scopes}",
                         user.Subject, client.ClientId, string.Join(", ", scopes ?? new[] { "none" }));
                 }
+                else if (subjectType == SubjectType.Account)
+                {
+                    // Account認証の場合: Account を取得し、管理対象 Organization を managed_orgs に含める
+                    Account? account;
+                    using (TimingScope.Begin("user_lookup"))
+                    {
+                        account = await _accountService.GetBySubjectAsync(subject);
+                    }
+                    if (account == null)
+                    {
+                        _logger.LogError("Account not found for subject: {Subject}", subject);
+                        return BadRequest(new
+                        {
+                            error = "invalid_grant",
+                            error_description = "Accountが見つかりません。"
+                        });
+                    }
+
+                    var managedOrgs = await _accountService.GetManagedOrganizationsAsync(subject);
+
+                    tokenRequest = new ITokenService.TokenRequest
+                    {
+                        User = account,
+                        Client = client,
+                        RequestedScopes = scopes,
+                        SubjectType = SubjectType.Account,
+                        ManagedOrgs = managedOrgs
+                    };
+
+                    _logger.LogInformation("Token request created for account: {Subject}, client: {ClientId}, managedOrgs: {Count}, scopes: {Scopes}",
+                        account.Subject, client.ClientId, managedOrgs.Count, string.Join(", ", scopes ?? new[] { "none" }));
+                }
                 else
                 {
-                    // Account等のサポートされていないSubjectType
+                    // サポートされていないSubjectType
                     _logger.LogError("Unsupported SubjectType: {SubjectType}", subjectType);
                     return BadRequest(new
                     {

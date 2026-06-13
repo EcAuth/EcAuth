@@ -507,7 +507,9 @@ namespace IdentityProvider.Controllers
                     State = request.State,
                     Scope = "openid b2b",
                     ExpirationMinutes = 10,
-                    IsB2B = true  // B2B認証フラグ
+                    // Client の SubjectType を反映（B2B 管理画面 = B2B、Account 管理コンソール = Account）。
+                    // 認証機構（パスキー）は共通のため、認可コードの種別は Client 定義に従う。
+                    SubjectType = client.SubjectType
                 };
 
                 var authCode = await _authorizationCodeService.GenerateAuthorizationCodeAsync(authCodeRequest);

@@ -5,6 +5,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace IdentityProvider.Services
 {
@@ -43,10 +44,10 @@ namespace IdentityProvider.Services
             if (request.User == null)
                 throw new ArgumentException("User cannot be null.", nameof(request.User));
 
-            if (request.SubjectType != SubjectType.B2C && request.SubjectType != SubjectType.B2B)
+            if (!IsSupportedSubjectType(request.SubjectType))
                 throw new ArgumentException($"Unsupported SubjectType: {request.SubjectType}", nameof(request.SubjectType));
 
-            // ISubjectProvider から Subject を取得（B2C/B2B 共通）
+            // ISubjectProvider から Subject を取得（B2C/B2B/Account 共通）
             var subject = request.User.Subject;
             if (string.IsNullOrWhiteSpace(subject))
                 throw new ArgumentException("Subject cannot be null or empty.", nameof(request.User));
@@ -99,6 +100,13 @@ namespace IdentityProvider.Services
                     claims.Add(new Claim(JwtRegisteredClaimNames.Nonce, request.Nonce));
                 }
 
+                // Account の場合、管理対象 Organization 一覧を managed_orgs クレームとして付与
+                var idManagedOrgsClaim = BuildManagedOrgsClaim(request);
+                if (idManagedOrgsClaim != null)
+                {
+                    claims.Add(idManagedOrgsClaim);
+                }
+
                 // 追加のクレーム（スコープに基づいて）
                 if (request.RequestedScopes?.Contains("email") == true)
                 {
@@ -133,10 +141,10 @@ namespace IdentityProvider.Services
             if (request.User == null)
                 throw new ArgumentException("User cannot be null.", nameof(request.User));
 
-            if (request.SubjectType != SubjectType.B2C && request.SubjectType != SubjectType.B2B)
+            if (!IsSupportedSubjectType(request.SubjectType))
                 throw new ArgumentException($"Unsupported SubjectType: {request.SubjectType}", nameof(request.SubjectType));
 
-            // ISubjectProvider から Subject を取得（B2C/B2B 共通）
+            // ISubjectProvider から Subject を取得（B2C/B2B/Account 共通）
             var subject = request.User.Subject;
             if (string.IsNullOrWhiteSpace(subject))
                 throw new ArgumentException("Subject cannot be null or empty.", nameof(request.User));
@@ -173,7 +181,7 @@ namespace IdentityProvider.Services
                 if (request.Client.OrganizationId is null)
                     throw new InvalidOperationException($"OrganizationId is required for client {request.Client.Id}");
 
-                var subjectTypeString = request.SubjectType == SubjectType.B2B ? "b2b" : "b2c";
+                var subjectTypeString = ToSubTypeString(request.SubjectType);
 
                 var claims = new List<Claim>
                 {
@@ -190,6 +198,13 @@ namespace IdentityProvider.Services
                 if (!string.IsNullOrEmpty(scopes))
                 {
                     claims.Add(new Claim("scope", scopes));
+                }
+
+                // Account の場合、管理対象 Organization 一覧を managed_orgs クレームとして付与
+                var accessManagedOrgsClaim = BuildManagedOrgsClaim(request);
+                if (accessManagedOrgsClaim != null)
+                {
+                    claims.Add(accessManagedOrgsClaim);
                 }
 
                 var tokenDescriptor = new SecurityTokenDescriptor
@@ -300,6 +315,44 @@ namespace IdentityProvider.Services
         // issuer 値は IIssuerResolver に単一ソース化した。
         // 既存トークンとの後方互換のため出力（{Scheme}://{Host}）は不変。
         private string GetIssuer() => _issuerResolver.GetIssuer();
+
+        /// <summary>
+        /// トークン発行を許可する SubjectType か判定する（B2C / B2B / Account）。
+        /// </summary>
+        private static bool IsSupportedSubjectType(SubjectType subjectType)
+            => subjectType is SubjectType.B2C or SubjectType.B2B or SubjectType.Account;
+
+        /// <summary>
+        /// SubjectType を sub_type クレーム文字列に変換する。
+        /// </summary>
+        private static string ToSubTypeString(SubjectType subjectType) => subjectType switch
+        {
+            SubjectType.B2B => "b2b",
+            SubjectType.Account => "account",
+            _ => "b2c"
+        };
+
+        /// <summary>
+        /// Account の管理対象 Organization を managed_orgs クレーム（JSON 配列）として組み立てる。
+        /// Account 以外、または管理対象が指定されていない場合は null を返す。
+        /// </summary>
+        private static Claim? BuildManagedOrgsClaim(ITokenService.TokenRequest request)
+        {
+            // 管理対象が無い場合は空配列を載せず、クレーム自体を省略してトークンサイズを抑える
+            if (request.SubjectType != SubjectType.Account || request.ManagedOrgs == null || request.ManagedOrgs.Count == 0)
+            {
+                return null;
+            }
+
+            var payload = request.ManagedOrgs
+                .Select(m => new { org_id = m.OrganizationId, code = m.Code, role = m.Role });
+
+            var json = JsonSerializer.Serialize(payload);
+
+            // JsonClaimValueTypes.JsonArray を指定することで、JWT に文字列ではなく
+            // JSON 配列としてシリアライズされる。
+            return new Claim("managed_orgs", json, JsonClaimValueTypes.JsonArray);
+        }
 
         public async Task<string?> ValidateAccessTokenAsync(string token)
         {
@@ -435,13 +488,18 @@ namespace IdentityProvider.Services
                     return new ITokenService.AccessTokenValidationResult { IsValid = false };
                 }
 
-                if (subTypeClaim != "b2b" && subTypeClaim != "b2c")
+                if (subTypeClaim != "b2b" && subTypeClaim != "b2c" && subTypeClaim != "account")
                 {
                     _logger.LogWarning("Access token has invalid sub_type: {SubType}", subTypeClaim);
                     return new ITokenService.AccessTokenValidationResult { IsValid = false };
                 }
 
-                SubjectType subjectType = subTypeClaim == "b2b" ? SubjectType.B2B : SubjectType.B2C;
+                SubjectType subjectType = subTypeClaim switch
+                {
+                    "b2b" => SubjectType.B2B,
+                    "account" => SubjectType.Account,
+                    _ => SubjectType.B2C
+                };
 
                 _logger.LogDebug("Access token validated successfully for subject {Subject} (type: {SubjectType})",
                     subject, subjectType);

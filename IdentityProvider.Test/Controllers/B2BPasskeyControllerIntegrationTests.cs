@@ -123,6 +123,9 @@ namespace IdentityProvider.Test.Controllers
                 ClientSecret = "test-client-secret",
                 AppName = "テストクライアント",
                 OrganizationId = 1,
+                // EC-CUBE 管理画面用の B2B パスキー Client。認可コードの SubjectType は
+                // B2BPasskeyController が client.SubjectType を参照して決定する。
+                SubjectType = SubjectType.B2B,
                 AllowedRpIds = new List<string> { "shop.example.com", "admin.example.com" },
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow
@@ -650,10 +653,10 @@ namespace IdentityProvider.Test.Controllers
         }
 
         /// <summary>
-        /// 認可コードの Subject と SubjectType が IsB2B フラグによって正しく設定されることを確認
+        /// 認可コードの Subject と SubjectType が SubjectType 指定によって正しく設定されることを確認
         /// </summary>
         [Fact]
-        public async Task IntegrationTest_AuthorizationCode_SubjectTypeSetBasedOnIsB2BFlag()
+        public async Task IntegrationTest_AuthorizationCode_SubjectTypeSetBasedOnSubjectType()
         {
             // Arrange
             var testUser = await CreateTestB2BUserAsync("550e8400-e29b-41d4-a716-446655440009", "authcode-subjecttype@example.com");
@@ -667,7 +670,7 @@ namespace IdentityProvider.Test.Controllers
                 Scope = "openid profile",
                 State = "test-state",
                 ExpirationMinutes = 10,
-                IsB2B = true  // B2B認証フラグ
+                SubjectType = SubjectType.B2B
             };
 
             // Act

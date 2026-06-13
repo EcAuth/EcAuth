@@ -80,8 +80,8 @@ namespace IdentityProvider.Services
                 }
             } while (await CodeExistsAsync(code));
 
-            // SubjectType を決定（IsB2B フラグから推測）
-            var subjectType = request.IsB2B ? Models.SubjectType.B2B : Models.SubjectType.B2C;
+            // SubjectType はリクエストで指定された種別をそのまま記録する
+            var subjectType = request.SubjectType;
 
             // 認可コードエンティティ作成
             var authorizationCode = new AuthorizationCode

@@ -24,6 +24,13 @@ namespace IdentityProvider.Services
             /// 指定しない場合はB2C（デフォルト）として扱う
             /// </summary>
             public SubjectType SubjectType { get; set; } = SubjectType.B2C;
+
+            /// <summary>
+            /// Account（<see cref="SubjectType.Account"/>）が管理する Organization 一覧。
+            /// 指定された場合、ID/Access トークンに <c>managed_orgs</c> クレームとして付与する。
+            /// Account 以外の SubjectType では使用しない。
+            /// </summary>
+            public IReadOnlyList<IAccountService.ManagedOrganization>? ManagedOrgs { get; set; }
         }
 
         /// <summary>
