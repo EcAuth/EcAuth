@@ -799,5 +799,182 @@ namespace IdentityProvider.Test.Services
             Assert.False(savedToken.IsRevoked);
             Assert.True(savedToken.ExpiresAt > DateTime.UtcNow);
         }
+
+        // ===== Account（SubjectType.Account）対応のテスト =====
+
+        /// <summary>
+        /// Account の管理コンソール Client と Account ユーザー、管理対象 Org 2 件を用意する。
+        /// </summary>
+        private static async Task<(Client client, Account account, List<IAccountService.ManagedOrganization> managedOrgs)>
+            SetupAccountTestDataAsync(EcAuthDbContext context)
+        {
+            // MockTenantService の既定テナント（test-tenant）と一致させ、AccessToken の読み戻しが
+            // クエリフィルターに弾かれないようにする（claim 検証が本テストの主眼）。
+            var accountsOrg = new Organization { Id = 1, Code = "accounts", Name = "EcAuth Accounts", TenantName = "test-tenant" };
+            context.Organizations.Add(accountsOrg);
+
+            var client = new Client
+            {
+                Id = 1,
+                ClientId = "ecauth-admin-console",
+                ClientSecret = "account-secret",
+                AppName = "EcAuth Admin Console",
+                OrganizationId = 1,
+                SubjectType = SubjectType.Account
+            };
+            context.Clients.Add(client);
+
+            var account = new Account
+            {
+                Id = 1,
+                Subject = "550e8400-e29b-41d4-a716-446655440099",
+                Email = "owner@example.com",
+                OrganizationId = 1,
+                DisplayName = "Owner"
+            };
+            context.Accounts.Add(account);
+
+            TestDbContextHelper.GenerateAndAddRsaKeyPair(context, accountsOrg, 1);
+            await context.SaveChangesAsync();
+
+            var managedOrgs = new List<IAccountService.ManagedOrganization>
+            {
+                new(123, "customer-shop", "owner"),
+                new(124, "another-shop", "admin")
+            };
+
+            return (client, account, managedOrgs);
+        }
+
+        [Fact]
+        public async Task GenerateAccessTokenAsync_AccountSubjectType_ShouldContainAccountSubTypeAndManagedOrgs()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            var service = new TokenService(context, _logger, _issuerResolver);
+
+            // Arrange
+            var (client, account, managedOrgs) = await SetupAccountTestDataAsync(context);
+
+            var request = new ITokenService.TokenRequest
+            {
+                User = account,
+                Client = client,
+                RequestedScopes = new[] { "openid" },
+                SubjectType = SubjectType.Account,
+                ManagedOrgs = managedOrgs
+            };
+
+            // Act
+            var accessToken = await service.GenerateAccessTokenAsync(request);
+
+            // Assert
+            var handler = new JwtSecurityTokenHandler();
+            var jwtToken = handler.ReadJwtToken(accessToken);
+
+            Assert.Equal(account.Subject, jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Sub)?.Value);
+            Assert.Equal("account", jwtToken.Claims.FirstOrDefault(c => c.Type == "sub_type")?.Value);
+
+            // managed_orgs は JSON 配列のため、要素ごとに Claim へ展開される
+            var managedClaims = jwtToken.Claims.Where(c => c.Type == "managed_orgs").ToList();
+            Assert.Equal(2, managedClaims.Count);
+            var joined = string.Join(",", managedClaims.Select(c => c.Value));
+            Assert.Contains("customer-shop", joined);
+            Assert.Contains("another-shop", joined);
+            Assert.Contains("owner", joined);
+            Assert.Contains("admin", joined);
+
+            // DB の AccessToken メタデータに SubjectType.Account が記録される
+            var jti = jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Jti)?.Value;
+            var saved = await context.AccessTokens.FirstOrDefaultAsync(at => at.Token == jti);
+            Assert.NotNull(saved);
+            Assert.Equal(SubjectType.Account, saved.SubjectType);
+        }
+
+        [Fact]
+        public async Task GenerateIdTokenAsync_AccountSubjectType_ShouldContainManagedOrgs()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            var service = new TokenService(context, _logger, _issuerResolver);
+
+            // Arrange
+            var (client, account, managedOrgs) = await SetupAccountTestDataAsync(context);
+
+            var request = new ITokenService.TokenRequest
+            {
+                User = account,
+                Client = client,
+                RequestedScopes = new[] { "openid" },
+                SubjectType = SubjectType.Account,
+                ManagedOrgs = managedOrgs
+            };
+
+            // Act
+            var idToken = await service.GenerateIdTokenAsync(request);
+
+            // Assert
+            var handler = new JwtSecurityTokenHandler();
+            var jwtToken = handler.ReadJwtToken(idToken);
+
+            Assert.Equal(account.Subject, jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Sub)?.Value);
+            var managedClaims = jwtToken.Claims.Where(c => c.Type == "managed_orgs").ToList();
+            Assert.Equal(2, managedClaims.Count);
+        }
+
+        [Fact]
+        public async Task GenerateAccessTokenAsync_AccountSubjectType_WithoutManagedOrgs_ShouldOmitClaim()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            var service = new TokenService(context, _logger, _issuerResolver);
+
+            // Arrange - ManagedOrgs を指定しない
+            var (client, account, _) = await SetupAccountTestDataAsync(context);
+
+            var request = new ITokenService.TokenRequest
+            {
+                User = account,
+                Client = client,
+                RequestedScopes = new[] { "openid" },
+                SubjectType = SubjectType.Account
+            };
+
+            // Act
+            var accessToken = await service.GenerateAccessTokenAsync(request);
+
+            // Assert
+            var handler = new JwtSecurityTokenHandler();
+            var jwtToken = handler.ReadJwtToken(accessToken);
+            Assert.Equal("account", jwtToken.Claims.FirstOrDefault(c => c.Type == "sub_type")?.Value);
+            Assert.DoesNotContain(jwtToken.Claims, c => c.Type == "managed_orgs");
+        }
+
+        [Fact]
+        public async Task ValidateAccessTokenWithTypeAsync_AccountToken_ShouldReturnAccountSubjectType()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            var service = new TokenService(context, _logger, _issuerResolver);
+
+            // Arrange
+            var (client, account, managedOrgs) = await SetupAccountTestDataAsync(context);
+
+            var request = new ITokenService.TokenRequest
+            {
+                User = account,
+                Client = client,
+                RequestedScopes = new[] { "openid" },
+                SubjectType = SubjectType.Account,
+                ManagedOrgs = managedOrgs
+            };
+
+            var accessToken = await service.GenerateAccessTokenAsync(request);
+
+            // Act
+            var result = await service.ValidateAccessTokenWithTypeAsync(accessToken);
+
+            // Assert
+            Assert.True(result.IsValid);
+            Assert.Equal(account.Subject, result.Subject);
+            Assert.Equal(SubjectType.Account, result.SubjectType);
+            Assert.Equal(client.ClientId, result.ClientId);
+        }
     }
 }

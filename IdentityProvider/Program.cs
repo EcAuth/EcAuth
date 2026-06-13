@@ -17,6 +17,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IIssuerResolver, IssuerResolver>();
 builder.Services.AddScoped<ITenantService, TenantService>();
 builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<IAccountService, AccountService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IAuthorizationCodeService, AuthorizationCodeService>();
 builder.Services.AddScoped<IExternalIdpTokenService, ExternalIdpTokenService>();

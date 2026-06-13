@@ -144,7 +144,7 @@ namespace IdentityProvider.Controllers
                     Scope = stateData.Scope,
                     State = state,
                     ExpirationMinutes = 10,
-                    IsB2B = false  // B2C認証（外部IdPフェデレーション）のため明示的にfalseを設定
+                    SubjectType = SubjectType.B2C  // B2C認証（外部IdPフェデレーション）
                 };
 
                 var authorizationCode = await _authorizationCodeService.GenerateAuthorizationCodeAsync(authCodeRequest);
