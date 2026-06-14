@@ -92,12 +92,13 @@ builder.Services.AddCors(options =>
     });
 
     // Account 申込 API（/api/signup）の CORS 設定。
-    // 申込フォームを配信する accounts サイト（ec-auth.io）のみを許可する。
+    // 申込フォーム／確認ページを配信する accounts / stg-accounts サイトのみを許可する
+    // （いずれも本番 App Service 上のテナント。Signup:ConfirmBaseUrl:* と同じホスト）。
     options.AddPolicy(IdentityProvider.Controllers.SignupController.CorsPolicy, policy =>
     {
         var allowedOrigins =
             builder.Configuration.GetSection("Signup:AllowedOrigins").Get<string[]>()
-            ?? new[] { "https://ec-auth.io", "https://www.ec-auth.io" };
+            ?? new[] { "https://accounts.ec-auth.io", "https://stg-accounts.ec-auth.io" };
         policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .WithMethods("GET", "POST", "OPTIONS");
