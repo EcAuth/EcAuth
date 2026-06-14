@@ -370,6 +370,45 @@ namespace IdentityProvider.Test.Services
             Assert.NotNull(customerOrg);
         }
 
+        [Fact]
+        public async Task ConfirmAsync_IdnHost_DerivesPunycodeAsciiCode()
+        {
+            // IDN（例: 日本.jp）は IdnHost で Punycode（xn--wgv71a.jp）になり、
+            // 組織コードは ASCII 英数字のみ・非空になる（旧実装では "jp" に潰れ衝突した）。
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with { ProductionSiteUrl = "https://日本.jp" };
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
+            await service.ConfirmAsync(token);
+
+            var customerOrg = await context.Organizations
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(o => o.Code != Tenant);
+            Assert.NotNull(customerOrg);
+            Assert.NotEqual("jp", customerOrg!.Code);
+            Assert.Matches("^[a-z0-9-]+$", customerOrg.Code);
+            Assert.StartsWith("xn-", customerOrg.Code);
+        }
+
+        [Fact]
+        public async Task RequestAsync_EmailTooLong_Throws422NotDbError()
+        {
+            // Email カラムは nvarchar(255)。255 超は DB 例外（500）ではなく 422 で弾く。
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out _, out _);
+
+            var longEmail = new string('a', 250) + "@example.com"; // 262 文字
+            var input = ValidInput() with { Email = longEmail };
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
+            Assert.Equal("invalid_email", ex.Error);
+            Assert.Equal("email", ex.Field);
+            Assert.Equal(422, ex.StatusCode);
+        }
+
         // ---- ConfirmAsync 正常系 ----
 
         [Fact]

@@ -372,7 +372,8 @@ namespace IdentityProvider.Services
         {
             var email = rawEmail?.Trim().ToLowerInvariant() ?? string.Empty;
 
-            if (string.IsNullOrEmpty(email) || !IsValidEmail(email))
+            // Email カラムは nvarchar(255)。255 超は SaveChanges で 500 になるため、ここで 422 として弾く。
+            if (string.IsNullOrEmpty(email) || email.Length > 255 || !IsValidEmail(email))
             {
                 throw new SignupValidationException(
                     "invalid_email", "メールアドレスの形式が正しくありません。", field: "email");
@@ -538,7 +539,9 @@ namespace IdentityProvider.Services
                     "invalid_site_url", "サイト URL は https:// で始まる正しい URL を入力してください。", field: field);
             }
 
-            return uri.Host;
+            // IDN（国際化ドメイン）は Uri.Host だと Unicode のまま返り、組織コード導出の
+            // [^a-z0-9] 除去で空文字や衝突を招く。IdnHost（Punycode, ASCII）を使う。
+            return uri.IdnHost;
         }
 
         private static bool IsValidEmail(string email)
