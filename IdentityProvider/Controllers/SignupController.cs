@@ -32,7 +32,7 @@ namespace IdentityProvider.Controllers
         /// </summary>
         [HttpPost]
         [Route("request")]
-        public async Task<IActionResult> Request([FromBody] SignupRequestDto body, CancellationToken ct)
+        public async Task<IActionResult> RequestSignup([FromBody] SignupRequestDto? body, CancellationToken ct)
         {
             if (body == null)
             {
@@ -85,7 +85,7 @@ namespace IdentityProvider.Controllers
         /// </summary>
         [HttpPost]
         [Route("confirm")]
-        public async Task<IActionResult> Confirm([FromBody] SignupConfirmDto body, CancellationToken ct)
+        public async Task<IActionResult> Confirm([FromBody] SignupConfirmDto? body, CancellationToken ct)
         {
             try
             {

@@ -262,10 +262,11 @@ namespace IdentityProvider.Models
             modelBuilder.Entity<SignupRequest>()
                 .HasQueryFilter(sr => sr.TenantName == _tenantService.TenantName);
 
-            // ConfirmToken はグローバルにユニーク
+            // ConfirmTokenHash はグローバルにユニーク
             modelBuilder.Entity<SignupRequest>()
-                .HasIndex(sr => sr.ConfirmToken)
-                .IsUnique();
+                .HasIndex(sr => sr.ConfirmTokenHash)
+                .IsUnique()
+                .HasDatabaseName("IX_signup_request_confirm_token_hash");
 
             // 未確認の申込をテナント単位で検索するための補助インデックス
             modelBuilder.Entity<SignupRequest>()

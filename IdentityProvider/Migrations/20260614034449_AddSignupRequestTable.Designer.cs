@@ -833,11 +833,11 @@ namespace IdentityProvider.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("ConfirmToken")
+                    b.Property<string>("ConfirmTokenHash")
                         .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)")
-                        .HasColumnName("confirm_token");
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)")
+                        .HasColumnName("confirm_token_hash");
 
                     b.Property<DateTimeOffset?>("ConfirmedAt")
                         .HasColumnType("datetimeoffset")
@@ -910,8 +910,9 @@ namespace IdentityProvider.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ConfirmToken")
-                        .IsUnique();
+                    b.HasIndex("ConfirmTokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("IX_signup_request_confirm_token_hash");
 
                     b.HasIndex("TenantName", "ConfirmedAt");
 

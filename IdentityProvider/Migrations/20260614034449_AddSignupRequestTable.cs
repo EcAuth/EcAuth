@@ -17,7 +17,7 @@ namespace IdentityProvider.Migrations
                 {
                     id = table.Column<int>(type: "int", nullable: false)
                         .Annotation("SqlServer:Identity", "1, 1"),
-                    confirm_token = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: false),
+                    confirm_token_hash = table.Column<string>(type: "nvarchar(64)", maxLength: 64, nullable: false),
                     email = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: false),
                     organization_name = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
                     contact_name = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: true),
@@ -38,9 +38,9 @@ namespace IdentityProvider.Migrations
                 });
 
             migrationBuilder.CreateIndex(
-                name: "IX_signup_request_confirm_token",
+                name: "IX_signup_request_confirm_token_hash",
                 table: "signup_request",
-                column: "confirm_token",
+                column: "confirm_token_hash",
                 unique: true);
 
             migrationBuilder.CreateIndex(

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using IdentityProvider.Controllers;
 using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
@@ -21,14 +22,17 @@ namespace IdentityProvider.Test.Controllers
             _controller = new SignupController(_mockSignupService.Object, logger.Object);
         }
 
+        /// <summary>status エンドポイントのレスポンスを型安全に検証するための DTO。</summary>
+        private sealed record SignupStatusTestDto(string Status);
+
         // ---- request ----
 
         [Fact]
-        public async Task Request_ValidInput_Returns202()
+        public async Task RequestSignup_ValidInput_Returns202()
         {
             _mockSignupService
                 .Setup(x => x.RequestAsync(It.IsAny<SignupInput>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new SignupRequest { ConfirmToken = "token", Email = "owner@example.com" });
+                .ReturnsAsync(new SignupRequest { ConfirmTokenHash = "hash", Email = "owner@example.com" });
 
             var body = new SignupController.SignupRequestDto
             {
@@ -38,7 +42,7 @@ namespace IdentityProvider.Test.Controllers
                 EcCubeVersion = "4"
             };
 
-            var result = await _controller.Request(body, CancellationToken.None);
+            var result = await _controller.RequestSignup(body, CancellationToken.None);
 
             var accepted = Assert.IsType<AcceptedResult>(result);
             Assert.Equal(202, accepted.StatusCode);
@@ -50,7 +54,16 @@ namespace IdentityProvider.Test.Controllers
         }
 
         [Fact]
-        public async Task Request_ValidationException_Returns422WithErrorBody()
+        public async Task RequestSignup_NullBody_Returns422()
+        {
+            var result = await _controller.RequestSignup(null, CancellationToken.None);
+
+            var objectResult = Assert.IsAssignableFrom<ObjectResult>(result);
+            Assert.Equal(422, objectResult.StatusCode);
+        }
+
+        [Fact]
+        public async Task RequestSignup_ValidationException_Returns422WithErrorBody()
         {
             _mockSignupService
                 .Setup(x => x.RequestAsync(It.IsAny<SignupInput>(), It.IsAny<CancellationToken>()))
@@ -58,7 +71,7 @@ namespace IdentityProvider.Test.Controllers
 
             var body = new SignupController.SignupRequestDto { Email = "bad" };
 
-            var result = await _controller.Request(body, CancellationToken.None);
+            var result = await _controller.RequestSignup(body, CancellationToken.None);
 
             var objectResult = Assert.IsType<ObjectResult>(result);
             Assert.Equal(422, objectResult.StatusCode);
@@ -71,7 +84,7 @@ namespace IdentityProvider.Test.Controllers
         {
             _mockSignupService
                 .Setup(x => x.ConfirmAsync("valid-token", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new SignupRequest { ConfirmToken = "valid-token", Email = "owner@example.com" });
+                .ReturnsAsync(new SignupRequest { ConfirmTokenHash = "hash", Email = "owner@example.com" });
 
             var body = new SignupController.SignupConfirmDto { Token = "valid-token" };
 
@@ -79,6 +92,19 @@ namespace IdentityProvider.Test.Controllers
 
             var ok = Assert.IsType<OkObjectResult>(result);
             Assert.Equal(200, ok.StatusCode);
+        }
+
+        [Fact]
+        public async Task Confirm_NullBody_PassesEmptyTokenToService()
+        {
+            _mockSignupService
+                .Setup(x => x.ConfirmAsync(string.Empty, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new SignupValidationException("invalid_token", "確認トークンが指定されていません。", field: "token"));
+
+            var result = await _controller.Confirm(null, CancellationToken.None);
+
+            var objectResult = Assert.IsType<ObjectResult>(result);
+            Assert.Equal(422, objectResult.StatusCode);
         }
 
         [Fact]
@@ -114,8 +140,14 @@ namespace IdentityProvider.Test.Controllers
 
             var ok = Assert.IsType<OkObjectResult>(result);
             Assert.Equal(200, ok.StatusCode);
-            var statusProp = ok.Value!.GetType().GetProperty("status")!.GetValue(ok.Value) as string;
-            Assert.Equal(expected, statusProp);
+
+            // 匿名オブジェクトをリフレクションで読むのではなく、JSON を介して
+            // 型付き DTO にデシリアライズして検証する。
+            var json = JsonSerializer.Serialize(ok.Value);
+            var dto = JsonSerializer.Deserialize<SignupStatusTestDto>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.NotNull(dto);
+            Assert.Equal(expected, dto!.Status);
         }
     }
 }

@@ -14,7 +14,6 @@
 10minutmail.cf
 123-m.com
 20minutemail.com
-21cn.com
 2prong.com
 30minutemail.com
 33mail.com
@@ -367,7 +366,6 @@ notmailinator.com
 nowhere.org
 nowmymail.com
 nurfuerspam.de
-nus.edu.sg
 objectmail.com
 obobbo.com
 odaymail.com
@@ -394,7 +392,6 @@ privatdemail.net
 proxymail.eu
 prtnx.com
 putthisinyourspamdatabase.com
-qq.com
 quickinbox.com
 rcpt.at
 reallymymail.com
@@ -607,7 +604,6 @@ xents.com
 xmaily.com
 xoxy.net
 yapped.net
-yeah.net
 yep.it
 yogamaven.com
 yopmail.com

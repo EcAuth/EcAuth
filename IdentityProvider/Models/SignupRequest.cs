@@ -19,12 +19,13 @@ namespace IdentityProvider.Models
         public int Id { get; set; }
 
         /// <summary>
-        /// 確認メールに埋め込むトークン。値の生成はサービス層が担当する。
+        /// 確認メールに埋め込むトークンの SHA-256 ハッシュ（16 進小文字、64 文字）。
+        /// 生トークンはメール URL にのみ使用し、DB にはハッシュのみを保存する。値の生成はサービス層が担当する。
         /// </summary>
-        [Column("confirm_token")]
-        [MaxLength(255)]
+        [Column("confirm_token_hash")]
+        [MaxLength(64)]
         [Required]
-        public string ConfirmToken { get; set; } = string.Empty;
+        public string ConfirmTokenHash { get; set; } = string.Empty;
 
         [Column("email")]
         [MaxLength(255)]

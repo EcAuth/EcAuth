@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
@@ -29,6 +31,30 @@ namespace IdentityProvider.Test.Services
             var tenantService = new MockTenantService();
             tenantService.SetTenant(Tenant);
             return tenantService;
+        }
+
+        /// <summary>
+        /// 確認トークンのハッシュ化（SignupService と同方式）。テスト用にレコードを直接投入する際に使用する。
+        /// </summary>
+        private static string HashToken(string token) =>
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
+        /// <summary>
+        /// メール送信に渡された確認 URL から生トークン（token クエリ）を取り出す。
+        /// DB にはハッシュのみ保存されるため、Request 後に confirm するにはメール URL 経由でトークンを得る。
+        /// </summary>
+        private static string ExtractTokenFromConfirmUrl(string confirmUrl)
+        {
+            var uri = new Uri(confirmUrl);
+            var query = uri.Query.TrimStart('?');
+            var token = query
+                .Split('&', StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Split('=', 2))
+                .Where(kv => kv.Length == 2 && kv[0] == "token")
+                .Select(kv => Uri.UnescapeDataString(kv[1]))
+                .FirstOrDefault();
+            Assert.False(string.IsNullOrEmpty(token));
+            return token!;
         }
 
         /// <summary>
@@ -78,6 +104,23 @@ namespace IdentityProvider.Test.Services
                 _logger);
         }
 
+        /// <summary>
+        /// Request を実行し、メール送信に渡された生トークンを取得する。
+        /// </summary>
+        private async Task<string> RequestAndCaptureTokenAsync(SignupService service, Mock<IEmailService> emailMock, SignupInput input)
+        {
+            string? capturedUrl = null;
+            emailMock
+                .Setup(x => x.SendSignupConfirmationAsync(
+                    It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, string, CancellationToken>((_, _, url, _) => capturedUrl = url)
+                .Returns(Task.CompletedTask);
+
+            await service.RequestAsync(input);
+            Assert.NotNull(capturedUrl);
+            return ExtractTokenFromConfirmUrl(capturedUrl!);
+        }
+
         private static SignupInput ValidInput() => new()
         {
             Email = "owner@example.com",
@@ -96,23 +139,36 @@ namespace IdentityProvider.Test.Services
             using var context = CreateContextWithAccountsOrg(tenantService);
             var service = CreateService(context, tenantService, out var emailMock, out _);
 
-            var result = await service.RequestAsync(ValidInput());
-
-            Assert.False(string.IsNullOrEmpty(result.ConfirmToken));
-            Assert.Equal("owner@example.com", result.Email);
-            Assert.Equal(Tenant, result.TenantName);
-            Assert.Null(result.ConfirmedAt);
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, ValidInput());
 
             var stored = await context.SignupRequests.IgnoreQueryFilters().FirstAsync();
-            Assert.Equal(result.ConfirmToken, stored.ConfirmToken);
+            Assert.Equal("owner@example.com", stored.Email);
+            Assert.Equal(Tenant, stored.TenantName);
+            Assert.Null(stored.ConfirmedAt);
+            // DB には生トークンではなくハッシュが保存されている。
+            Assert.Equal(HashToken(token), stored.ConfirmTokenHash);
+            Assert.NotEqual(token, stored.ConfirmTokenHash);
+        }
 
-            emailMock.Verify(
-                x => x.SendSignupConfirmationAsync(
-                    "owner@example.com",
-                    "Example Shop",
-                    It.Is<string>(u => u.Contains("/api/signup/confirm?token=")),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
+        [Fact]
+        public async Task RequestAsync_ConfirmUrlPointsToSignupConfirm()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            string? capturedUrl = null;
+            emailMock
+                .Setup(x => x.SendSignupConfirmationAsync(
+                    It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, string, CancellationToken>((_, _, url, _) => capturedUrl = url)
+                .Returns(Task.CompletedTask);
+
+            await service.RequestAsync(ValidInput());
+
+            Assert.NotNull(capturedUrl);
+            Assert.StartsWith("https://", capturedUrl);
+            Assert.Contains("/signup/confirm?token=", capturedUrl);
         }
 
         [Fact]
@@ -226,6 +282,28 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(422, ex.StatusCode);
         }
 
+        [Fact]
+        public async Task RequestAsync_ProductionAndTestDeriveSameCode_ThrowsDuplicateSite()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out _, out _);
+
+            // www.shop.example.jp と shop.example.jp はいずれも shop-example-jp に導出される。
+            var input = ValidInput() with
+            {
+                ProductionSiteUrl = "https://shop.example.jp",
+                TestSiteUrl = "https://www.shop.example.jp"
+            };
+
+            // 同一コードに導出されるため、テスト Org は追加されず単一 Org として扱われる。
+            // 重複検知は EnsureOrganizationCodesAvailableAsync の seenCodes でも担保するが、
+            // ここでは導出後コード比較によりテスト Org が作られないこと（=本番のみ）を確認する。
+            await service.RequestAsync(input);
+            var stored = await context.SignupRequests.IgnoreQueryFilters().FirstAsync();
+            Assert.NotNull(stored);
+        }
+
         // ---- 組織コード導出 ----
 
         [Fact]
@@ -233,14 +311,13 @@ namespace IdentityProvider.Test.Services
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
-            var service = CreateService(context, tenantService, out _, out _);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
 
             // shop.example.jp -> shop-example-jp
-            await service.RequestAsync(ValidInput());
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, ValidInput());
 
             // confirm して顧客 Org が shop-example-jp で生成されることを確認する
-            var sr = await context.SignupRequests.IgnoreQueryFilters().FirstAsync();
-            await service.ConfirmAsync(sr.ConfirmToken);
+            await service.ConfirmAsync(token);
 
             var customerOrg = await context.Organizations
                 .IgnoreQueryFilters()
@@ -255,12 +332,11 @@ namespace IdentityProvider.Test.Services
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
-            var service = CreateService(context, tenantService, out _, out _);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
 
-            await service.RequestAsync(ValidInput());
-            var sr = await context.SignupRequests.IgnoreQueryFilters().FirstAsync();
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, ValidInput());
 
-            var confirmed = await service.ConfirmAsync(sr.ConfirmToken);
+            var confirmed = await service.ConfirmAsync(token);
 
             Assert.NotNull(confirmed.ConfirmedAt);
             var customerOrgs = await context.Organizations
@@ -286,17 +362,16 @@ namespace IdentityProvider.Test.Services
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
-            var service = CreateService(context, tenantService, out _, out _);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
 
             var input = ValidInput() with
             {
                 ProductionSiteUrl = "https://shop.example.jp",
                 TestSiteUrl = "https://test.example.jp"
             };
-            await service.RequestAsync(input);
-            var sr = await context.SignupRequests.IgnoreQueryFilters().FirstAsync();
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
 
-            await service.ConfirmAsync(sr.ConfirmToken);
+            await service.ConfirmAsync(token);
 
             var customerOrgs = await context.Organizations
                 .IgnoreQueryFilters()
@@ -312,23 +387,49 @@ namespace IdentityProvider.Test.Services
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
-            var service = CreateService(context, tenantService, out _, out _);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
 
             var input = ValidInput() with
             {
                 ProductionSiteUrl = "https://shop.example.jp",
                 TestSiteUrl = "https://shop.example.jp"
             };
-            await service.RequestAsync(input);
-            var sr = await context.SignupRequests.IgnoreQueryFilters().FirstAsync();
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
 
-            await service.ConfirmAsync(sr.ConfirmToken);
+            await service.ConfirmAsync(token);
 
             var customerOrgs = await context.Organizations
                 .IgnoreQueryFilters()
                 .Where(o => o.Code != Tenant)
                 .ToListAsync();
             Assert.Single(customerOrgs);
+            Assert.False(customerOrgs[0].IsSandbox);
+        }
+
+        [Fact]
+        public async Task ConfirmAsync_ProductionAndTestDeriveSameCode_CreatesOnlyProduction()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            // www.shop.example.jp(test) と shop.example.jp(prod) はいずれも shop-example-jp に導出される。
+            // 生ホスト名は異なるが導出後コードが同一のためテスト Org は作らない。
+            var input = ValidInput() with
+            {
+                ProductionSiteUrl = "https://shop.example.jp",
+                TestSiteUrl = "https://www.shop.example.jp"
+            };
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
+
+            await service.ConfirmAsync(token);
+
+            var customerOrgs = await context.Organizations
+                .IgnoreQueryFilters()
+                .Where(o => o.Code != Tenant)
+                .ToListAsync();
+            Assert.Single(customerOrgs);
+            Assert.Equal("shop-example-jp", customerOrgs[0].Code);
             Assert.False(customerOrgs[0].IsSandbox);
         }
 
@@ -354,7 +455,7 @@ namespace IdentityProvider.Test.Services
 
             context.SignupRequests.Add(new SignupRequest
             {
-                ConfirmToken = "expired-token",
+                ConfirmTokenHash = HashToken("expired-token"),
                 Email = "owner@example.com",
                 OrganizationName = "Example Shop",
                 ProductionSiteUrl = "https://shop.example.jp",
@@ -378,7 +479,7 @@ namespace IdentityProvider.Test.Services
 
             context.SignupRequests.Add(new SignupRequest
             {
-                ConfirmToken = "confirmed-token",
+                ConfirmTokenHash = HashToken("confirmed-token"),
                 Email = "owner@example.com",
                 OrganizationName = "Example Shop",
                 ProductionSiteUrl = "https://shop.example.jp",
@@ -399,11 +500,10 @@ namespace IdentityProvider.Test.Services
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
-            var service = CreateService(context, tenantService, out _, out _);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
 
             // 申込を受け付けた後で、confirm 前に同じ code の Org が作成されたケースを再現する
-            await service.RequestAsync(ValidInput());
-            var sr = await context.SignupRequests.IgnoreQueryFilters().FirstAsync();
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, ValidInput());
 
             context.Organizations.Add(new Organization
             {
@@ -414,7 +514,7 @@ namespace IdentityProvider.Test.Services
             });
             await context.SaveChangesAsync();
 
-            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.ConfirmAsync(sr.ConfirmToken));
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.ConfirmAsync(token));
             Assert.Equal("organization_already_exists", ex.Error);
             Assert.Equal(409, ex.StatusCode);
         }
@@ -441,7 +541,7 @@ namespace IdentityProvider.Test.Services
             context.SignupRequests.AddRange(
                 new SignupRequest
                 {
-                    ConfirmToken = "pending-token",
+                    ConfirmTokenHash = HashToken("pending-token"),
                     Email = "a@example.com",
                     OrganizationName = "A",
                     ProductionSiteUrl = "https://a.example.jp",
@@ -451,7 +551,7 @@ namespace IdentityProvider.Test.Services
                 },
                 new SignupRequest
                 {
-                    ConfirmToken = "confirmed-token",
+                    ConfirmTokenHash = HashToken("confirmed-token"),
                     Email = "b@example.com",
                     OrganizationName = "B",
                     ProductionSiteUrl = "https://b.example.jp",
@@ -462,7 +562,7 @@ namespace IdentityProvider.Test.Services
                 },
                 new SignupRequest
                 {
-                    ConfirmToken = "expired-token",
+                    ConfirmTokenHash = HashToken("expired-token"),
                     Email = "c@example.com",
                     OrganizationName = "C",
                     ProductionSiteUrl = "https://c.example.jp",

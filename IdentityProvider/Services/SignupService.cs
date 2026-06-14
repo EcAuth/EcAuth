@@ -58,12 +58,14 @@ namespace IdentityProvider.Services
             // 組織コードの重複チェック（全テナント横断）。
             await EnsureOrganizationCodesAvailableAsync(sites, ct);
 
+            // 生トークン（メール URL に使う）と、その SHA-256 ハッシュ（DB に保存する）を生成する。
             var confirmToken = GenerateConfirmToken();
+            var confirmTokenHash = HashConfirmToken(confirmToken);
             var now = DateTimeOffset.UtcNow;
 
             var signupRequest = new SignupRequest
             {
-                ConfirmToken = confirmToken,
+                ConfirmTokenHash = confirmTokenHash,
                 Email = email,
                 OrganizationName = organizationName,
                 ContactName = string.IsNullOrWhiteSpace(input.ContactName) ? null : input.ContactName.Trim(),
@@ -101,13 +103,14 @@ namespace IdentityProvider.Services
                     "invalid_token", "確認トークンが指定されていません。", field: "token");
             }
 
-            // ConfirmToken はグローバルユニーク。テナント横断で引いた上で
-            // 現在テナントとの一致を確認する（サブドメイン経由のアクセス前提）。
+            // 受信した生トークンを同じ方式でハッシュ化し、ConfirmTokenHash と照合する。
+            // ConfirmTokenHash はグローバルユニークで、テナントコンテキストは Host から設定されるため、
+            // グローバルクエリフィルター（TenantName）により現テナントの行のみが取得される。
+            var tokenHash = HashConfirmToken(token);
             var signupRequest = await _context.SignupRequests
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(sr => sr.ConfirmToken == token, ct);
+                .FirstOrDefaultAsync(sr => sr.ConfirmTokenHash == tokenHash, ct);
 
-            if (signupRequest == null || signupRequest.TenantName != _tenantService.TenantName)
+            if (signupRequest == null)
             {
                 throw new SignupValidationException(
                     "invalid_token", "確認トークンが無効です。", field: "token");
@@ -212,11 +215,35 @@ namespace IdentityProvider.Services
 
                 return signupRequest;
             }
+            catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+            {
+                // confirm 中に別リクエストが同一 code の Organization を先に INSERT した
+                // （TOCTOU）。ユニーク制約違反を 409 に正規化して返す。
+                await transaction.RollbackAsync(ct);
+                _logger.LogWarning(ex,
+                    "申込確認中に組織コードのユニーク制約違反が発生しました（競合）: Tenant={Tenant}, TokenHash={TokenHash}",
+                    signupRequest.TenantName, TokenHashPrefix(token));
+                throw new SignupValidationException(
+                    "organization_already_exists",
+                    "このドメインは既に EcAuth に登録されています。別のサイト URL でお申し込みください。",
+                    field: "production_site_url",
+                    statusCode: 409);
+            }
             catch
             {
                 await transaction.RollbackAsync(ct);
                 throw;
             }
+        }
+
+        /// <summary>
+        /// <see cref="DbUpdateException"/> が SQL Server のユニーク／主キー制約違反
+        /// （エラー番号 2601 / 2627）に起因するかを判定する。
+        /// </summary>
+        private static bool IsUniqueConstraintViolation(DbUpdateException ex)
+        {
+            return ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx
+                && (sqlEx.Number == 2601 || sqlEx.Number == 2627);
         }
 
         /// <inheritdoc />
@@ -227,11 +254,13 @@ namespace IdentityProvider.Services
                 return SignupStatus.NotFound;
             }
 
+            // 受信した生トークンをハッシュ化して照合する。テナント絞り込みは
+            // グローバルクエリフィルター（TenantName）に委ねる。
+            var tokenHash = HashConfirmToken(token);
             var signupRequest = await _context.SignupRequests
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(sr => sr.ConfirmToken == token, ct);
+                .FirstOrDefaultAsync(sr => sr.ConfirmTokenHash == tokenHash, ct);
 
-            if (signupRequest == null || signupRequest.TenantName != _tenantService.TenantName)
+            if (signupRequest == null)
             {
                 return SignupStatus.NotFound;
             }
@@ -312,16 +341,25 @@ namespace IdentityProvider.Services
 
             var sites = new List<SiteEntry>();
 
+            string? productionCode = null;
             if (productionHost != null)
             {
-                sites.Add(new SiteEntry(DeriveOrganizationCode(productionHost), productionHost, IsSandbox: false, "production_site_url"));
+                productionCode = DeriveOrganizationCode(productionHost);
+                sites.Add(new SiteEntry(productionCode, productionHost, IsSandbox: false, "production_site_url"));
             }
 
-            // テスト Org は、本番がない場合か、本番とホスト名が異なる場合のみ作成する
-            // （本番・テストが同一ホスト名なら本番のみ採用しテスト Org は作らない）。
-            if (testHost != null && !string.Equals(testHost, productionHost, StringComparison.OrdinalIgnoreCase))
+            // テスト Org は、本番がない場合か、本番と「導出後の組織コード」が異なる場合のみ作成する。
+            // ホスト名は異なっても導出後コードが同一になるケース（例: www.shop.example.jp と
+            // shop.example.jp はいずれも shop-example-jp）があるため、生ホスト名ではなく
+            // 導出後コードで比較し、コード重複によるユニーク制約違反を防ぐ。
+            if (testHost != null)
             {
-                sites.Add(new SiteEntry(DeriveOrganizationCode(testHost), testHost, IsSandbox: true, "test_site_url"));
+                var testCode = DeriveOrganizationCode(testHost);
+                if (productionCode == null
+                    || !string.Equals(testCode, productionCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    sites.Add(new SiteEntry(testCode, testHost, IsSandbox: true, "test_site_url"));
+                }
             }
 
             return new SiteSet(
@@ -342,6 +380,21 @@ namespace IdentityProvider.Services
 
         private async Task EnsureOrganizationCodesAvailableAsync(SiteSet sites, CancellationToken ct, int statusCode = 422)
         {
+            // 同一リクエスト内で導出後の組織コードが衝突していないか検知する
+            // （本番・テストの URL が異なっても同じコードに導出されるケースを 422 で弾く）。
+            var seenCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var site in sites.Sites)
+            {
+                if (!seenCodes.Add(site.Code))
+                {
+                    throw new SignupValidationException(
+                        "duplicate_site",
+                        "本番サイトとテストサイトが同一の組織コードに導出されます。異なるドメインでお申し込みください。",
+                        field: site.Field,
+                        statusCode: 422);
+                }
+            }
+
             foreach (var site in sites.Sites)
             {
                 var exists = await _context.Organizations
@@ -491,6 +544,18 @@ namespace IdentityProvider.Services
         }
 
         /// <summary>
+        /// 確認トークンを SHA-256 でハッシュ化し、16 進小文字（64 文字）で返す。
+        /// トークンは 256bit の高エントロピーなランダム値のためソルトは不要。
+        /// 生トークンはメール URL にのみ使用し、DB にはこのハッシュのみを保存する。
+        /// </summary>
+        private static string HashConfirmToken(string token)
+        {
+            return Convert.ToHexString(
+                SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token)))
+                .ToLowerInvariant();
+        }
+
+        /// <summary>
         /// ログ出力用に平文トークンの SHA-256 ハッシュ先頭 8 文字を返す（平文は出力しない）。
         /// </summary>
         private static string TokenHashPrefix(string token)
@@ -509,6 +574,11 @@ namespace IdentityProvider.Services
         /// 確認 URL を組み立てる。基底 URL はテナント別の設定値
         /// <c>Signup:ConfirmBaseUrl:{tenant_name}</c>（例: <c>Signup:ConfirmBaseUrl:accounts</c>）からのみ取得する。
         /// <para>
+        /// この設定値は「フロントエンドのベース URL」を指す。確認リンクはフロントエンド
+        /// （<c>/signup/confirm</c>）を経由させ（Option B）、フロント側が JS で確認 API を
+        /// 呼び出す前提とする。これによりメール内リンクの GET アクセスで副作用が発生しない。
+        /// </para>
+        /// <para>
         /// Host ヘッダ偽装によるトークン窃取（フィッシング）を防ぐため、
         /// <c>HttpContext.Request.Host</c> へのフォールバックは行わない。設定が無い／不正テナントの場合は例外を投げて停止する。
         /// </para>
@@ -517,22 +587,23 @@ namespace IdentityProvider.Services
         {
             var encodedToken = Uri.EscapeDataString(confirmToken);
 
-            // 確認 URL の基底はテナント別の信頼済み設定値のみを使用する（Request.Host は信頼しない）。
+            // 確認 URL の基底はテナント別の信頼済み設定値（フロントエンドのベース URL）のみを使用する（Request.Host は信頼しない）。
             var tenantName = _tenantService.TenantName;
             var configuredBase = _configuration[$"Signup:ConfirmBaseUrl:{tenantName}"];
 
             if (string.IsNullOrWhiteSpace(configuredBase)
                 || !Uri.TryCreate(configuredBase, UriKind.Absolute, out var baseUri)
-                || (baseUri.Scheme != Uri.UriSchemeHttps && baseUri.Scheme != Uri.UriSchemeHttp))
+                || baseUri.Scheme != Uri.UriSchemeHttps)
             {
                 _logger.LogError(
                     "確認 URL の基底が未設定または不正です: Tenant={Tenant}, Key=Signup:ConfirmBaseUrl:{Tenant}",
                     tenantName, tenantName);
                 throw new InvalidOperationException(
-                    $"確認 URL の基底を決定できません。Signup:ConfirmBaseUrl:{tenantName} に有効な URL を設定してください。");
+                    $"確認 URL の基底を決定できません。Signup:ConfirmBaseUrl:{tenantName} に有効な https:// URL を設定してください。");
             }
 
-            return $"{configuredBase.TrimEnd('/')}/api/signup/confirm?token={encodedToken}";
+            // Option B: フロントエンド経由の確認ページ（/signup/confirm）に遷移させる。
+            return $"{configuredBase.TrimEnd('/')}/signup/confirm?token={encodedToken}";
         }
 
         // ---- 内部表現 ----

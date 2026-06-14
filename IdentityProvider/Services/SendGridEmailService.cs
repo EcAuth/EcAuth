@@ -29,11 +29,14 @@ namespace IdentityProvider.Services
 
             if (string.IsNullOrWhiteSpace(apiKey))
             {
-                // 既存サービス（ExternalIdpTokenService 等）の流儀に合わせ、未設定時は警告ログを出して送信処理を中断する。
-                _logger.LogWarning(
+                // API キー未設定で return（成功扱い）すると、申込者には「確認メール送信済み」と
+                // 案内されるのにメールが届かず、申込が完了不能になる。設定不備として例外を投げて
+                // 呼び出し側（500）に伝播させる（fail-closed）。
+                _logger.LogError(
                     "SENDGRID_API_KEY が未設定のため申込確認メールを送信できません: To={ToEmail}",
-                    toEmail);
-                return;
+                    MaskEmail(toEmail));
+                throw new InvalidOperationException(
+                    "SendGrid API キー（SendGrid:ApiKey / SENDGRID_API_KEY）が設定されていません。");
             }
 
             // 送信元アドレス・表示名も同様に IConfiguration → 環境変数の順で解決する。
@@ -77,17 +80,42 @@ namespace IdentityProvider.Services
 
             if ((int)response.StatusCode >= 400)
             {
-                var body = await response.Body.ReadAsStringAsync(ct);
+                // レスポンス Body には宛先や内部情報が含まれ得るため全文はログに出さず、
+                // 宛先はマスクし、ステータスコードのみを記録する。
                 _logger.LogError(
-                    "申込確認メールの送信に失敗しました: To={ToEmail}, StatusCode={StatusCode}, Body={Body}",
-                    toEmail, (int)response.StatusCode, body);
+                    "申込確認メールの送信に失敗しました: To={ToEmail}, StatusCode={StatusCode}",
+                    MaskEmail(toEmail), (int)response.StatusCode);
                 throw new InvalidOperationException(
                     $"SendGrid によるメール送信に失敗しました (StatusCode={(int)response.StatusCode})。");
             }
 
             _logger.LogInformation(
                 "申込確認メールを送信しました: To={ToEmail}, Organization={Organization}",
-                toEmail, displayOrganization);
+                MaskEmail(toEmail), displayOrganization);
+        }
+
+        /// <summary>
+        /// ログ出力用にメールアドレスをマスクする。ローカル部の先頭 1 文字のみ残し、
+        /// 残りを伏字にしたうえでドメインを保持する（例: <c>owner@example.com</c> → <c>o****@example.com</c>）。
+        /// </summary>
+        private static string MaskEmail(string? email)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                return "(empty)";
+            }
+
+            var atIndex = email.IndexOf('@');
+            if (atIndex <= 0)
+            {
+                // ローカル部が取得できない不正な形式は全体を伏字にする。
+                return "****";
+            }
+
+            var local = email[..atIndex];
+            var domain = email[atIndex..];
+            var visible = local[..1];
+            return $"{visible}****{domain}";
         }
     }
 }
