@@ -25,7 +25,7 @@ namespace IdentityProvider.Services
 
             // API キーは IConfiguration（SendGrid:ApiKey）→ 環境変数（SENDGRID_API_KEY）の順で解決する。
             var apiKey = _configuration["SendGrid:ApiKey"]
-                ?? Environment.GetEnvironmentVariable("SENDGRID_API_KEY");
+                ?? _configuration["SENDGRID_API_KEY"];
 
             if (string.IsNullOrWhiteSpace(apiKey))
             {
@@ -41,10 +41,10 @@ namespace IdentityProvider.Services
 
             // 送信元アドレス・表示名も同様に IConfiguration → 環境変数の順で解決する。
             var fromEmail = _configuration["SendGrid:FromEmail"]
-                ?? Environment.GetEnvironmentVariable("SENDGRID_FROM_EMAIL")
+                ?? _configuration["SENDGRID_FROM_EMAIL"]
                 ?? "noreply@ecauth.jp";
             var fromName = _configuration["SendGrid:FromName"]
-                ?? Environment.GetEnvironmentVariable("SENDGRID_FROM_NAME")
+                ?? _configuration["SENDGRID_FROM_NAME"]
                 ?? "EcAuth";
 
             var subject = "【EcAuth】お申し込み確認のお願い";
