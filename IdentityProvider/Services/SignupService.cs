@@ -169,6 +169,23 @@ namespace IdentityProvider.Services
                         statusCode: 500);
                 }
                 accountsOrg = foundAccountsOrg;
+
+                // 新規 Account 作成フローでは同一メールでの複数 org を許容しない方針
+                //（org 招待・追加の動線は将来バージョンで対応）。受付テナント Org に
+                // 同一メールの Account が既存なら、URL 変更では解決しない旨が伝わる明確なエラーで弾く。
+                // Account のクエリフィルター（所属 Org の TenantName 一致）に依存しないよう
+                // IgnoreQueryFilters() で受付 Org を明示的に絞り込む。
+                var emailAlreadyRegistered = await _context.Accounts
+                    .IgnoreQueryFilters()
+                    .AnyAsync(a => a.OrganizationId == accountsOrg.Id && a.Email == signupRequest.Email, ct);
+                if (emailAlreadyRegistered)
+                {
+                    throw new SignupValidationException(
+                        "email_already_registered",
+                        "このメールアドレスは既に登録されています。",
+                        field: "email",
+                        statusCode: 409);
+                }
             }
 
             await using var transaction = await _context.Database.BeginTransactionAsync(ct);
@@ -240,9 +257,26 @@ namespace IdentityProvider.Services
             }
             catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
             {
-                // confirm 中に別リクエストが同一 code の Organization を先に INSERT した
-                // （TOCTOU）。ユニーク制約違反を 409 に正規化して返す。
+                // confirm 中に別リクエストが先に INSERT したことによるユニーク制約違反（TOCTOU）。
+                // 事前チェック（メール既登録・組織コード重複）をすり抜けた真の競合のみがここに到達する。
+                // 違反したインデックス名で分岐し、409 に正規化して適切なメッセージを返す。
                 await transaction.RollbackAsync(ct);
+
+                if (IsEmailUniqueViolation(ex))
+                {
+                    // Account.(OrganizationId, Email) または B2BUser.(OrganizationId, ExternalId) の競合。
+                    // 同一メールの再登録に該当するため、URL 変更では解決しない旨が伝わるエラーを返す。
+                    _logger.LogWarning(ex,
+                        "申込確認中にメールアドレスのユニーク制約違反が発生しました（競合）: Tenant={Tenant}, TokenHash={TokenHash}",
+                        signupRequest.TenantName, TokenHashPrefix(token));
+                    throw new SignupValidationException(
+                        "email_already_registered",
+                        "このメールアドレスは既に登録されています。",
+                        field: "email",
+                        statusCode: 409);
+                }
+
+                // それ以外（組織コード・client_id・rsa kid 等）の制約違反は組織コード重複として扱う。
                 _logger.LogWarning(ex,
                     "申込確認中に組織コードのユニーク制約違反が発生しました（競合）: Tenant={Tenant}, TokenHash={TokenHash}",
                     signupRequest.TenantName, TokenHashPrefix(token));
@@ -268,6 +302,28 @@ namespace IdentityProvider.Services
         {
             return ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx
                 && (sqlEx.Number == 2601 || sqlEx.Number == 2627);
+        }
+
+        // Account.(OrganizationId, Email) / B2BUser.(OrganizationId, ExternalId) のユニークインデックス名。
+        // SQL Server のユニーク制約違反メッセージ（エラー 2601/2627）には違反したインデックス名が含まれる。
+        private const string AccountEmailIndexName = "IX_account_organization_id_email";
+        private const string B2BUserExternalIdIndexName = "IX_b2b_user_organization_id_external_id";
+
+        /// <summary>
+        /// ユニーク制約違反が Account のメール／B2BUser の external_id インデックスに起因するか
+        /// （= 同一メールの再登録に相当するか）を、InnerException のメッセージに含まれる
+        /// インデックス名で判定する。判定は大文字小文字を無視する。
+        /// </summary>
+        private static bool IsEmailUniqueViolation(DbUpdateException ex)
+        {
+            var message = ex.InnerException?.Message;
+            if (string.IsNullOrEmpty(message))
+            {
+                return false;
+            }
+
+            return message.Contains(AccountEmailIndexName, StringComparison.OrdinalIgnoreCase)
+                || message.Contains(B2BUserExternalIdIndexName, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <inheritdoc />

@@ -519,6 +519,29 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(409, ex.StatusCode);
         }
 
+        [Fact]
+        public async Task ConfirmAsync_SameEmailDifferentSiteUrl_ThrowsEmailAlreadyRegistered()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            // 1 回目: shop.example.jp で confirm → 受付 Org に Account が作られる。
+            var firstToken = await RequestAndCaptureTokenAsync(service, emailMock, ValidInput());
+            await service.ConfirmAsync(firstToken);
+
+            // 2 回目: 同一メール・異なるサイト URL（another.example.jp）で申込 → confirm。
+            // 組織コードは衝突しないが、受付 Org に同一メールの Account が既存のため
+            // 事前チェック A で email_already_registered（409）として弾かれる。
+            var secondInput = ValidInput() with { ProductionSiteUrl = "https://another.example.jp" };
+            var secondToken = await RequestAndCaptureTokenAsync(service, emailMock, secondInput);
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.ConfirmAsync(secondToken));
+            Assert.Equal("email_already_registered", ex.Error);
+            Assert.Equal("email", ex.Field);
+            Assert.Equal(409, ex.StatusCode);
+        }
+
         // ---- GetStatusAsync ----
 
         [Fact]
