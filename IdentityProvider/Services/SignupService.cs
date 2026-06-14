@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
+using IdentityProvider.Telemetry;
 using Microsoft.EntityFrameworkCore;
 
 namespace IdentityProvider.Services
@@ -49,14 +50,20 @@ namespace IdentityProvider.Services
         {
             ArgumentNullException.ThrowIfNull(input);
 
-            // 入力の正規化とバリデーション（最初の違反で SignupValidationException をスロー）。
-            var email = ValidateAndNormalizeEmail(input.Email);
-            var organizationName = ValidateOrganizationName(input.OrganizationName);
-            var sites = ValidateSiteUrls(input.ProductionSiteUrl, input.TestSiteUrl);
-            ValidateEcCubeVersion(input.EcCubeVersion);
+            string email;
+            string organizationName;
+            SiteSet sites;
+            using (TimingScope.Begin("validate"))
+            {
+                // 入力の正規化とバリデーション（最初の違反で SignupValidationException をスロー）。
+                email = ValidateAndNormalizeEmail(input.Email);
+                organizationName = ValidateOrganizationName(input.OrganizationName);
+                sites = ValidateSiteUrls(input.ProductionSiteUrl, input.TestSiteUrl);
+                ValidateEcCubeVersion(input.EcCubeVersion);
 
-            // 組織コードの重複チェック（全テナント横断）。
-            await EnsureOrganizationCodesAvailableAsync(sites, ct);
+                // 組織コードの重複チェック（全テナント横断）。
+                await EnsureOrganizationCodesAvailableAsync(sites, ct);
+            }
 
             // 生トークン（メール URL に使う）と、その SHA-256 ハッシュ（DB に保存する）を生成する。
             var confirmToken = GenerateConfirmToken();
@@ -80,8 +87,11 @@ namespace IdentityProvider.Services
                 CreatedAt = now
             };
 
-            _context.SignupRequests.Add(signupRequest);
-            await _context.SaveChangesAsync(ct);
+            using (TimingScope.Begin("persist"))
+            {
+                _context.SignupRequests.Add(signupRequest);
+                await _context.SaveChangesAsync(ct);
+            }
 
             // 平文トークンはログに出さない（ハッシュ先頭のみを参照可能にする）。
             _logger.LogInformation(
@@ -89,7 +99,10 @@ namespace IdentityProvider.Services
                 signupRequest.TenantName, TokenHashPrefix(confirmToken));
 
             var confirmUrl = BuildConfirmUrl(confirmToken);
-            await _emailService.SendSignupConfirmationAsync(email, organizationName, confirmUrl, ct);
+            using (TimingScope.Begin("send_email"))
+            {
+                await _emailService.SendSignupConfirmationAsync(email, organizationName, confirmUrl, ct);
+            }
 
             return signupRequest;
         }
@@ -103,54 +116,64 @@ namespace IdentityProvider.Services
                     "invalid_token", "確認トークンが指定されていません。", field: "token");
             }
 
-            // 受信した生トークンを同じ方式でハッシュ化し、ConfirmTokenHash と照合する。
-            // ConfirmTokenHash はグローバルユニークで、テナントコンテキストは Host から設定されるため、
-            // グローバルクエリフィルター（TenantName）により現テナントの行のみが取得される。
-            var tokenHash = HashConfirmToken(token);
-            var signupRequest = await _context.SignupRequests
-                .FirstOrDefaultAsync(sr => sr.ConfirmTokenHash == tokenHash, ct);
-
-            if (signupRequest == null)
+            SignupRequest signupRequest;
+            SiteSet sites;
+            Organization accountsOrg;
+            using (TimingScope.Begin("token_lookup"))
             {
-                throw new SignupValidationException(
-                    "invalid_token", "確認トークンが無効です。", field: "token");
-            }
+                // 受信した生トークンを同じ方式でハッシュ化し、ConfirmTokenHash と照合する。
+                // ConfirmTokenHash はグローバルユニークで、テナントコンテキストは Host から設定されるため、
+                // グローバルクエリフィルター（TenantName）により現テナントの行のみが取得される。
+                var tokenHash = HashConfirmToken(token);
+                var foundRequest = await _context.SignupRequests
+                    .FirstOrDefaultAsync(sr => sr.ConfirmTokenHash == tokenHash, ct);
 
-            if (signupRequest.ConfirmedAt != null)
-            {
-                throw new SignupValidationException(
-                    "already_confirmed", "この申込は既に確認済みです。", field: "token");
-            }
+                if (foundRequest == null)
+                {
+                    throw new SignupValidationException(
+                        "invalid_token", "確認トークンが無効です。", field: "token");
+                }
+                signupRequest = foundRequest;
 
-            if (signupRequest.ExpiresAt <= DateTimeOffset.UtcNow)
-            {
-                throw new SignupValidationException(
-                    "token_expired", "確認トークンの有効期限が切れています。お手数ですが再度お申し込みください。", field: "token");
-            }
+                if (signupRequest.ConfirmedAt != null)
+                {
+                    throw new SignupValidationException(
+                        "already_confirmed", "この申込は既に確認済みです。", field: "token");
+                }
 
-            // 申込時から confirm までの間にデータが変わっている可能性があるため、再バリデーションする。
-            var sites = ValidateSiteUrls(signupRequest.ProductionSiteUrl, signupRequest.TestSiteUrl);
-            // confirm 時の code 衝突は Race Condition のため 409 を返す。
-            await EnsureOrganizationCodesAvailableAsync(sites, ct, statusCode: 409);
+                if (signupRequest.ExpiresAt <= DateTimeOffset.UtcNow)
+                {
+                    throw new SignupValidationException(
+                        "token_expired", "確認トークンの有効期限が切れています。お手数ですが再度お申し込みください。", field: "token");
+                }
 
-            // 受付テナント（accounts / stg-accounts）の Organization を取得する。
-            // 受付 Org の code は tenant_name と一致する（AccountsOrganizationSeeder の定義）。
-            var accountsOrg = await _context.Organizations
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(
-                    o => o.TenantName == signupRequest.TenantName && o.Code == signupRequest.TenantName, ct);
+                // 申込時から confirm までの間にデータが変わっている可能性があるため、再バリデーションする。
+                sites = ValidateSiteUrls(signupRequest.ProductionSiteUrl, signupRequest.TestSiteUrl);
+                // confirm 時の code 衝突は Race Condition のため 409 を返す。
+                await EnsureOrganizationCodesAvailableAsync(sites, ct, statusCode: 409);
 
-            if (accountsOrg == null)
-            {
-                _logger.LogError(
-                    "受付テナントの Organization が見つかりません: Tenant={Tenant}", signupRequest.TenantName);
-                throw new SignupValidationException(
-                    "tenant_not_configured",
-                    "申込受付環境が正しく構成されていません。サポートにお問い合わせください。",
-                    statusCode: 500);
+                // 受付テナント（accounts / stg-accounts）の Organization を取得する。
+                // 受付 Org の code は tenant_name と一致する（AccountsOrganizationSeeder の定義）。
+                var foundAccountsOrg = await _context.Organizations
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(
+                        o => o.TenantName == signupRequest.TenantName && o.Code == signupRequest.TenantName, ct);
+
+                if (foundAccountsOrg == null)
+                {
+                    _logger.LogError(
+                        "受付テナントの Organization が見つかりません: Tenant={Tenant}", signupRequest.TenantName);
+                    throw new SignupValidationException(
+                        "tenant_not_configured",
+                        "申込受付環境が正しく構成されていません。サポートにお問い合わせください。",
+                        statusCode: 500);
+                }
+                accountsOrg = foundAccountsOrg;
             }
 
             await using var transaction = await _context.Database.BeginTransactionAsync(ct);
+            using (TimingScope.Begin("confirm"))
+            {
             try
             {
                 var subject = Guid.NewGuid().ToString();
@@ -234,6 +257,7 @@ namespace IdentityProvider.Services
                 await transaction.RollbackAsync(ct);
                 throw;
             }
+            }
         }
 
         /// <summary>
@@ -254,28 +278,31 @@ namespace IdentityProvider.Services
                 return SignupStatus.NotFound;
             }
 
-            // 受信した生トークンをハッシュ化して照合する。テナント絞り込みは
-            // グローバルクエリフィルター（TenantName）に委ねる。
-            var tokenHash = HashConfirmToken(token);
-            var signupRequest = await _context.SignupRequests
-                .FirstOrDefaultAsync(sr => sr.ConfirmTokenHash == tokenHash, ct);
-
-            if (signupRequest == null)
+            using (TimingScope.Begin("status_lookup"))
             {
-                return SignupStatus.NotFound;
-            }
+                // 受信した生トークンをハッシュ化して照合する。テナント絞り込みは
+                // グローバルクエリフィルター（TenantName）に委ねる。
+                var tokenHash = HashConfirmToken(token);
+                var signupRequest = await _context.SignupRequests
+                    .FirstOrDefaultAsync(sr => sr.ConfirmTokenHash == tokenHash, ct);
 
-            if (signupRequest.ConfirmedAt != null)
-            {
-                return SignupStatus.Confirmed;
-            }
+                if (signupRequest == null)
+                {
+                    return SignupStatus.NotFound;
+                }
 
-            if (signupRequest.ExpiresAt <= DateTimeOffset.UtcNow)
-            {
-                return SignupStatus.Expired;
-            }
+                if (signupRequest.ConfirmedAt != null)
+                {
+                    return SignupStatus.Confirmed;
+                }
 
-            return SignupStatus.Pending;
+                if (signupRequest.ExpiresAt <= DateTimeOffset.UtcNow)
+                {
+                    return SignupStatus.Expired;
+                }
+
+                return SignupStatus.Pending;
+            }
         }
 
         // ---- バリデーション ----
