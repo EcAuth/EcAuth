@@ -22,6 +22,11 @@ namespace IdentityProvider.Services
         // 組織コード導出: 英数字以外の連続を 1 つの "-" に畳み込むための正規表現。
         private static readonly Regex NonAlphanumericRun = new("[^a-z0-9]+", RegexOptions.Compiled);
 
+        // 確認 URL 設定キーのテナント部を環境変数名に使える形へ正規化する正規表現。
+        // 環境変数名はハイフンを含められない（Azure Linux App Service が 400 で拒否）ため、
+        // [A-Za-z0-9_] 以外を "_" に置換する（例: "stg-accounts" -> "stg_accounts"）。
+        private static readonly Regex NonConfigKeyChar = new("[^A-Za-z0-9_]", RegexOptions.Compiled);
+
         private readonly EcAuthDbContext _context;
         private readonly ITenantService _tenantService;
         private readonly IEmailService _emailService;
@@ -657,6 +662,12 @@ namespace IdentityProvider.Services
         /// 確認 URL を組み立てる。基底 URL はテナント別の設定値
         /// <c>Signup:ConfirmBaseUrl:{tenant_name}</c>（例: <c>Signup:ConfirmBaseUrl:accounts</c>）からのみ取得する。
         /// <para>
+        /// テナント名にハイフンを含む場合（例: <c>stg-accounts</c>）、環境変数名にハイフンを使えない
+        /// （Azure Linux App Service が拒否）ため、キーのテナント部は <c>[A-Za-z0-9_]</c> 以外を
+        /// <c>_</c> に正規化する（<c>stg-accounts</c> → 参照キー <c>Signup:ConfirmBaseUrl:stg_accounts</c>、
+        /// 環境変数 <c>Signup__ConfirmBaseUrl__stg_accounts</c>）。
+        /// </para>
+        /// <para>
         /// この設定値は「フロントエンドのベース URL」を指す。確認リンクはフロントエンド
         /// （<c>/signup/confirm</c>）を経由させ（Option B）、フロント側が JS で確認 API を
         /// 呼び出す前提とする。これによりメール内リンクの GET アクセスで副作用が発生しない。
@@ -671,18 +682,20 @@ namespace IdentityProvider.Services
             var encodedToken = Uri.EscapeDataString(confirmToken);
 
             // 確認 URL の基底はテナント別の信頼済み設定値（フロントエンドのベース URL）のみを使用する（Request.Host は信頼しない）。
+            // 環境変数名にハイフンを使えないため、キーのテナント部を env-var-safe に正規化する（"stg-accounts" -> "stg_accounts"）。
             var tenantName = _tenantService.TenantName;
-            var configuredBase = _configuration[$"Signup:ConfirmBaseUrl:{tenantName}"];
+            var configKey = $"Signup:ConfirmBaseUrl:{NonConfigKeyChar.Replace(tenantName, "_")}";
+            var configuredBase = _configuration[configKey];
 
             if (string.IsNullOrWhiteSpace(configuredBase)
                 || !Uri.TryCreate(configuredBase, UriKind.Absolute, out var baseUri)
                 || baseUri.Scheme != Uri.UriSchemeHttps)
             {
                 _logger.LogError(
-                    "確認 URL の基底が未設定または不正です: Tenant={Tenant}, Key=Signup:ConfirmBaseUrl:{Tenant}",
-                    tenantName, tenantName);
+                    "確認 URL の基底が未設定または不正です: Tenant={Tenant}, Key={Key}",
+                    tenantName, configKey);
                 throw new InvalidOperationException(
-                    $"確認 URL の基底を決定できません。Signup:ConfirmBaseUrl:{tenantName} に有効な https:// URL を設定してください。");
+                    $"確認 URL の基底を決定できません。{configKey} に有効な https:// URL を設定してください。");
             }
 
             // Option B: フロントエンド経由の確認ページ（/signup/confirm）に遷移させる。

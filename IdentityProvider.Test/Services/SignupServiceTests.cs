@@ -181,6 +181,51 @@ namespace IdentityProvider.Test.Services
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.RequestAsync(ValidInput()));
         }
 
+        [Fact]
+        public async Task RequestAsync_HyphenatedTenant_UsesSanitizedConfigKey()
+        {
+            // 環境変数名にハイフンを使えない（Azure Linux App Service が拒否）ため、
+            // テナント "stg-accounts" の設定キーは "stg_accounts" に正規化される。
+            const string hyphenTenant = "stg-accounts";
+            var tenantService = new MockTenantService();
+            tenantService.SetTenant(hyphenTenant);
+
+            using var context = TestDbContextHelper.CreateInMemoryContext(tenantService: tenantService);
+            context.Organizations.Add(new Organization
+            {
+                Id = 1,
+                Code = hyphenTenant,
+                Name = "EcAuth Stg Accounts",
+                TenantName = hyphenTenant
+            });
+            context.SaveChanges();
+
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Signup:ConfirmBaseUrl:stg_accounts"] = "https://stg-accounts.ec-auth.io"
+                })
+                .Build();
+
+            var emailMock = new Mock<IEmailService>();
+            string? capturedUrl = null;
+            emailMock
+                .Setup(x => x.SendSignupConfirmationAsync(
+                    It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, string, CancellationToken>((_, _, url, _) => capturedUrl = url)
+                .Returns(Task.CompletedTask);
+            var disposableMock = new Mock<IDisposableEmailChecker>();
+            disposableMock.Setup(x => x.IsDisposable(It.IsAny<string>())).Returns(false);
+
+            var service = new SignupService(
+                context, tenantService, emailMock.Object, disposableMock.Object, config, _logger);
+
+            await service.RequestAsync(ValidInput());
+
+            Assert.NotNull(capturedUrl);
+            Assert.StartsWith("https://stg-accounts.ec-auth.io/signup/confirm?token=", capturedUrl);
+        }
+
         // ---- RequestAsync バリデーションエラー ----
 
         [Fact]
