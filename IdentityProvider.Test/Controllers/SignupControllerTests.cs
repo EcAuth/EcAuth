@@ -136,7 +136,8 @@ namespace IdentityProvider.Test.Controllers
                 .Setup(x => x.GetStatusAsync("some-token", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(status);
 
-            var result = await _controller.Status("some-token", CancellationToken.None);
+            var result = await _controller.Status(
+                new SignupController.SignupStatusDto { Token = "some-token" }, CancellationToken.None);
 
             var ok = Assert.IsType<OkObjectResult>(result);
             Assert.Equal(200, ok.StatusCode);
@@ -148,6 +149,24 @@ namespace IdentityProvider.Test.Controllers
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             Assert.NotNull(dto);
             Assert.Equal(expected, dto!.Status);
+        }
+
+        [Fact]
+        public async Task Status_NullBody_ReturnsNotFound()
+        {
+            _mockSignupService
+                .Setup(x => x.GetStatusAsync(string.Empty, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SignupStatus.NotFound);
+
+            var result = await _controller.Status(null, CancellationToken.None);
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            Assert.Equal(200, ok.StatusCode);
+            var json = JsonSerializer.Serialize(ok.Value);
+            var dto = JsonSerializer.Deserialize<SignupStatusTestDto>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.NotNull(dto);
+            Assert.Equal("not_found", dto!.Status);
         }
     }
 }

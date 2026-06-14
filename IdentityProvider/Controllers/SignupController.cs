@@ -113,12 +113,17 @@ namespace IdentityProvider.Controllers
 
         /// <summary>
         /// 確認トークンに対応する申込の状況を返す。
+        /// <para>
+        /// 確認トークンはアカウント本登録の唯一のシークレットであり、URL パス／クエリに載せると
+        /// Azure Monitor の <c>requests.url</c> に生トークンが記録される（再利用リスク）。
+        /// これを避けるため、フロントからのポーリングを前提に POST + リクエストボディでトークンを受け取る。
+        /// </para>
         /// </summary>
-        [HttpGet]
-        [Route("status/{token}")]
-        public async Task<IActionResult> Status(string token, CancellationToken ct)
+        [HttpPost]
+        [Route("status")]
+        public async Task<IActionResult> Status([FromBody] SignupStatusDto? body, CancellationToken ct)
         {
-            var status = await _signupService.GetStatusAsync(token, ct);
+            var status = await _signupService.GetStatusAsync(body?.Token ?? string.Empty, ct);
 
             return Ok(new
             {
@@ -171,6 +176,16 @@ namespace IdentityProvider.Controllers
         /// <c>POST /api/signup/confirm</c> のリクエストボディ（snake_case）。
         /// </summary>
         public sealed class SignupConfirmDto
+        {
+            [JsonPropertyName("token")]
+            public string? Token { get; set; }
+        }
+
+        /// <summary>
+        /// <c>POST /api/signup/status</c> のリクエストボディ（snake_case）。
+        /// トークンを URL に載せないため、確認トークンはボディで受け取る。
+        /// </summary>
+        public sealed class SignupStatusDto
         {
             [JsonPropertyName("token")]
             public string? Token { get; set; }
