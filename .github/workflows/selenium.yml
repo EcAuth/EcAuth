@@ -58,7 +58,7 @@ jobs:
       # .github/dependabot.yml（github-actions）が # main を解釈し、SHA を main の HEAD へ
       # 自動更新する（EC-CUBE/ec-cube#6729 と同じ運用）。
       - name: Setup ChromeDriver
-        uses: nanasess/setup-chromedriver@5882f7a62ec779a2601e8c1dd2bddcc361126dd1 # main
+        uses: nanasess/setup-chromedriver@36deff4e82420bf0ae6b55055d9917f2170a6ed6 # main
 
       - name: Show Chrome / ChromeDriver versions
         run: |
