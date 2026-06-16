@@ -1,4 +1,4 @@
-import { test, expect, BrowserContext, Page, CDPSession, APIRequestContext, request } from '@playwright/test';
+import { test, expect, BrowserContext, Page, APIRequestContext, request } from '@playwright/test';
 import { randomUUID } from 'crypto';
 
 test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
@@ -20,42 +20,31 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
 
   let context: BrowserContext;
   let page: Page;
-  let cdpSession: CDPSession;
 
   // テスト間で共有するデータ
   let authorizationCode: string;
   let accessToken: string;
   let credentialId: string;
 
-  let authenticatorId: string;
   let apiContext: APIRequestContext;
 
   test.beforeAll(async ({ browser }) => {
     context = await browser.newContext({
       ignoreHTTPSErrors: true,
     });
+
+    // Playwright 1.61.0 の仮想 WebAuthn オーセンティケータをインストール。
+    // navigator.credentials.create()/get() を横取りし、ページ側で実行する本物の
+    // 登録/認証セレモニーをこの仮想オーセンティケータで処理する（旧 CDP の
+    // WebAuthn.addVirtualAuthenticator 相当）。シードされるクレデンシャルは
+    // discoverable(resident) のため、サーバー側の ResidentKey=Preferred を満たす。
+    await context.credentials.install();
+
     page = await context.newPage();
 
-    // ページを先に開いてから CDP セッションを作成
+    // ページを開く（install() 済みのため navigator.credentials は横取り済み）
     await page.goto(`${baseUrl}/b2b-passkey-test.html`);
     await page.waitForLoadState('domcontentloaded');
-
-    // CDP Virtual Authenticator セットアップ
-    cdpSession = await page.context().newCDPSession(page);
-    await cdpSession.send('WebAuthn.enable');
-    const result = await cdpSession.send('WebAuthn.addVirtualAuthenticator', {
-      options: {
-        protocol: 'ctap2',
-        hasUserVerification: true,
-        automaticPresenceSimulation: true,
-        isUserVerified: true,
-        hasResidentKey: true,
-        transport: 'internal',
-      },
-    });
-    authenticatorId = result.authenticatorId;
-
-    console.log('Virtual Authenticator configured, id:', authenticatorId);
 
     apiContext = await request.newContext({
       ignoreHTTPSErrors: true,
@@ -64,12 +53,6 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
 
   test.afterAll(async () => {
     await apiContext?.dispose();
-    if (authenticatorId) {
-      await cdpSession?.send('WebAuthn.removeVirtualAuthenticator', {
-        authenticatorId,
-      });
-    }
-    await cdpSession?.detach();
     await context?.close();
   });
 
