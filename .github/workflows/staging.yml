@@ -74,6 +74,8 @@ jobs:
           STAGING_B2B_USER_EXTERNAL_ID: op://EcAuth/ecauth-staging-app/b2b_user_external_id
           STAGING_B2B_REDIRECT_URI: op://EcAuth/ecauth-staging-app/b2b_redirect_uri
           STAGING_B2B_ALLOWED_RP_IDS: op://EcAuth/ecauth-staging-app/b2b_allowed_rp_ids
+          # SendGrid (Phase D-1 申込 API / D-2 マジックリンクで使用)
+          SENDGRID_API_KEY: op://EcAuth/ecauth-staging-app/sendgrid_api_key
           # Azure credentials
           AZURE_CLIENT_ID: op://EcAuth/ecauth-workload-identity/AZURE_CLIENT_ID
           AZURE_TENANT_ID: op://EcAuth/ecauth-workload-identity/AZURE_TENANT_ID

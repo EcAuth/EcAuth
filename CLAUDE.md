@@ -57,6 +57,9 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 | `/api/external-userinfo` | `auth_header_parse` / `access_token_validate` / `external_userinfo_fetch` |
 | `register/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `fido2_make_credential` / `credential_persist` / `challenge_consume`） |
 | `authenticate/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `credential_lookup` / `fido2_make_assertion` / `signcount_persist` / `challenge_consume`） |
+| `/api/signup/request` | `validate` / `persist` / `send_email` |
+| `/api/signup/confirm` | `token_lookup` / `confirm` |
+| `/api/signup/status` | `status_lookup` |
 
 #### Application Insights クエリ例
 

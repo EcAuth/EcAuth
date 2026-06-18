@@ -61,3 +61,8 @@ STAGING_B2B_USER_SUBJECT=op://EcAuth/ecauth-staging-app/b2b_user_subject
 STAGING_B2B_USER_EXTERNAL_ID=op://EcAuth/ecauth-staging-app/b2b_user_external_id
 STAGING_B2B_REDIRECT_URI=op://EcAuth/ecauth-staging-app/b2b_redirect_uri
 STAGING_B2B_ALLOWED_RP_IDS=op://EcAuth/ecauth-staging-app/b2b_allowed_rp_ids
+
+# =============================================================================
+# SendGrid (Staging) - Phase D-1 申込 API / D-2 マジックリンクで使用
+# =============================================================================
+SENDGRID_API_KEY=op://EcAuth/ecauth-staging-app/sendgrid_api_key

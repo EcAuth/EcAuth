@@ -30,6 +30,7 @@ namespace IdentityProvider.Models
         public DbSet<WebAuthnChallenge> WebAuthnChallenges { get; set; }
         public DbSet<AccountOrganization> AccountOrganizations { get; set; }
         public DbSet<MagicLoginToken> MagicLoginTokens { get; set; }
+        public DbSet<SignupRequest> SignupRequests { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -255,6 +256,21 @@ namespace IdentityProvider.Models
 
             modelBuilder.Entity<MagicLoginToken>()
                 .HasIndex(t => new { t.RequestedIp, t.CreatedAt });
+
+            // SignupRequest: 申込段階では Organization 未作成のため、Organization 経由ではなく
+            // TenantName カラムで直接テナントフィルターを適用する (Organization エンティティと同じ直接フィルター方式)。
+            modelBuilder.Entity<SignupRequest>()
+                .HasQueryFilter(sr => sr.TenantName == _tenantService.TenantName);
+
+            // ConfirmTokenHash はグローバルにユニーク
+            modelBuilder.Entity<SignupRequest>()
+                .HasIndex(sr => sr.ConfirmTokenHash)
+                .IsUnique()
+                .HasDatabaseName("IX_signup_request_confirm_token_hash");
+
+            // 未確認の申込をテナント単位で検索するための補助インデックス
+            modelBuilder.Entity<SignupRequest>()
+                .HasIndex(sr => new { sr.TenantName, sr.ConfirmedAt });
 
             base.OnModelCreating(modelBuilder);
         }

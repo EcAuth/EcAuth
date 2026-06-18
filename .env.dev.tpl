@@ -114,6 +114,15 @@ STG_ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
 # 申込・マジックリンクのメール送信 (Phase D で使用)。ローカルはダミー値。
 SENDGRID_API_KEY=dummy_sendgrid_api_key
 
+# 申込確認 URL の基底 (Phase D-1)。SignupService.BuildConfirmUrl() がテナント別に
+# Signup:ConfirmBaseUrl:{tenant_name} を「フォールバックなし」で必須参照するため、
+# accounts / stg-accounts org が seed されるローカルでも設定が必要 (未設定だと例外)。
+# ローカルには専用フロントが無いため IdP 自身の origin を指す。env-var 名にハイフンは
+# 使えないため stg-accounts は stg_accounts に正規化する (本番 Terraform と同じ規約)。
+# 将来のローカル signup E2E が accounts/stg-accounts テナントを叩く際に参照される。
+Signup__ConfirmBaseUrl__accounts=https://localhost:8081
+Signup__ConfirmBaseUrl__stg_accounts=https://localhost:8081
+
 # =============================================================================
 # EC-CUBE 2系プラグイン Settings (ローカル開発用ダミー値)
 # =============================================================================

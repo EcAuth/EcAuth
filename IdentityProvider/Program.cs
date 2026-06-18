@@ -30,6 +30,12 @@ builder.Services.AddScoped<IWebAuthnChallengeService, WebAuthnChallengeService>(
 builder.Services.AddScoped<IB2BUserService, B2BUserService>();
 builder.Services.AddScoped<IB2BPasskeyService, B2BPasskeyService>();
 
+// Account 申込フロー（Phase D-1）関連サービス
+builder.Services.AddScoped<ISignupService, SignupService>();
+builder.Services.AddScoped<IEmailService, SendGridEmailService>();
+// ブロックリストは不変のため singleton 登録（DisposableEmailChecker の設計）
+builder.Services.AddSingleton<IDisposableEmailChecker, DisposableEmailChecker>();
+
 // データベース初期化（シーダー）
 builder.Services.AddScoped<IDbSeeder, OrganizationClientSeeder>();
 builder.Services.AddScoped<IDbSeeder, AccountsOrganizationSeeder>();
@@ -83,6 +89,19 @@ builder.Services.AddCors(options =>
               .SetIsOriginAllowedToAllowWildcardSubdomains()
               .AllowAnyHeader()
               .WithMethods("GET", "OPTIONS");
+    });
+
+    // Account 申込 API（/api/signup）の CORS 設定。
+    // 申込フォーム／確認ページを配信する accounts / stg-accounts サイトのみを許可する
+    // （いずれも本番 App Service 上のテナント。Signup:ConfirmBaseUrl:* と同じホスト）。
+    options.AddPolicy(IdentityProvider.Controllers.SignupController.CorsPolicy, policy =>
+    {
+        var allowedOrigins =
+            builder.Configuration.GetSection("Signup:AllowedOrigins").Get<string[]>()
+            ?? new[] { "https://accounts.ec-auth.io", "https://stg-accounts.ec-auth.io" };
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .WithMethods("GET", "POST", "OPTIONS");
     });
 });
 builder.Services.AddControllers();
@@ -172,6 +191,10 @@ app.UseWhen(
     context => context.Request.Path.StartsWithSegments(PlatformApiConstants.PathPrefix),
     appBuilder => appBuilder.UseCors(PlatformApiConstants.CorsPolicy)
 );
+
+// Account 申込 API（/api/signup）の CORS。Controller の [EnableCors] 属性で
+// SignupController.CorsPolicy を適用するため、パイプラインに CORS ミドルウェアを配置する。
+app.UseCors();
 
 app.UseMiddleware<TenantMiddleware>();
 

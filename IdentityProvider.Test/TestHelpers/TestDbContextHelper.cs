@@ -2,6 +2,7 @@ using IdentityProvider.Models;
 using IdentityProvider.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using System.Security.Cryptography;
 
 namespace IdentityProvider.Test.TestHelpers
@@ -27,6 +28,10 @@ namespace IdentityProvider.Test.TestHelpers
             var dbName = databaseName ?? Guid.NewGuid().ToString();
             var options = new DbContextOptionsBuilder<EcAuthDbContext>()
                 .UseInMemoryDatabase(databaseName: dbName)
+                // InMemory プロバイダーはトランザクション非対応のため、
+                // BeginTransaction を呼ぶサービス（SignupService 等）のテストで例外化される
+                // TransactionIgnoredWarning を無視する。
+                .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
                 .Options;
 
             var mockTenantService = tenantService ?? new MockTenantService();
