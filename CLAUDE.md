@@ -59,7 +59,7 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 | `authenticate/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `credential_lookup` / `fido2_make_assertion` / `signcount_persist` / `challenge_consume`） |
 | `/api/signup/request` | `validate` / `persist` / `send_email` |
 | `/api/signup/confirm` | `token_lookup` / `confirm` |
-| `/api/signup/status/{token}` | `status_lookup` |
+| `/api/signup/status` | `status_lookup` |
 
 #### Application Insights クエリ例
 
