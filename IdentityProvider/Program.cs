@@ -92,13 +92,17 @@ builder.Services.AddCors(options =>
     });
 
     // Account 申込 API（/api/signup）の CORS 設定。
-    // 申込フォーム／確認ページを配信する accounts / stg-accounts サイトのみを許可する
-    // （いずれも本番 App Service 上のテナント。Signup:ConfirmBaseUrl:* と同じホスト）。
+    // 申込フォーム／確認ページはフロントエンド（Cloudflare Pages）から配信され、API は別ホスト
+    // （accounts.ec-auth.io / stg-accounts.ec-auth.io）に露出するためクロスオリジンになる。
+    // 本番フロントは ec-auth.io / www.ec-auth.io。staging プレビュー Pages など追加のオリジンは
+    // Signup:AllowedOrigins（本番 Terraform app_settings で注入）で上書きする。
+    // ※ accounts / stg-accounts は B2B パスキー org 用テナント（= API のホスト）であって
+    //    フロントの配信元ではない点に注意（フォールバックには含めない）。
     options.AddPolicy(IdentityProvider.Controllers.SignupController.CorsPolicy, policy =>
     {
         var allowedOrigins =
             builder.Configuration.GetSection("Signup:AllowedOrigins").Get<string[]>()
-            ?? new[] { "https://accounts.ec-auth.io", "https://stg-accounts.ec-auth.io" };
+            ?? new[] { "https://ec-auth.io", "https://www.ec-auth.io" };
         policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .WithMethods("GET", "POST", "OPTIONS");
