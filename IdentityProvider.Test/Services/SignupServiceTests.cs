@@ -79,7 +79,8 @@ namespace IdentityProvider.Test.Services
             var values = new Dictionary<string, string?>();
             if (withConfirmBaseUrl)
             {
-                values[$"Signup:ConfirmBaseUrl:{Tenant}"] = "https://accounts.ec-auth.io";
+                // ConfirmBaseUrl はフロントエンド（確認ページ）の配信元。accounts テナントは本番フロント ec-auth.io。
+                values[$"Signup:ConfirmBaseUrl:{Tenant}"] = "https://ec-auth.io";
             }
             return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
         }
@@ -203,7 +204,8 @@ namespace IdentityProvider.Test.Services
             var config = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["Signup:ConfirmBaseUrl:stg_accounts"] = "https://stg-accounts.ec-auth.io"
+                    // stg_accounts のフロントは専用プレビュー Pages（値はテスト上任意。ここではキー正規化を検証）。
+                    ["Signup:ConfirmBaseUrl:stg_accounts"] = "https://stg-preview.ec-auth.io"
                 })
                 .Build();
 
@@ -223,7 +225,7 @@ namespace IdentityProvider.Test.Services
             await service.RequestAsync(ValidInput());
 
             Assert.NotNull(capturedUrl);
-            Assert.StartsWith("https://stg-accounts.ec-auth.io/signup/confirm?token=", capturedUrl);
+            Assert.StartsWith("https://stg-preview.ec-auth.io/signup/confirm?token=", capturedUrl);
         }
 
         // ---- RequestAsync バリデーションエラー ----

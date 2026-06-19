@@ -83,8 +83,12 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy(PlatformApiConstants.CorsPolicy, policy =>
     {
-        var allowedOrigins = builder.Configuration.GetSection("PlatformApi:AllowedOrigins").Get<string[]>()
-            ?? throw new InvalidOperationException("PlatformApi:AllowedOrigins が appsettings に定義されていません。");
+        var allowedOrigins = NormalizeOrigins(
+            builder.Configuration.GetSection("PlatformApi:AllowedOrigins").Get<string[]>());
+        if (allowedOrigins.Length == 0)
+        {
+            throw new InvalidOperationException("PlatformApi:AllowedOrigins が appsettings に定義されていません。");
+        }
         policy.WithOrigins(allowedOrigins)
               .SetIsOriginAllowedToAllowWildcardSubdomains()
               .AllowAnyHeader()
@@ -92,13 +96,20 @@ builder.Services.AddCors(options =>
     });
 
     // Account 申込 API（/api/signup）の CORS 設定。
-    // 申込フォーム／確認ページを配信する accounts / stg-accounts サイトのみを許可する
-    // （いずれも本番 App Service 上のテナント。Signup:ConfirmBaseUrl:* と同じホスト）。
+    // 申込フォーム／確認ページはフロントエンド（Cloudflare Pages）から配信され、API は別ホスト
+    // （accounts.ec-auth.io / stg-accounts.ec-auth.io）に露出するためクロスオリジンになる。
+    // 本番フロントは ec-auth.io / www.ec-auth.io。staging プレビュー Pages など追加のオリジンは
+    // Signup:AllowedOrigins（本番 Terraform app_settings で注入）で上書きする。
+    // ※ accounts / stg-accounts は B2B パスキー org 用テナント（= API のホスト）であって
+    //    フロントの配信元ではない点に注意（フォールバックには含めない）。
     options.AddPolicy(IdentityProvider.Controllers.SignupController.CorsPolicy, policy =>
     {
-        var allowedOrigins =
-            builder.Configuration.GetSection("Signup:AllowedOrigins").Get<string[]>()
-            ?? new[] { "https://accounts.ec-auth.io", "https://stg-accounts.ec-auth.io" };
+        var allowedOrigins = NormalizeOrigins(
+            builder.Configuration.GetSection("Signup:AllowedOrigins").Get<string[]>());
+        if (allowedOrigins.Length == 0)
+        {
+            allowedOrigins = new[] { "https://ec-auth.io", "https://www.ec-auth.io" };
+        }
         policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .WithMethods("GET", "POST", "OPTIONS");
@@ -227,3 +238,15 @@ app.MapGet("/healthz", async (EcAuthDbContext dbContext) =>
 });
 
 app.Run();
+
+// CORS の WithOrigins は origin を完全一致（scheme + host + port）で比較するため、
+// 末尾スラッシュ付き・前後空白・空値が混入するとマッチしない。設定ミス時の原因切り分けが
+// 難しくなるのを避けるため、両 CORS ポリシーのフォールバック値を共通でサニタイズする。
+// （正規化後に空かどうかの扱いは呼び出し側で判断する: PlatformApi は例外、Signup は既定値）
+static string[] NormalizeOrigins(string[]? origins) =>
+    (origins ?? Array.Empty<string>())
+        .Select(o => o?.Trim().TrimEnd('/'))
+        .Where(o => !string.IsNullOrWhiteSpace(o))
+        .Select(o => o!)
+        .Distinct()
+        .ToArray();
