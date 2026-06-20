@@ -8,12 +8,45 @@ using IdentityProvider.Models;
 using IdentityProvider.Services;
 using Asp.Versioning;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpContextAccessor();
+
+// リバースプロキシ（Cloudflare）からの実クライアント IP 復元設定。
+// 本番 API ホストは Cloudflare プロキシ配下のため RemoteIpAddress は Cloudflare のエッジ IP になる。
+// CF-Connecting-IP を ForwardedFor として読み、RemoteIpAddress を実クライアント IP に復元する。
+// これにより IP ベースのレート制限（MagicLinkService）や Application Insights の client_IP が
+// 実クライアント IP を参照できる。コントローラ側は RemoteIpAddress を読むだけでよい（横断対応）。
+// KnownNetworks に Cloudflare のエッジ CIDR を登録し、Cloudflare 以外から来た CF-Connecting-IP は
+// 信頼しない（偽装によるレート制限回避を防ぐ）。最終的な信頼境界は本番のオリジンロック
+// （Azure access restriction = Cloudflare IP 限定、ecauth-infrastructure 側）で担保する。
+builder.Services.Configure<CloudflareOptions>(
+    builder.Configuration.GetSection(CloudflareOptions.SectionName));
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    var cloudflare = builder.Configuration.GetSection(CloudflareOptions.SectionName)
+        .Get<CloudflareOptions>() ?? new CloudflareOptions();
+
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
+    // Cloudflare は実クライアント IP を CF-Connecting-IP に単一値で格納する（X-Forwarded-For は多段で連なる）。
+    options.ForwardedForHeaderName = "CF-Connecting-IP";
+    // 既知プロキシ（Cloudflare エッジ）である限り遡る。信頼は KnownNetworks で制御する。
+    options.ForwardLimit = null;
+
+    // CIDR のパースは System.Net.IPNetwork（CIDR 文字列の TryParse 対応）で行い、
+    // KnownNetworks が要求する Microsoft.AspNetCore.HttpOverrides.IPNetwork に変換する。
+    foreach (var cidr in cloudflare.TrustedIpRanges)
+    {
+        if (System.Net.IPNetwork.TryParse(cidr, out var parsed))
+        {
+            options.KnownNetworks.Add(new IPNetwork(parsed.BaseAddress, parsed.PrefixLength));
+        }
+    }
+});
 builder.Services.AddScoped<IIssuerResolver, IssuerResolver>();
 builder.Services.AddScoped<ITenantService, TenantService>();
 builder.Services.AddScoped<IUserService, UserService>();
@@ -180,6 +213,12 @@ using (var scope = app.Services.CreateScope())
 }
 
 // Configure the HTTP request pipeline.
+
+// リバースプロキシ（Cloudflare）からの実クライアント IP 復元。RemoteIpAddress を参照する
+// 後続のミドルウェア・OpenTelemetry instrumentation（Application Insights の client_IP）より
+// 前に置く必要があるため、パイプライン先頭で実行する。
+app.UseForwardedHeaders();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
