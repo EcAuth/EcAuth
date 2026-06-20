@@ -1,5 +1,6 @@
 using IdentityProvider.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace IdentityProvider.Services
 {
@@ -13,27 +14,28 @@ namespace IdentityProvider.Services
     /// </summary>
     public class MagicLinkCleanupService : BackgroundService
     {
-        // クリーンアップ実行間隔（日次）。
-        private static readonly TimeSpan Interval = TimeSpan.FromHours(24);
-
-        // トークンの保持期間。作成から 7 日を過ぎた行を削除する。
-        private static readonly TimeSpan Retention = TimeSpan.FromDays(7);
+        // クリーンアップ実行間隔と保持期間（既定は日次・7 日）。MagicLinkOptions から導出する。
+        private readonly TimeSpan _interval;
+        private readonly TimeSpan _retention;
 
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<MagicLinkCleanupService> _logger;
 
         public MagicLinkCleanupService(
             IServiceScopeFactory scopeFactory,
+            IOptions<MagicLinkOptions> options,
             ILogger<MagicLinkCleanupService> logger)
         {
             _scopeFactory = scopeFactory;
+            _interval = TimeSpan.FromHours(options.Value.CleanupIntervalHours);
+            _retention = TimeSpan.FromDays(options.Value.RetentionDays);
             _logger = logger;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            // 起動直後に 1 回実行し、以降は Interval ごとに実行する。
-            using var timer = new PeriodicTimer(Interval);
+            // 起動直後に 1 回実行し、以降は設定された間隔ごとに実行する。
+            using var timer = new PeriodicTimer(_interval);
             do
             {
                 try
@@ -59,7 +61,7 @@ namespace IdentityProvider.Services
             using var scope = _scopeFactory.CreateScope();
             var context = scope.ServiceProvider.GetRequiredService<EcAuthDbContext>();
 
-            var cutoff = DateTimeOffset.UtcNow - Retention;
+            var cutoff = DateTimeOffset.UtcNow - _retention;
             var deleted = await context.MagicLoginTokens
                 .Where(t => t.CreatedAt < cutoff)
                 .ExecuteDeleteAsync(ct);
@@ -68,7 +70,7 @@ namespace IdentityProvider.Services
             {
                 _logger.LogInformation(
                     "期限切れマジックリンクトークンを {Count} 件削除しました（保持期間: {RetentionDays} 日）。",
-                    deleted, Retention.TotalDays);
+                    deleted, _retention.TotalDays);
             }
         }
     }

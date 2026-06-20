@@ -5,24 +5,16 @@ using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Telemetry;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace IdentityProvider.Services
 {
     /// <inheritdoc cref="IMagicLinkService" />
     public class MagicLinkService : IMagicLinkService
     {
-        // マジックリンクトークンの有効期限（設計上 10 分）。
-        private static readonly TimeSpan TokenLifetime = TimeSpan.FromMinutes(10);
-
-        // トークンのバイト長（32 byte = 256 bit）。
+        // トークンのバイト長（32 byte = 256 bit）。エントロピーはセキュリティパラメータのため
+        // 設定化せず定数で固定する（MagicLinkOptions のコメント参照）。
         private const int TokenBytes = 32;
-
-        // レート制限: 同一メールは 5 分に 1 回。
-        private static readonly TimeSpan EmailRateWindow = TimeSpan.FromMinutes(5);
-
-        // レート制限: 同一 IP は 1 時間に 10 回。
-        private static readonly TimeSpan IpRateWindow = TimeSpan.FromHours(1);
-        private const int IpRateLimit = 10;
 
         // 設定キーのテナント部を環境変数名に使える形へ正規化する正規表現（SignupService と同方針）。
         // 環境変数名はハイフンを含められない（Azure Linux App Service が拒否）ため、
@@ -35,6 +27,7 @@ namespace IdentityProvider.Services
         private readonly IAuthorizationCodeService _authorizationCodeService;
         private readonly IEmailService _emailService;
         private readonly IConfiguration _configuration;
+        private readonly MagicLinkOptions _options;
         private readonly ILogger<MagicLinkService> _logger;
 
         public MagicLinkService(
@@ -44,6 +37,7 @@ namespace IdentityProvider.Services
             IAuthorizationCodeService authorizationCodeService,
             IEmailService emailService,
             IConfiguration configuration,
+            IOptions<MagicLinkOptions> options,
             ILogger<MagicLinkService> logger)
         {
             _context = context;
@@ -52,6 +46,7 @@ namespace IdentityProvider.Services
             _authorizationCodeService = authorizationCodeService;
             _emailService = emailService;
             _configuration = configuration;
+            _options = options.Value;
             _logger = logger;
         }
 
@@ -98,7 +93,7 @@ namespace IdentityProvider.Services
                 AccountSubject = account?.Subject,
                 RequestedEmailHash = emailHash,
                 TokenHash = tokenHash,
-                ExpiresAt = now + TokenLifetime,
+                ExpiresAt = now + TimeSpan.FromMinutes(_options.TokenLifetimeMinutes),
                 RequestedIp = Truncate(ipAddress, 45),
                 RequestedUserAgent = Truncate(userAgent, 1000),
                 CreatedAt = now
@@ -228,8 +223,8 @@ namespace IdentityProvider.Services
         private async Task EnforceRateLimitAsync(
             string emailHash, string? ipAddress, DateTimeOffset now, CancellationToken ct)
         {
-            // 同一メールは 5 分に 1 回（直近ウィンドウ内に 1 件でもあれば拒否）。
-            var emailWindowStart = now - EmailRateWindow;
+            // 同一メールはウィンドウ内に 1 回のみ（直近ウィンドウ内に 1 件でもあれば拒否）。
+            var emailWindowStart = now - TimeSpan.FromMinutes(_options.EmailRateLimitWindowMinutes);
             var recentByEmail = await _context.MagicLoginTokens
                 .CountAsync(t => t.RequestedEmailHash == emailHash && t.CreatedAt > emailWindowStart, ct);
             if (recentByEmail >= 1)
@@ -237,13 +232,13 @@ namespace IdentityProvider.Services
                 throw RateLimited();
             }
 
-            // 同一 IP は 1 時間に 10 回。IP が取得できない場合は IP ベースの制限を適用しない。
+            // 同一 IP はウィンドウ内に上限回数まで。IP が取得できない場合は IP ベースの制限を適用しない。
             if (!string.IsNullOrWhiteSpace(ipAddress))
             {
-                var ipWindowStart = now - IpRateWindow;
+                var ipWindowStart = now - TimeSpan.FromMinutes(_options.IpRateLimitWindowMinutes);
                 var recentByIp = await _context.MagicLoginTokens
                     .CountAsync(t => t.RequestedIp == ipAddress && t.CreatedAt > ipWindowStart, ct);
-                if (recentByIp >= IpRateLimit)
+                if (recentByIp >= _options.IpRateLimitMaxRequests)
                 {
                     throw RateLimited();
                 }

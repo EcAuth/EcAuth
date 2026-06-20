@@ -7,6 +7,7 @@ using IdentityProvider.Test.TestHelpers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Xunit;
 
@@ -50,8 +51,9 @@ namespace IdentityProvider.Test.Services
                 IAuthorizationCodeService authorizationCodeService,
                 IEmailService emailService,
                 IConfiguration configuration,
+                IOptions<MagicLinkOptions> options,
                 ILogger<MagicLinkService> logger)
-                : base(ctx, tenantService, accountService, authorizationCodeService, emailService, configuration, logger)
+                : base(ctx, tenantService, accountService, authorizationCodeService, emailService, configuration, options, logger)
             {
                 _ctx = ctx;
             }
@@ -154,6 +156,7 @@ namespace IdentityProvider.Test.Services
                 authCodeMock.Object,
                 emailMock.Object,
                 CreateConfiguration(),
+                Options.Create(new MagicLinkOptions()),
                 _logger);
         }
 

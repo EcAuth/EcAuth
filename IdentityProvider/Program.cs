@@ -37,8 +37,12 @@ builder.Services.AddScoped<IEmailService, SendGridEmailService>();
 builder.Services.AddSingleton<IDisposableEmailChecker, DisposableEmailChecker>();
 
 // マジックリンクログイン（Phase D-2）関連サービス
+// 時間・回数ポリシーは MagicLinkOptions に集約。未設定でも既定値で動作し、
+// 構成セクション "MagicLink"（例: MagicLink__RetentionDays）があれば上書きされる。
+builder.Services.Configure<MagicLinkOptions>(
+    builder.Configuration.GetSection(MagicLinkOptions.SectionName));
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
-// 期限切れトークンの日次クリーンアップ（保持期間 7 日）
+// 期限切れトークンの日次クリーンアップ（既定の保持期間 7 日）
 builder.Services.AddHostedService<MagicLinkCleanupService>();
 
 // データベース初期化（シーダー）
