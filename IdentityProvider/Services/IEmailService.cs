@@ -15,5 +15,13 @@ namespace IdentityProvider.Services
         /// <param name="confirmUrl">申込確認用 URL</param>
         /// <param name="ct">キャンセルトークン</param>
         Task SendSignupConfirmationAsync(string toEmail, string organizationName, string confirmUrl, CancellationToken ct = default);
+
+        /// <summary>
+        /// パスキー紛失時のリカバリ動線として、マジックリンクログイン用のリンクをメール送信する。
+        /// </summary>
+        /// <param name="toEmail">送信先メールアドレス（Account の登録メール）</param>
+        /// <param name="magicLinkUrl">マジックリンクのログイン URL（フロントエンドの <c>/signin/magic-link</c>）</param>
+        /// <param name="ct">キャンセルトークン</param>
+        Task SendMagicLoginLinkAsync(string toEmail, string magicLinkUrl, CancellationToken ct = default);
     }
 }

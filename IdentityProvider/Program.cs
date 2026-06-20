@@ -36,6 +36,11 @@ builder.Services.AddScoped<IEmailService, SendGridEmailService>();
 // ブロックリストは不変のため singleton 登録（DisposableEmailChecker の設計）
 builder.Services.AddSingleton<IDisposableEmailChecker, DisposableEmailChecker>();
 
+// マジックリンクログイン（Phase D-2）関連サービス
+builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
+// 期限切れトークンの日次クリーンアップ（保持期間 7 日）
+builder.Services.AddHostedService<MagicLinkCleanupService>();
+
 // データベース初期化（シーダー）
 builder.Services.AddScoped<IDbSeeder, OrganizationClientSeeder>();
 builder.Services.AddScoped<IDbSeeder, AccountsOrganizationSeeder>();
