@@ -255,8 +255,9 @@ namespace IdentityProvider.Services
         private async Task<(Client client, string redirectUri)> ResolveAccountClientAsync(
             int organizationId, CancellationToken ct)
         {
+            // account は GetBySubjectAsync でテナント分離済み。その OrganizationId で Client を絞るため、
+            // テナントクエリフィルター（将来 Client に追加された場合も含む）はそのまま尊重する。
             var client = await _context.Clients
-                .IgnoreQueryFilters()
                 .Include(c => c.RedirectUris)
                 .FirstOrDefaultAsync(
                     c => c.OrganizationId == organizationId && c.SubjectType == SubjectType.Account, ct);
