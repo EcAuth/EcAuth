@@ -41,6 +41,12 @@ namespace IdentityProvider.Migrations
             //   ガード3: 既に 64 桁 hex 形状の external_id を検出して停止する。これは (a) 偶然 64 桁 hex の平文 login_id
             //            （値の形状だけでは適用済みハッシュと区別不能）、(b) 部分適用/手動再実行で一部だけハッシュ済みの
             //            状態、のいずれかを示す。誤って二重ハッシュ/スキップせず、手動確認を促すために停止する。
+            //   ガード4: ASCII 印字可能文字（U+0020〜U+007E）以外を含む external_id を検出して停止する。
+            //            SQL の LOWER は 1→1 のコードポイント変換で、C# String.ToLowerInvariant と一部の非 ASCII 文字で
+            //            乖離し得る（例: U+0130 'İ' は .NET では不変だが SQL CS_AS_SC では 'i' に変換され、ハッシュが
+            //            食い違い移行後にログイン不能になる）。case マッピングを持たない非 ASCII（日本語カナ等）は一致するが、
+            //            SQL では「C# と一致する非 ASCII」だけを厳密に選別できないため、安全側に倒して非 ASCII を一律停止し
+            //            手動確認/個別対応（C# でのハッシュ化など）を促す。ASCII データのみなら従来どおり通過する。
             //
             // 注意: CLAUDE.md のルールに従い、external_id を参照する文は EXEC() でラップして名前解決を
             //       実行時まで遅延させる（idempotent script では全マイグレーションが 1 バッチでコンパイルされ、
@@ -68,6 +74,17 @@ namespace IdentityProvider.Migrations
                               )
                         )
                             THROW 50001, ''HashB2BUserExternalId: external_id with leading/trailing non-space whitespace (Char.IsWhiteSpace) detected. C# Trim() would not match this SQL hash. Clean the data before re-running.'', 1;
+                    ');
+
+                    -- ガード4: ASCII 印字可能文字（U+0020〜U+007E）以外を含む行を検出
+                    --          （SQL LOWER と C# ToLowerInvariant が乖離し得るため。BIN2 でコードポイント厳密照合）
+                    EXEC('
+                        IF EXISTS (
+                            SELECT 1 FROM dbo.b2b_user
+                            WHERE external_id <> ''''
+                              AND external_id COLLATE Latin1_General_100_BIN2 LIKE ''%[^ -~]%'' COLLATE Latin1_General_100_BIN2
+                        )
+                            THROW 50004, ''HashB2BUserExternalId: external_id with non-ASCII characters detected. SQL LOWER and C# ToLowerInvariant may diverge (e.g. U+0130). Hash these rows in C#, or clean/verify the data, before re-running.'', 1;
                     ');
 
                     -- ガード3: 既に 64 桁 hex 形状の external_id を検出（二重ハッシュ/平文取りこぼし防止）
