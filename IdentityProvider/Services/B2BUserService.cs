@@ -129,9 +129,14 @@ namespace IdentityProvider.Services
             }
 
             // 部分更新（nullでないフィールドのみ更新）
-            // external_id は正規化 + ハッシュ化して保持する。空白は更新対象外（無効値のため）。
-            if (!string.IsNullOrWhiteSpace(request.ExternalId))
+            // external_id は正規化 + ハッシュ化して保持する。null は「更新しない」を意味するが、
+            // 空文字・空白は無効値のため silent skip せず fail-fast で弾く。
+            if (request.ExternalId != null)
             {
+                if (string.IsNullOrWhiteSpace(request.ExternalId))
+                {
+                    throw new ArgumentException("ExternalId を空文字または空白にすることはできません。", nameof(request));
+                }
                 user.ExternalId = ExternalIdHasher.Hash(request.ExternalId);
             }
 

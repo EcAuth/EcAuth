@@ -399,6 +399,34 @@ namespace IdentityProvider.Test.Services
             Assert.True(result.UpdatedAt >= user.CreatedAt);
         }
 
+        [Theory]
+        [InlineData("")]
+        [InlineData("   ")]
+        public async Task UpdateAsync_EmptyOrWhitespaceExternalId_ShouldThrowArgumentException(string externalId)
+        {
+            // Arrange: 更新対象ユーザーを用意（ExternalId 検証は Subject 解決後に行われるため）。
+            var user = new B2BUser
+            {
+                Subject = "empty-externalid-subject",
+                ExternalId = ExternalIdHasher.Hash("original@example.com"),
+                UserType = "admin",
+                OrganizationId = 1,
+                Organization = _organization
+            };
+            _context.B2BUsers.Add(user);
+            await _context.SaveChangesAsync();
+
+            var request = new IB2BUserService.UpdateUserRequest
+            {
+                Subject = "empty-externalid-subject",
+                ExternalId = externalId // 空文字/空白は無効値
+            };
+
+            // Act & Assert: silent skip せず fail-fast で弾く。
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() => _service.UpdateAsync(request));
+            Assert.Contains("ExternalId", ex.Message);
+        }
+
         [Fact]
         public async Task UpdateAsync_PartialUpdate_ShouldOnlyUpdateProvidedFields()
         {
