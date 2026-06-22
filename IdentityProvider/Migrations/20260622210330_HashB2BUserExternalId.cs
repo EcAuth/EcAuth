@@ -16,10 +16,12 @@ namespace IdentityProvider.Migrations
             //   normalized = email.Trim().ToLowerInvariant()
             //   hash       = Convert.ToHexString(SHA256(UTF8(normalized)))   // 大文字 hex 64 文字
             // これを T-SQL で再現する:
-            //   - 正規化:   LOWER(LTRIM(RTRIM(external_id)) COLLATE Latin1_General_100_BIN2)
-            //               ※ LOWER は照合順序依存のため、引数側にバイナリ照合順序（BIN2）を適用してコードポイント
-            //                  ベースの小文字化（ToLowerInvariant 相当）にする。DB デフォルト照合順序のまま LOWER を
-            //                  使うと、例えば Turkish 照合では 'I' → 'ı' となり ToLowerInvariant の 'i' と乖離する。
+            //   - 正規化:   LOWER(LTRIM(RTRIM(external_id)) COLLATE Latin1_General_100_CS_AS_SC)
+            //               ※ LOWER は照合順序依存のため、引数側に Latin1 の大文字小文字マッピングを持つ照合順序
+            //                  （CS_AS_SC）を明示し、DB デフォルト照合順序に依存しない invariant 相当の小文字化にする。
+            //                  DB デフォルトのまま LOWER を使うと、例えば Turkish 照合では 'I' → 'ı' となり
+            //                  ToLowerInvariant の 'i' と乖離する。CS_AS_SC は 'I' → 'i' と正しく小文字化する
+            //                  （実 SQL Server 2022 / Turkish 既定照合 DB で C# EmailHashUtil との一致を確認済み）。
             //   - UTF-8:    CONVERT(varchar, ... COLLATE Latin1_General_100_CI_AS_SC_UTF8) で UTF-8 バイト列にする
             //               （nvarchar のまま HASHBYTES に渡すと UTF-16LE バイトになり C# と一致しないため必須）
             //   - SHA-256:  HASHBYTES('SHA2_256', ...)
@@ -86,7 +88,7 @@ namespace IdentityProvider.Migrations
                                 SELECT organization_id,
                                        CONVERT(varchar(64), HASHBYTES(''SHA2_256'',
                                            CONVERT(varchar(1020),
-                                                   LOWER(LTRIM(RTRIM(external_id)) COLLATE Latin1_General_100_BIN2) COLLATE Latin1_General_100_CI_AS_SC_UTF8)), 2) AS h
+                                                   LOWER(LTRIM(RTRIM(external_id)) COLLATE Latin1_General_100_CS_AS_SC) COLLATE Latin1_General_100_CI_AS_SC_UTF8)), 2) AS h
                                 FROM dbo.b2b_user
                                 WHERE external_id <> ''''
                             ) s
@@ -101,7 +103,7 @@ namespace IdentityProvider.Migrations
                         UPDATE dbo.b2b_user
                         SET external_id = CONVERT(varchar(64), HASHBYTES(''SHA2_256'',
                             CONVERT(varchar(1020),
-                                    LOWER(LTRIM(RTRIM(external_id)) COLLATE Latin1_General_100_BIN2) COLLATE Latin1_General_100_CI_AS_SC_UTF8)), 2)
+                                    LOWER(LTRIM(RTRIM(external_id)) COLLATE Latin1_General_100_CS_AS_SC) COLLATE Latin1_General_100_CI_AS_SC_UTF8)), 2)
                         WHERE external_id <> ''''
                     ');
                 END
