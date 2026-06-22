@@ -41,7 +41,8 @@ namespace IdentityProvider.Services
             var user = new B2BUser
             {
                 Subject = subject,
-                ExternalId = request.ExternalId,
+                // external_id は個人情報を含み得るため、正規化 + SHA-256 ハッシュ化して保持する。
+                ExternalId = ExternalIdHasher.Hash(request.ExternalId),
                 UserType = request.UserType,
                 OrganizationId = request.OrganizationId,
                 CreatedAt = now,
@@ -90,16 +91,20 @@ namespace IdentityProvider.Services
                 return null;
             }
 
+            // external_id はハッシュ化して保持しているため、検索キーも同じく正規化 + ハッシュ化する。
+            var externalIdHash = ExternalIdHasher.Hash(externalId);
+
             var user = await _context.B2BUsers
                 .Include(u => u.Organization)
                 .Include(u => u.PasskeyCredentials)
-                .FirstOrDefaultAsync(u => u.ExternalId == externalId && u.OrganizationId == organizationId);
+                .FirstOrDefaultAsync(u => u.ExternalId == externalIdHash && u.OrganizationId == organizationId);
 
             if (user == null)
             {
+                // 平文 external_id は PII を含み得るためログにはハッシュ値のみ残す。
                 _logger.LogDebug(
-                    "B2Bユーザーが見つかりません: ExternalId={ExternalId}, OrganizationId={OrganizationId}",
-                    externalId, organizationId);
+                    "B2Bユーザーが見つかりません: ExternalIdHash={ExternalIdHash}, OrganizationId={OrganizationId}",
+                    externalIdHash, organizationId);
             }
 
             return user;
@@ -124,9 +129,15 @@ namespace IdentityProvider.Services
             }
 
             // 部分更新（nullでないフィールドのみ更新）
+            // external_id は正規化 + ハッシュ化して保持する。null は「更新しない」を意味するが、
+            // 空文字・空白は無効値のため silent skip せず fail-fast で弾く。
             if (request.ExternalId != null)
             {
-                user.ExternalId = request.ExternalId;
+                if (string.IsNullOrWhiteSpace(request.ExternalId))
+                {
+                    throw new ArgumentException("ExternalId を空文字または空白にすることはできません。", nameof(request));
+                }
+                user.ExternalId = ExternalIdHasher.Hash(request.ExternalId);
             }
 
             if (request.UserType != null)

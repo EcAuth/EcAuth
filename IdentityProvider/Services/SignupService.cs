@@ -210,11 +210,12 @@ namespace IdentityProvider.Services
                 };
                 _context.Accounts.Add(account);
 
-                // B2BUser（Subject を Account と共有、external_id=email、受付テナント Org 所属）。
+                // B2BUser（Subject を Account と共有、external_id=SHA-256(email)、受付テナント Org 所属）。
+                // external_id は個人情報を含むため正規化 + ハッシュ化して保持する（Account.email は表示用に平文保持）。
                 var b2bUser = new B2BUser
                 {
                     Subject = subject,
-                    ExternalId = signupRequest.Email,
+                    ExternalId = ExternalIdHasher.Hash(signupRequest.Email),
                     UserType = "account_owner",
                     OrganizationId = accountsOrg.Id
                 };

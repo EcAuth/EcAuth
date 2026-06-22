@@ -53,7 +53,8 @@ namespace IdentityProvider.Test.Services
             Assert.NotNull(result);
             Assert.NotNull(result.User);
             Assert.NotEmpty(result.User.Subject);
-            Assert.Equal(request.ExternalId, result.User.ExternalId);
+            // external_id はハッシュ化して保持される。
+            Assert.Equal(ExternalIdHasher.Hash(request.ExternalId), result.User.ExternalId);
             Assert.Equal(request.UserType, result.User.UserType);
             Assert.Equal(request.OrganizationId, result.User.OrganizationId);
             Assert.True(result.User.CreatedAt <= DateTimeOffset.UtcNow);
@@ -283,10 +284,11 @@ namespace IdentityProvider.Test.Services
         public async Task GetByExternalIdAsync_ExistingUser_ShouldReturn()
         {
             // Arrange
+            // 永続化層には external_id のハッシュ値が格納されている状態を再現する。
             var user = new B2BUser
             {
                 Subject = "test-subject-456",
-                ExternalId = "unique-external-id",
+                ExternalId = ExternalIdHasher.Hash("unique-external-id"),
                 UserType = "admin",
                 OrganizationId = 1,
                 Organization = _organization
@@ -294,13 +296,37 @@ namespace IdentityProvider.Test.Services
             _context.B2BUsers.Add(user);
             await _context.SaveChangesAsync();
 
-            // Act
+            // Act: 検索キーは平文で渡す（サービス内部でハッシュ化して照合する）。
             var result = await _service.GetByExternalIdAsync("unique-external-id", 1);
 
             // Assert
             Assert.NotNull(result);
-            Assert.Equal("unique-external-id", result.ExternalId);
+            Assert.Equal(ExternalIdHasher.Hash("unique-external-id"), result.ExternalId);
             Assert.Equal("test-subject-456", result.Subject);
+        }
+
+        [Fact]
+        public async Task CreateThenGetByExternalId_RoundTrip_ShouldResolveByPlaintext()
+        {
+            // Arrange: CreateAsync で平文を渡すと external_id はハッシュ化されて保存される。
+            const string plaintextExternalId = "roundtrip-admin@example.com";
+            var created = await _service.CreateAsync(new IB2BUserService.CreateUserRequest
+            {
+                ExternalId = plaintextExternalId,
+                UserType = "admin",
+                OrganizationId = 1
+            });
+
+            // 保存値はハッシュ（平文は残らない）。
+            Assert.Equal(ExternalIdHasher.Hash(plaintextExternalId), created.User.ExternalId);
+            Assert.NotEqual(plaintextExternalId, created.User.ExternalId);
+
+            // Act: 検索も平文で行い、内部でハッシュ化して同一ユーザーに解決できる。
+            var resolved = await _service.GetByExternalIdAsync(plaintextExternalId, 1);
+
+            // Assert
+            Assert.NotNull(resolved);
+            Assert.Equal(created.User.Subject, resolved!.Subject);
         }
 
         [Fact]
@@ -368,9 +394,37 @@ namespace IdentityProvider.Test.Services
 
             // Assert
             Assert.NotNull(result);
-            Assert.Equal("new-external-id", result.ExternalId);
+            Assert.Equal(ExternalIdHasher.Hash("new-external-id"), result.ExternalId);
             Assert.Equal("staff", result.UserType);
             Assert.True(result.UpdatedAt >= user.CreatedAt);
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("   ")]
+        public async Task UpdateAsync_EmptyOrWhitespaceExternalId_ShouldThrowArgumentException(string externalId)
+        {
+            // Arrange: 更新対象ユーザーを用意（ExternalId 検証は Subject 解決後に行われるため）。
+            var user = new B2BUser
+            {
+                Subject = "empty-externalid-subject",
+                ExternalId = ExternalIdHasher.Hash("original@example.com"),
+                UserType = "admin",
+                OrganizationId = 1,
+                Organization = _organization
+            };
+            _context.B2BUsers.Add(user);
+            await _context.SaveChangesAsync();
+
+            var request = new IB2BUserService.UpdateUserRequest
+            {
+                Subject = "empty-externalid-subject",
+                ExternalId = externalId // 空文字/空白は無効値
+            };
+
+            // Act & Assert: silent skip せず fail-fast で弾く。
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() => _service.UpdateAsync(request));
+            Assert.Contains("ExternalId", ex.Message);
         }
 
         [Fact]
@@ -400,7 +454,7 @@ namespace IdentityProvider.Test.Services
 
             // Assert
             Assert.NotNull(result);
-            Assert.Equal("updated-external-id", result.ExternalId);
+            Assert.Equal(ExternalIdHasher.Hash("updated-external-id"), result.ExternalId);
             Assert.Equal("admin", result.UserType); // 変更されていない
         }
 

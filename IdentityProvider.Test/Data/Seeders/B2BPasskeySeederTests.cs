@@ -1,5 +1,6 @@
 using IdentityProvider.Data.Seeders;
 using IdentityProvider.Models;
+using IdentityProvider.Services;
 using IdentityProvider.Test.TestHelpers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -301,7 +302,8 @@ namespace IdentityProvider.Test.Data.Seeders
 
             Assert.NotNull(user);
             Assert.Equal(subject, user.Subject);
-            Assert.Equal(externalId, user.ExternalId);
+            // シーダーも external_id を正規化 + ハッシュ化して保持する。
+            Assert.Equal(ExternalIdHasher.Hash(externalId), user.ExternalId);
             Assert.Equal("admin", user.UserType);
             Assert.Equal(_organization.Id, user.OrganizationId);
         }

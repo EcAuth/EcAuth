@@ -199,11 +199,13 @@ namespace IdentityProvider.Services
                 });
 
             // Fido2ユーザー作成
+            // user.ExternalId はハッシュ値のため認証器の表示名には使えない。
+            // WebAuthn の name/displayName にはリクエスト由来の平文 external_id（login_id 等）を用いる。
             var fido2User = new Fido2User
             {
                 Id = Encoding.UTF8.GetBytes(resolvedSubject),
-                Name = user.ExternalId,
-                DisplayName = request.DisplayName ?? user.ExternalId
+                Name = request.ExternalId,
+                DisplayName = request.DisplayName ?? request.ExternalId
             };
 
             // 認証器選択オプション
@@ -271,7 +273,10 @@ namespace IdentityProvider.Services
         private async Task<B2BUser> SyncExternalIdIfChangedAsync(
             B2BUser user, string requestedExternalId, int organizationId)
         {
-            if (string.Equals(user.ExternalId, requestedExternalId, StringComparison.Ordinal))
+            // user.ExternalId はハッシュ値で保持されているため、リクエストの平文 external_id も
+            // 同じく正規化 + ハッシュ化してから比較・同期する。
+            var requestedExternalIdHash = ExternalIdHasher.Hash(requestedExternalId);
+            if (string.Equals(user.ExternalId, requestedExternalIdHash, StringComparison.Ordinal))
             {
                 return user;
             }
@@ -281,8 +286,9 @@ namespace IdentityProvider.Services
             if (conflictingUser != null
                 && !string.Equals(conflictingUser.Subject, user.Subject, StringComparison.Ordinal))
             {
+                // 例外メッセージはサーバーログに残るため、平文 external_id ではなくハッシュ値を含める。
                 throw new ExternalIdConflictException(
-                    $"ExternalId '{requestedExternalId}' is already used by another user in this organization.");
+                    $"ExternalId (hash '{requestedExternalIdHash}') is already used by another user in this organization.");
             }
 
             // external_id の具体値は PII を含み得るため Information ログには含めない。
@@ -290,9 +296,10 @@ namespace IdentityProvider.Services
             _logger.LogInformation(
                 "Syncing ExternalId for B2BUser: Subject={Subject}, OrganizationId={OrganizationId}",
                 user.Subject, user.OrganizationId);
+            // Old/New ともハッシュ値で記録する（平文 external_id は PII を含み得るためログに残さない）。
             _logger.LogDebug(
-                "ExternalId sync values: Subject={Subject}, Old={OldExternalId}, New={NewExternalId}",
-                user.Subject, user.ExternalId, requestedExternalId);
+                "ExternalId sync values: Subject={Subject}, OldHash={OldExternalIdHash}, NewHash={NewExternalIdHash}",
+                user.Subject, user.ExternalId, requestedExternalIdHash);
 
             try
             {

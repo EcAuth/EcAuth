@@ -72,7 +72,9 @@ namespace IdentityProvider.Test.Services
             {
                 Id = 1,
                 Subject = TestB2BSubject,
-                ExternalId = "admin@example.com",
+                // 永続化層には external_id のハッシュ値が格納されている状態を再現する
+                // （B2BUserService 経由で保存されたユーザーは external_id がハッシュ化済み）。
+                ExternalId = ExternalIdHasher.Hash("admin@example.com"),
                 UserType = "admin",
                 OrganizationId = 1,
                 Organization = _organization
@@ -132,6 +134,38 @@ namespace IdentityProvider.Test.Services
             Assert.NotNull(result);
             Assert.Equal("session-123", result.SessionId);
             Assert.NotNull(result.Options);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_WebAuthnUserName_UsesPlaintextExternalId()
+        {
+            // Arrange: WebAuthn の user.name/displayName は認証器に表示されるため、
+            // ハッシュ値ではなくリクエスト由来の平文 external_id（login_id 等）を使う。
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = "admin@example.com" // _testUser のハッシュ値と一致（同期は発生しない）
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(_testUser);
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(new IWebAuthnChallengeService.ChallengeResult
+                {
+                    SessionId = "session-name",
+                    Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                    ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+                });
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert: name/displayName は平文、かつ保存済みハッシュ値とは一致しない。
+            Assert.Equal("admin@example.com", result.Options.User.Name);
+            Assert.Equal("admin@example.com", result.Options.User.DisplayName);
+            Assert.NotEqual(_testUser.ExternalId, result.Options.User.Name);
         }
 
         [Theory]
@@ -629,7 +663,8 @@ namespace IdentityProvider.Test.Services
             // Act & Assert
             var ex = await Assert.ThrowsAsync<ExternalIdConflictException>(() =>
                 _service.CreateRegistrationOptionsAsync(request));
-            Assert.Contains("other-admin@example.com", ex.Message);
+            // 例外メッセージには平文ではなくハッシュ値が含まれる（PII をログに残さないため）。
+            Assert.Contains(ExternalIdHasher.Hash("other-admin@example.com"), ex.Message);
             _mockUserService.Verify(x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()), Times.Never);
         }
 
@@ -2137,7 +2172,8 @@ namespace IdentityProvider.Test.Services
             {
                 Id = 2,
                 Subject = TestB2BSubject2,
-                ExternalId = "admin2@example.com",
+                // 永続化層のハッシュ値を再現（request2.ExternalId = "admin2@example.com" と一致させ同期を発生させない）
+                ExternalId = ExternalIdHasher.Hash("admin2@example.com"),
                 UserType = "admin",
                 OrganizationId = 2,
                 Organization = org2
