@@ -1,4 +1,5 @@
 using IdentityProvider.Models;
+using IdentityProvider.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace IdentityProvider.Data.Seeders;
@@ -169,7 +170,7 @@ public class B2BPasskeySeeder : IDbSeeder
     private static async Task<bool> SeedB2BUserAsync(
         EcAuthDbContext context,
         string b2bUserSubject,
-        string? b2bUserExternalId,
+        string b2bUserExternalId,
         string? organizationCode,
         ILogger logger)
     {
@@ -196,7 +197,9 @@ public class B2BPasskeySeeder : IDbSeeder
         context.B2BUsers.Add(new B2BUser
         {
             Subject = b2bUserSubject,
-            ExternalId = b2bUserExternalId,
+            // external_id は個人情報を含み得るため、書き込み経路と同じく正規化 + ハッシュ化して保持する。
+            // 環境変数 {prefix}_B2B_USER_EXTERNAL_ID には従来どおり平文 login_id を設定する。
+            ExternalId = ExternalIdHasher.Hash(b2bUserExternalId),
             UserType = "admin",
             OrganizationId = organization.Id
         });

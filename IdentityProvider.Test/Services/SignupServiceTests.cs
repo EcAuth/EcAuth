@@ -437,7 +437,8 @@ namespace IdentityProvider.Test.Services
             var b2bUser = await context.B2BUsers.IgnoreQueryFilters().FirstOrDefaultAsync();
             Assert.NotNull(b2bUser);
             Assert.Equal(account!.Subject, b2bUser!.Subject);
-            Assert.Equal(account.Email, b2bUser.ExternalId);
+            // external_id は Account.email を正規化 + ハッシュ化した値（平文 email は B2BUser には保持しない）。
+            Assert.Equal(ExternalIdHasher.Hash(account.Email), b2bUser.ExternalId);
             Assert.Single(await context.Clients.IgnoreQueryFilters().ToListAsync());
             Assert.Single(await context.RsaKeyPairs.IgnoreQueryFilters().ToListAsync());
             Assert.Single(await context.AccountOrganizations.ToListAsync());
