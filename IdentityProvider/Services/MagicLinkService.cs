@@ -121,7 +121,21 @@ namespace IdentityProvider.Services
             var magicLinkUrl = BuildMagicLinkUrl(token);
             using (TimingScope.Begin("send_email"))
             {
-                await _emailService.SendMagicLoginLinkAsync(account.Email, magicLinkUrl, ct);
+                // メール送信失敗（SendGrid 4xx/5xx・API キー未設定等で InvalidOperationException）を
+                // 呼び出し元に伝播させると、登録済みメールのみ 500・未登録は 200 となり Account 存否が
+                // 漏れる（Email enumeration）。送信失敗は内部に留め（ログのみ）、Account 存在有無に
+                // 関わらず常に正常 return する。送信失敗の検知は運用ログに委ねる。
+                try
+                {
+                    await _emailService.SendMagicLoginLinkAsync(account.Email, magicLinkUrl, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "マジックリンクメールの送信に失敗しました（enumeration 防止のため握りつぶし）: Tenant={Tenant}, TokenHash={TokenHash}",
+                        _tenantService.TenantName, TokenHashPrefix(token));
+                }
             }
         }
 

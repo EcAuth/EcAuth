@@ -275,6 +275,28 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(429, ex.StatusCode);
         }
 
+        [Fact]
+        public async Task RequestAsync_EmailSendFailure_DoesNotThrowAndPersistsToken()
+        {
+            var tenant = CreateTenantService();
+            using var context = TestDbContextHelper.CreateInMemoryContext(tenantService: tenant);
+            SeedAccountsOrg(context);
+            SeedAccount(context);
+
+            var service = CreateService(context, tenant, out var emailMock, out _, out _);
+            // SendGrid 障害・API キー未設定相当（InvalidOperationException）。
+            emailMock
+                .Setup(e => e.SendMagicLoginLinkAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("SendGrid unavailable"));
+
+            // 送信失敗でも例外を伝播させない（登録済みのみ 500・未登録 200 という enumeration を防ぐ）。
+            await service.RequestAsync(AccountEmail, "203.0.113.9", "UnitTest/1.0");
+
+            // トークンは記録されている（リクエスト自体は受理）。
+            var token = await context.MagicLoginTokens.AsNoTracking().SingleAsync();
+            Assert.Equal(AccountSubject, token.AccountSubject);
+        }
+
         // ---- VerifyAsync ----
 
         private static async Task<string> InsertMagicTokenAsync(
