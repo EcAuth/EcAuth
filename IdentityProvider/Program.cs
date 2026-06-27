@@ -21,7 +21,7 @@ builder.Services.AddHttpContextAccessor();
 // CF-Connecting-IP を ForwardedFor として読み、RemoteIpAddress を実クライアント IP に復元する。
 // これにより IP ベースのレート制限（MagicLinkService）や Application Insights の client_IP が
 // 実クライアント IP を参照できる。コントローラ側は RemoteIpAddress を読むだけでよい（横断対応）。
-// KnownNetworks に Cloudflare のエッジ CIDR を登録し、Cloudflare 以外から来た CF-Connecting-IP は
+// KnownIPNetworks に Cloudflare のエッジ CIDR を登録し、Cloudflare 以外から来た CF-Connecting-IP は
 // 信頼しない（偽装によるレート制限回避を防ぐ）。最終的な信頼境界は本番のオリジンロック
 // （Azure access restriction = Cloudflare IP 限定、ecauth-infrastructure 側）で担保する。
 builder.Services.Configure<CloudflareOptions>(
@@ -34,17 +34,30 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
     // Cloudflare は実クライアント IP を CF-Connecting-IP に単一値で格納する（X-Forwarded-For は多段で連なる）。
     options.ForwardedForHeaderName = "CF-Connecting-IP";
-    // 既知プロキシ（Cloudflare エッジ）である限り遡る。信頼は KnownNetworks で制御する。
+    // 既知プロキシ（Cloudflare エッジ）である限り遡る。信頼は KnownIPNetworks で制御する。
     options.ForwardLimit = null;
 
-    // CIDR のパースは System.Net.IPNetwork（CIDR 文字列の TryParse 対応）で行い、
-    // KnownNetworks が要求する Microsoft.AspNetCore.HttpOverrides.IPNetwork に変換する。
-    foreach (var cidr in cloudflare.TrustedIpRanges)
+    // 設定上書きで空配列や無効な CIDR（typo 等）が入ると、信頼する Cloudflare CIDR が登録されず
+    // ForwardedHeaders が CF-Connecting-IP を信頼できなくなる（全リクエストが単一の Cloudflare
+    // エッジ IP から来たように見え、IP ベースのレート制限が機能しなくなる）。設定ミスを起動時に
+    // 検知するため、空・無効 CIDR は黙って無視せず例外で停止する（fail-closed）。
+    if (cloudflare.TrustedIpRanges is not { Count: > 0 } trustedIpRanges)
     {
-        if (System.Net.IPNetwork.TryParse(cidr, out var parsed))
+        throw new InvalidOperationException(
+            "Cloudflare:TrustedIpRanges には少なくとも 1 件の CIDR を設定してください。");
+    }
+
+    // .NET 10 では ForwardedHeadersOptions.KnownNetworks と Microsoft.AspNetCore.HttpOverrides.IPNetwork
+    // は obsolete（ASPDEPR005）。KnownIPNetworks + System.Net.IPNetwork を使う。
+    foreach (var cidr in trustedIpRanges)
+    {
+        if (!System.Net.IPNetwork.TryParse(cidr, out var parsed))
         {
-            options.KnownNetworks.Add(new IPNetwork(parsed.BaseAddress, parsed.PrefixLength));
+            throw new InvalidOperationException(
+                $"Cloudflare:TrustedIpRanges に無効な CIDR が含まれています: {cidr}");
         }
+
+        options.KnownIPNetworks.Add(parsed);
     }
 });
 builder.Services.AddScoped<IIssuerResolver, IssuerResolver>();
