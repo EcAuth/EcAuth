@@ -445,5 +445,33 @@ namespace IdentityProvider.Test.Services
                 a => a.GenerateAuthorizationCodeAsync(It.IsAny<IAuthorizationCodeService.AuthorizationCodeRequest>()),
                 Times.Never);
         }
+
+        [Fact]
+        public async Task VerifyAsync_LoginNotConfigured_DoesNotConsumeToken()
+        {
+            var tenant = CreateTenantService();
+            using var context = TestDbContextHelper.CreateInMemoryContext(tenantService: tenant);
+            SeedAccountsOrg(context);
+            var account = SeedAccount(context);
+            // 管理コンソール Client を投入しない → ResolveAccountClientAsync が login_not_configured(500)。
+
+            var rawToken = await InsertMagicTokenAsync(context, DateTimeOffset.UtcNow.AddMinutes(10));
+
+            var service = CreateService(context, tenant, out _, out var accountMock, out var authCodeMock);
+            accountMock.Setup(a => a.GetBySubjectAsync(AccountSubject)).ReturnsAsync(account);
+
+            var ex = await Assert.ThrowsAsync<MagicLinkException>(() => service.VerifyAsync(rawToken));
+            Assert.Equal(500, ex.StatusCode);
+
+            // 解決失敗は消費の前なので、トークンは消費されない（設定を直せば再試行できる）。
+            context.ChangeTracker.Clear();
+            var token = await context.MagicLoginTokens.AsNoTracking().SingleAsync();
+            Assert.Null(token.UsedAt);
+
+            // 認可コードも発行されていない。
+            authCodeMock.Verify(
+                a => a.GenerateAuthorizationCodeAsync(It.IsAny<IAuthorizationCodeService.AuthorizationCodeRequest>()),
+                Times.Never);
+        }
     }
 }

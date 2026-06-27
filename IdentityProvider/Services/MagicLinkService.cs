@@ -150,34 +150,25 @@ namespace IdentityProvider.Services
             var tokenHash = HashToken(token);
             var now = DateTimeOffset.UtcNow;
 
-            // 単発使用は Compare-And-Set で保証する。read -> check -> update の 3 ステップでは
-            // Race Condition により複数回ログインが成立しうるため、未使用かつ未期限切れの行のみを
-            // 対象とするアトミックな UPDATE を実行し、影響行数 1 を成功とする（設計書のセキュリティ要件）。
-            int affected;
-            using (TimingScope.Begin("token_consume"))
+            // まずトークンを read で事前検証する（消費はまだ行わない）。Account / Client の解決を
+            // 消費の前に済ませることで、設定ミス（login_not_configured）や Account 欠落で失敗しても
+            // ワンタイムトークンを焼かない（設定を直せば配信済みリンクが再び使える）。
+            // 最終的な単発保証は後段の Compare-And-Set 消費で行う。この事前 read と消費の間に別リクエストが
+            // 割り込んでも、アトミックな UPDATE の影響行数で 1 件だけが成立する（二重ログインは起きない）。
+            MagicLoginToken? magicToken;
+            using (TimingScope.Begin("token_lookup"))
             {
-                affected = await TryConsumeTokenAsync(tokenHash, now, ct);
+                magicToken = await _context.MagicLoginTokens
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(
+                        t => t.TokenHash == tokenHash && t.UsedAt == null && t.ExpiresAt > now, ct);
             }
-
-            if (affected != 1)
-            {
-                // 無効／期限切れ／使用済みを区別せず同一エラーとする（情報を漏らさない）。
-                _logger.LogWarning(
-                    "マジックリンクトークンの消費に失敗しました（無効／期限切れ／使用済み）: Tenant={Tenant}, TokenHash={TokenHash}",
-                    _tenantService.TenantName, TokenHashPrefix(token));
-                throw InvalidToken();
-            }
-
-            // 消費に成功した行を取得する（ExecuteUpdate はトラッキングを経由しないため再取得する）。
-            var magicToken = await _context.MagicLoginTokens
-                .AsNoTracking()
-                .FirstOrDefaultAsync(t => t.TokenHash == tokenHash, ct);
 
             if (magicToken?.AccountSubject == null)
             {
-                // Account 不在のリクエストで作られた行（レート制限カウント用）。通常は到達しない。
+                // 無効／期限切れ／使用済み／Account 不在（レート制限用の行）を区別せず同一エラーとする。
                 _logger.LogWarning(
-                    "消費したマジックリンクトークンに AccountSubject がありません: Tenant={Tenant}, TokenHash={TokenHash}",
+                    "マジックリンクトークンが無効です（無効／期限切れ／使用済み／Account 不在）: Tenant={Tenant}, TokenHash={TokenHash}",
                     _tenantService.TenantName, TokenHashPrefix(token));
                 throw InvalidToken();
             }
@@ -194,7 +185,25 @@ namespace IdentityProvider.Services
             }
 
             // ログイン先（管理コンソール）の Client と登録済みリダイレクト URI を解決する。
+            // ここまでを消費の前に行うため、解決失敗時にトークンは焼けない。
             var (client, redirectUri) = await ResolveAccountClientAsync(account.OrganizationId, ct);
+
+            // 単発使用は Compare-And-Set で保証する。未使用かつ未期限切れの行のみを対象とする
+            // アトミックな UPDATE を実行し、影響行数 1 を成功とする（並行リクエストはここで 1 件だけ通る）。
+            int affected;
+            using (TimingScope.Begin("token_consume"))
+            {
+                affected = await TryConsumeTokenAsync(tokenHash, now, ct);
+            }
+
+            if (affected != 1)
+            {
+                // 事前 read 後・消費前に別リクエストが消費した／期限切れになった等。同一エラーで返す。
+                _logger.LogWarning(
+                    "マジックリンクトークンの消費に失敗しました（並行使用／期限切れ）: Tenant={Tenant}, TokenHash={TokenHash}",
+                    _tenantService.TenantName, TokenHashPrefix(token));
+                throw InvalidToken();
+            }
 
             var authCode = await _authorizationCodeService.GenerateAuthorizationCodeAsync(
                 new IAuthorizationCodeService.AuthorizationCodeRequest
