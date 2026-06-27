@@ -33,7 +33,13 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     var cloudflare = builder.Configuration.GetSection(CloudflareOptions.SectionName)
         .Get<CloudflareOptions>() ?? new CloudflareOptions();
 
-    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
+    // XForwardedProto を含めないと、TLS 終端（Cloudflare / Azure フロントエンド）配下で
+    // リクエスト scheme が http のままになり、OIDC discovery の issuer / jwks_uri が http:// で
+    // 生成される（→ JWKS が http→https リダイレクト 301 を返しフェデレーションが壊れる）。
+    // このオプションは Azure App Service が自動有効化する ForwardedHeaders ミドルウェア
+    // （ASPNETCORE_FORWARDEDHEADERS_ENABLED）と明示 UseForwardedHeaders() の双方に適用されるため、
+    // XForwardedFor だけに絞ると scheme 復元（既定の Proto 処理）まで無効化してしまう点に注意。
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
     // Cloudflare は実クライアント IP を CF-Connecting-IP に単一値で格納する（X-Forwarded-For は多段で連なる）。
     options.ForwardedForHeaderName = "CF-Connecting-IP";
     // 既知プロキシ（Cloudflare エッジ）である限り遡る。信頼は KnownIPNetworks で制御する。
