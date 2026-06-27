@@ -123,6 +123,15 @@ SENDGRID_API_KEY=dummy_sendgrid_api_key
 Signup__ConfirmBaseUrl__accounts=https://localhost:8081
 Signup__ConfirmBaseUrl__stg_accounts=https://localhost:8081
 
+# マジックリンク URL の基底 (Phase D-2)。MagicLinkService.BuildMagicLinkUrl() がテナント別に
+# MagicLink:BaseUrl:{tenant_name} を「フォールバックなし」で必須参照する (未設定だと例外)。
+# ConfirmBaseUrl と同じくフロント配信元 (Cloudflare Pages) のベース URL を指す。メール内リンクは
+# {base}/signin/magic-link?token=... 形式で、フロントが POST /api/account/magic-link/verify を発行する。
+# env-var 名にハイフンは使えないため stg-accounts は stg_accounts に正規化する。
+# ローカルには専用フロントが無いため IdP 自身の origin を指す。
+MagicLink__BaseUrl__accounts=https://localhost:8081
+MagicLink__BaseUrl__stg_accounts=https://localhost:8081
+
 # =============================================================================
 # EC-CUBE 2系プラグイン Settings (ローカル開発用ダミー値)
 # =============================================================================

@@ -8,12 +8,58 @@ using IdentityProvider.Models;
 using IdentityProvider.Services;
 using Asp.Versioning;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpContextAccessor();
+
+// リバースプロキシ（Cloudflare）からの実クライアント IP 復元設定。
+// 本番 API ホストは Cloudflare プロキシ配下のため RemoteIpAddress は Cloudflare のエッジ IP になる。
+// CF-Connecting-IP を ForwardedFor として読み、RemoteIpAddress を実クライアント IP に復元する。
+// これにより IP ベースのレート制限（MagicLinkService）や Application Insights の client_IP が
+// 実クライアント IP を参照できる。コントローラ側は RemoteIpAddress を読むだけでよい（横断対応）。
+// KnownIPNetworks に Cloudflare のエッジ CIDR を登録し、Cloudflare 以外から来た CF-Connecting-IP は
+// 信頼しない（偽装によるレート制限回避を防ぐ）。最終的な信頼境界は本番のオリジンロック
+// （Azure access restriction = Cloudflare IP 限定、ecauth-infrastructure 側）で担保する。
+builder.Services.Configure<CloudflareOptions>(
+    builder.Configuration.GetSection(CloudflareOptions.SectionName));
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    var cloudflare = builder.Configuration.GetSection(CloudflareOptions.SectionName)
+        .Get<CloudflareOptions>() ?? new CloudflareOptions();
+
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
+    // Cloudflare は実クライアント IP を CF-Connecting-IP に単一値で格納する（X-Forwarded-For は多段で連なる）。
+    options.ForwardedForHeaderName = "CF-Connecting-IP";
+    // 既知プロキシ（Cloudflare エッジ）である限り遡る。信頼は KnownIPNetworks で制御する。
+    options.ForwardLimit = null;
+
+    // 設定上書きで空配列や無効な CIDR（typo 等）が入ると、信頼する Cloudflare CIDR が登録されず
+    // ForwardedHeaders が CF-Connecting-IP を信頼できなくなる（全リクエストが単一の Cloudflare
+    // エッジ IP から来たように見え、IP ベースのレート制限が機能しなくなる）。設定ミスを起動時に
+    // 検知するため、空・無効 CIDR は黙って無視せず例外で停止する（fail-closed）。
+    if (cloudflare.TrustedIpRanges is not { Count: > 0 } trustedIpRanges)
+    {
+        throw new InvalidOperationException(
+            "Cloudflare:TrustedIpRanges には少なくとも 1 件の CIDR を設定してください。");
+    }
+
+    // .NET 10 では ForwardedHeadersOptions.KnownNetworks と Microsoft.AspNetCore.HttpOverrides.IPNetwork
+    // は obsolete（ASPDEPR005）。KnownIPNetworks + System.Net.IPNetwork を使う。
+    foreach (var cidr in trustedIpRanges)
+    {
+        if (!System.Net.IPNetwork.TryParse(cidr, out var parsed))
+        {
+            throw new InvalidOperationException(
+                $"Cloudflare:TrustedIpRanges に無効な CIDR が含まれています: {cidr}");
+        }
+
+        options.KnownIPNetworks.Add(parsed);
+    }
+});
 builder.Services.AddScoped<IIssuerResolver, IssuerResolver>();
 builder.Services.AddScoped<ITenantService, TenantService>();
 builder.Services.AddScoped<IUserService, UserService>();
@@ -35,6 +81,15 @@ builder.Services.AddScoped<ISignupService, SignupService>();
 builder.Services.AddScoped<IEmailService, SendGridEmailService>();
 // ブロックリストは不変のため singleton 登録（DisposableEmailChecker の設計）
 builder.Services.AddSingleton<IDisposableEmailChecker, DisposableEmailChecker>();
+
+// マジックリンクログイン（Phase D-2）関連サービス
+// 時間・回数ポリシーは MagicLinkOptions に集約。未設定でも既定値で動作し、
+// 構成セクション "MagicLink"（例: MagicLink__RetentionDays）があれば上書きされる。
+builder.Services.Configure<MagicLinkOptions>(
+    builder.Configuration.GetSection(MagicLinkOptions.SectionName));
+builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
+// 期限切れトークンの日次クリーンアップ（既定の保持期間 7 日）
+builder.Services.AddHostedService<MagicLinkCleanupService>();
 
 // データベース初期化（シーダー）
 builder.Services.AddScoped<IDbSeeder, OrganizationClientSeeder>();
@@ -171,6 +226,12 @@ using (var scope = app.Services.CreateScope())
 }
 
 // Configure the HTTP request pipeline.
+
+// リバースプロキシ（Cloudflare）からの実クライアント IP 復元。RemoteIpAddress を参照する
+// 後続のミドルウェア・OpenTelemetry instrumentation（Application Insights の client_IP）より
+// 前に置く必要があるため、パイプライン先頭で実行する。
+app.UseForwardedHeaders();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();

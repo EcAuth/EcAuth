@@ -42,6 +42,16 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 - DbInitializer / シーダーが参照する環境変数は **Azure ランタイム（Terraform `app_settings`）** に設定が必要。CI ワークフローに定義があっても、Terraform に漏れているとアプリ起動時にシーダーがスキップされる
 - B2BPasskeySeeder は DEV 環境では `DEFAULT_*` を、Staging/Production では `STAGING_*` / `PROD_*` プレフィックスの変数を参照する分岐がある。シーダーのコード（`B2BPasskeySeeder.cs`）で実際に参照される全変数名を確認すること
 
+**配線先は「消費箇所」で判断する（4箇所すべてに一律で入れない）:**
+
+> ⚠️ レビュー bot（CodeRabbit / claude-review / github-actions）は「新規環境変数を 4 箇所すべてに追加せよ」と機械的に指摘しがちだが、**配線先はその変数がどこで消費されるかで決まる**。以下の区別に従うこと（この区別は設計判断であり、未追跡の欠落ではない）。
+
+- **CI ステップ（マイグレーション / デプロイ / 起動時シード）が参照する値** → CI ワークフロー（`staging.yml` / `production.yml`）にも配線する。
+  - 例: `ACCOUNTS_*` / `STG_ACCOUNTS_*` / `SENDGRID_API_KEY`（`production.yml` に存在。コメント「実際のランタイム注入は Terraform app_settings。ここは CI 配線」を参照）。
+- **アプリのリクエスト処理時のみ消費される非秘密の設定値** → CI ワークフローには**入れない**。`.env.dev.tpl`（ローカル）+ **Azure ランタイム（Terraform `app_settings`）** のみに配線する。CI はランタイム `app_settings` を運ばないため。
+  - 例: `Signup:ConfirmBaseUrl:{tenant}` / `MagicLink:BaseUrl:{tenant}`（`BuildConfirmUrl` / `BuildMagicLinkUrl` がリクエスト時に参照。`.yml` には無いのが正しい）。
+- **機能が動作する環境にのみ配線する**。例: `accounts` / `stg-accounts`（Account 申込・マジックリンク）機能は**本番 App Service のみ**で動く（staging は F プランで accounts org をシードしない）。よって配線先は `environments/production/main.tf` であって `environments/staging/main.tf` ではなく、staging の `.env.staging.tpl` / `staging.yml` にも入れない。
+
 ### Application Insights 上のステップ別プロファイリング
 
 `/token` `/userinfo` `register/verify` `authenticate/verify` の各エンドポイントは、`IdentityProvider.Telemetry.TimingScope` を使った `using` ブロックで処理ステップ毎の所要時間を `Activity.Current` のタグとして記録している。Azure Monitor が `Activity` タグを自動的に `customDimensions` にマッピングするため、本番テレメトリ上で内訳をクエリできる。
@@ -60,6 +70,8 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 | `/api/signup/request` | `validate` / `persist` / `send_email` |
 | `/api/signup/confirm` | `token_lookup` / `confirm` |
 | `/api/signup/status` | `status_lookup` |
+| `/api/account/magic-link/request` | `rate_limit` / `account_lookup` / `persist` / `send_email` |
+| `/api/account/magic-link/verify` | `token_lookup` / `token_consume` |
 
 #### Application Insights クエリ例
 
