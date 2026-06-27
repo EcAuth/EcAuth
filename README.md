@@ -45,3 +45,5 @@ docker compose -p ec-auth --ansi never exec db /opt/mssql-tools18/bin/sqlcmd -S 
 ## See Also
 
 - https://github.com/efcore/EFCore.FSharp/blob/master/GETTING_STARTED.md
+
+<!-- claude review author 検証用の一時追記（このPRはマージしません） -->
