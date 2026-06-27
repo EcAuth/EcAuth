@@ -60,6 +60,8 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 | `/api/signup/request` | `validate` / `persist` / `send_email` |
 | `/api/signup/confirm` | `token_lookup` / `confirm` |
 | `/api/signup/status` | `status_lookup` |
+| `/api/account/magic-link/request` | `rate_limit` / `account_lookup` / `persist` / `send_email` |
+| `/api/account/magic-link/verify` | `token_consume` |
 
 #### Application Insights クエリ例
 
