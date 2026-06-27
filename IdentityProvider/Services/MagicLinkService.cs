@@ -113,7 +113,8 @@ namespace IdentityProvider.Services
             if (account == null)
             {
                 // 存在しない宛先にはメールを送らない。送信処理ぶんの時間差で存在を推測されないよう
-                // ダミーのハッシュ計算で処理時間を合わせる。
+                // ダミーのハッシュ計算で処理時間を近づける（PerformDummyHash の現状仕様・既知の制約を参照。
+                // SendGrid の ms オーダーとは完全には揃わない。後続課題 EcAuthDocs#91 で追跡）。
                 PerformDummyHash();
                 return;
             }
@@ -380,7 +381,20 @@ namespace IdentityProvider.Services
 
         /// <summary>
         /// Account 不在時やメール形式不正時に、処理時間を Account 存在時に近づけるためのダミー計算。
-        /// SHA-256 を 1 回計算して破棄する（タイミング差による enumeration を緩和する）。
+        /// SHA-256 を 1 回計算して破棄する。
+        /// <para>
+        /// <strong>【現状仕様・既知の制約】タイミングサイドチャネルは完全には解消していない。</strong>
+        /// Account 存在時はメール送信（SendGrid への HTTP ラウンドトリップ, 数十〜数百 ms）を伴う一方、
+        /// 本ダミー計算は μs オーダーのため、レスポンスタイムを精密計測すると Account の存否を推測しうる
+        /// （レビュー bot がこの点を繰り返し指摘するが、以下のとおり意図的な現状仕様）。
+        /// </para>
+        /// <para>
+        /// 完全な均一化にはメール送信のバックグラウンド化（fire-and-forget）等の構造変更が必要だが、
+        /// リスクは中〜低（漏れるのは存在判定の偵察のみで直接侵入ではない。レート制限
+        /// （email 5 分 1 回 / IP 1 時間 10 回）が列挙速度を抑制）と評価し、本対応は見送る。
+        /// HTTP 200 + 同一メッセージによる enumeration 対策は維持する。タイミング解消は後続課題として
+        /// 追跡する: EcAuthDocs#91「マジックリンク request の Email enumeration タイミングサイドチャネル対策」。
+        /// </para>
         /// </summary>
         private static void PerformDummyHash()
         {
