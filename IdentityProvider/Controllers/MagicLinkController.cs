@@ -36,7 +36,7 @@ namespace IdentityProvider.Controllers
         /// </summary>
         [HttpPost]
         [Route("request")]
-        public async Task<IActionResult> Request([FromBody] MagicLinkRequestDto? body, CancellationToken ct)
+        public async Task<IActionResult> RequestMagicLink([FromBody] MagicLinkRequestDto? body, CancellationToken ct)
         {
             var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
             var userAgent = HttpContext.Request.Headers.UserAgent.ToString();
