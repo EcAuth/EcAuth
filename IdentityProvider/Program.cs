@@ -17,48 +17,37 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHttpContextAccessor();
 
 // リバースプロキシ（Cloudflare）からの実クライアント IP 復元設定。
-// 本番 API ホストは Cloudflare プロキシ配下のため RemoteIpAddress は Cloudflare のエッジ IP になる。
-// CF-Connecting-IP を ForwardedFor として読み、RemoteIpAddress を実クライアント IP に復元する。
-// これにより IP ベースのレート制限（MagicLinkService）や Application Insights の client_IP が
-// 実クライアント IP を参照できる。コントローラ側は RemoteIpAddress を読むだけでよい（横断対応）。
-// KnownIPNetworks に Cloudflare のエッジ CIDR を登録し、Cloudflare 以外から来た CF-Connecting-IP は
-// 信頼しない（偽装によるレート制限回避を防ぐ）。最終的な信頼境界は本番のオリジンロック
-// （Azure access restriction = Cloudflare IP 限定、ecauth-infrastructure 側）で担保する。
-builder.Services.Configure<CloudflareOptions>(
-    builder.Configuration.GetSection(CloudflareOptions.SectionName));
+// 本番 API ホストは Cloudflare プロキシ配下にあり、さらに Azure App Service のプラットフォーム
+// フロントエンドが TLS を終端して Kestrel へ転送する。Kestrel から見た「直前ホップ」は Cloudflare
+// エッジではなく Azure フロントエンドになる点に注意。
+//
+// ForwardedHeaders ミドルウェアは、直前ホップの IP が信頼済み（KnownIPNetworks / KnownProxies に
+// 含まれる）かどうかで転送ヘッダ適用の全体（For も Proto も）をゲートする。Cloudflare の CIDR だけを
+// 登録すると、直前ホップ（Azure フロントエンド）が信頼外となり For/Proto いずれも適用されず、
+//   - scheme が http のままになり OIDC discovery の issuer / jwks_uri が http:// で生成され、
+//     JWKS が http→https リダイレクト 301 を返してフェデレーションが壊れる
+//   - CF-Connecting-IP も復元されず IP ベースのレート制限が機能しない
+// という二重の不具合になる（PR #418 / #429 で発生）。
+//
+// KnownIPNetworks / KnownProxies を両方空にするとトラストチェック自体が無効化され、全フォワーダを
+// 信頼する（Azure 既定の ASPNETCORE_FORWARDEDHEADERS_ENABLED と同じ挙動）。これにより
+//   - X-Forwarded-Proto から scheme=https を復元（issuer / jwks_uri が https に戻る）
+//   - CF-Connecting-IP から実クライアント IP を復元（IP レート制限 / App Insights の client_IP）
+// が成立する。CF-Connecting-IP 偽装によるレート制限回避は、本番のオリジンロック
+// （Azure access restriction = Cloudflare IP 限定、ecauth-infrastructure #120）で防ぐ。これが
+// 唯一かつ本来の信頼境界（旧 CloudflareOptions による KnownIPNetworks 限定は冗長な上、上記の
+// 直前ホップ問題で実際には機能していなかったため撤去した）。
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
-    var cloudflare = builder.Configuration.GetSection(CloudflareOptions.SectionName)
-        .Get<CloudflareOptions>() ?? new CloudflareOptions();
-
-    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor;
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
     // Cloudflare は実クライアント IP を CF-Connecting-IP に単一値で格納する（X-Forwarded-For は多段で連なる）。
     options.ForwardedForHeaderName = "CF-Connecting-IP";
-    // 既知プロキシ（Cloudflare エッジ）である限り遡る。信頼は KnownIPNetworks で制御する。
     options.ForwardLimit = null;
 
-    // 設定上書きで空配列や無効な CIDR（typo 等）が入ると、信頼する Cloudflare CIDR が登録されず
-    // ForwardedHeaders が CF-Connecting-IP を信頼できなくなる（全リクエストが単一の Cloudflare
-    // エッジ IP から来たように見え、IP ベースのレート制限が機能しなくなる）。設定ミスを起動時に
-    // 検知するため、空・無効 CIDR は黙って無視せず例外で停止する（fail-closed）。
-    if (cloudflare.TrustedIpRanges is not { Count: > 0 } trustedIpRanges)
-    {
-        throw new InvalidOperationException(
-            "Cloudflare:TrustedIpRanges には少なくとも 1 件の CIDR を設定してください。");
-    }
-
-    // .NET 10 では ForwardedHeadersOptions.KnownNetworks と Microsoft.AspNetCore.HttpOverrides.IPNetwork
-    // は obsolete（ASPDEPR005）。KnownIPNetworks + System.Net.IPNetwork を使う。
-    foreach (var cidr in trustedIpRanges)
-    {
-        if (!System.Net.IPNetwork.TryParse(cidr, out var parsed))
-        {
-            throw new InvalidOperationException(
-                $"Cloudflare:TrustedIpRanges に無効な CIDR が含まれています: {cidr}");
-        }
-
-        options.KnownIPNetworks.Add(parsed);
-    }
+    // 直前ホップ（Azure フロントエンド）を信頼対象に含めるため、トラストチェックを無効化する。
+    // 信頼境界は本番オリジンロック（#120）に一本化する。
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
 });
 builder.Services.AddScoped<IIssuerResolver, IssuerResolver>();
 builder.Services.AddScoped<ITenantService, TenantService>();
