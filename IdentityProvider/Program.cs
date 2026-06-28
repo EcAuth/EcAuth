@@ -224,10 +224,15 @@ using (var scope = app.Services.CreateScope())
 //  「そもそも実行されていない」のかを切り分けられなかった問題への対応）
 // シード完了直後に明示フラッシュして、起動診断ログを確実にエクスポートする。
 // 接続文字列がある場合のみ OpenTelemetry を有効化しているため、同条件でのみプロバイダを解決する。
+// ForceFlush の既定は Timeout.Infinite（無限待機）。app.Run() 前のこの区間で App Insights 側の
+// 瞬断・遅延が起きると起動が無限ブロックし、コンテナ起動タイムアウト→デプロイ失敗を招きうるため、
+// 有限タイムアウト（5 秒）で best-effort に留める。未送信分は通常の BatchExportProcessor が
+// 背景送信を継続するため、タイムアウトしても即時のログ欠落にはならない。
+const int flushTimeoutMs = 5000;
 if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
 {
-    app.Services.GetService<LoggerProvider>()?.ForceFlush();
-    app.Services.GetService<TracerProvider>()?.ForceFlush();
+    app.Services.GetService<LoggerProvider>()?.ForceFlush(flushTimeoutMs);
+    app.Services.GetService<TracerProvider>()?.ForceFlush(flushTimeoutMs);
 }
 
 // Configure the HTTP request pipeline.
