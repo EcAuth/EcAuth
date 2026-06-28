@@ -11,8 +11,6 @@ using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry;
-using OpenTelemetry.Logs;
-using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -214,25 +212,6 @@ using (var scope = app.Services.CreateScope())
             logger.LogError(ex, "DbInitializer failed. Continuing startup in Production environment.");
         }
     }
-}
-
-// 起動時シーダー（DbInitializer / OrganizationClientSeeder 等）のログ・トレースは app.Run() より前、
-// すなわち OpenTelemetry のバッチ送信（BatchExportProcessor の遅延フラッシュ）が回り切る前の区間で
-// 発生する。デプロイ起動時にプロセスが入れ替わると、これら起動診断ログ（シーダーの実行/スキップ/
-// B2C→B2B 補正/失敗）がフラッシュ前に失われ、本番 App Insights に出ない。
-// （Issue #415: 起動ログが本番テレメトリに現れず、シーダーが「実行されたが補正しなかった」のか
-//  「そもそも実行されていない」のかを切り分けられなかった問題への対応）
-// シード完了直後に明示フラッシュして、起動診断ログを確実にエクスポートする。
-// 接続文字列がある場合のみ OpenTelemetry を有効化しているため、同条件でのみプロバイダを解決する。
-// ForceFlush の既定は Timeout.Infinite（無限待機）。app.Run() 前のこの区間で App Insights 側の
-// 瞬断・遅延が起きると起動が無限ブロックし、コンテナ起動タイムアウト→デプロイ失敗を招きうるため、
-// 有限タイムアウト（5 秒）で best-effort に留める。未送信分は通常の BatchExportProcessor が
-// 背景送信を継続するため、タイムアウトしても即時のログ欠落にはならない。
-const int flushTimeoutMs = 5000;
-if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
-{
-    app.Services.GetService<LoggerProvider>()?.ForceFlush(flushTimeoutMs);
-    app.Services.GetService<TracerProvider>()?.ForceFlush(flushTimeoutMs);
 }
 
 // Configure the HTTP request pipeline.
