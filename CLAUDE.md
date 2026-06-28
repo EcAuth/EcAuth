@@ -125,6 +125,33 @@ using (TimingScope.Begin("my_step"))
 - `Activity.Current` が null（ローカル開発で Application Insights 未設定など）の場合は no-op
 - ネスト可、各スコープが独立して `step.{name}.elapsed_ms` タグを付与
 
+#### 起動時（`app.Run()` 前）のログは App Insights ではなく `AppServiceConsoleLogs` を見る
+
+**重要**: `DbInitializer` / 各 `Seeder`（`OrganizationClientSeeder` の B2C→B2B 補正など）の起動ログは
+**App Insights の `traces` / `AppTraces` には出ない**。App Insights（OpenTelemetry）のログ送信パイプラインは
+host start（`app.Run()` 内の `TelemetryHostedService.StartAsync`）で初めて起動するため、それより前に走る
+起動コードのログは exporter に届かない（`Microsoft.Hosting.Lifetime` の「Application started」が host start の境界）。
+
+これらの起動ログは **コンテナ stdout（既定の Console ロガー）→ Log Analytics の `AppServiceConsoleLogs`** に出る。
+本番 Web App の診断設定（`ecauth-prod-0e9f509a-diag`）が `AppServiceConsoleLogs` / `AppServiceAppLogs` /
+`AppServiceHTTPLogs` を ワークスペース `ecauth-prod-0e9f509a-insights-law`（ワークスペースベース App Insights の
+バック）へ送る配線を**既に持っている**。したがって起動診断はインフラ変更なしで観測できる。
+
+```kusto
+// 起動シーダー / DbInitializer の実行・補正ログ（Log Analytics ワークスペースに対して実行）
+AppServiceConsoleLogs
+| where TimeGenerated > ago(1d)
+| where ResultDescription has "DbInitializer"
+     or ResultDescription has "SubjectType を"   // B2C→B2B 補正ログ（補正が発火したときのみ出力）
+     or ResultDescription has "Seeder"
+| project TimeGenerated, ResultDescription
+| order by TimeGenerated asc
+```
+
+- 切り分けの原則: 起動・マイグレーション・シーダー等 `app.Run()` 前の診断は **`AppServiceConsoleLogs`**、
+  リクエスト処理時（host start 後）の診断は **`traces` / `AppTraces`**。「App Insights に出ない」と感じたら、
+  まず参照テーブルの取り違えを疑う（起動前ログを App Insights に押し込む `ForceFlush` 等の小細工は不要・無効）。
+
 ### マイグレーション設計ルール
 
 - `migrationBuilder.Sql()` でカラムを参照する UPDATE/INSERT 文を書く場合、`EXEC()` 動的 SQL でラップすること
