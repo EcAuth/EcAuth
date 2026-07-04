@@ -176,6 +176,92 @@ namespace IdentityProvider.Test.Data
             Assert.False(wasExecuted);
         }
 
+        [Fact]
+        public async Task InitializeAsync_WhenDatabaseAvailableAfterRetries_ShouldExecuteSeeders()
+        {
+            // Arrange: 2 回失敗した後に接続確立する
+            var wasExecuted = false;
+            var seeder = new TestSeeder("Migration1", 100, () => wasExecuted = true);
+
+            var seeders = new List<IDbSeeder> { seeder };
+            var initializer = new TestableDbInitializer(
+                seeders,
+                _mockLogger.Object,
+                _mockLoggerFactory.Object,
+                new HashSet<string> { "Migration1" },
+                canConnectResults: new[] { false, false, true });
+
+            var configuration = new ConfigurationBuilder().Build();
+
+            // Act
+            await initializer.InitializeAsync(_context, configuration);
+
+            // Assert: リトライ後にシーダーが実行され、2 回待機している
+            Assert.True(wasExecuted);
+            Assert.Equal(2, initializer.DelayCount);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenDatabaseNeverAvailable_ShouldRetryUpToMaxAttempts()
+        {
+            // Arrange: 常に接続失敗。MaxAttempts=3 に設定
+            var wasExecuted = false;
+            var seeder = new TestSeeder("Migration1", 100, () => wasExecuted = true);
+
+            var seeders = new List<IDbSeeder> { seeder };
+            var initializer = new TestableDbInitializer(
+                seeders,
+                _mockLogger.Object,
+                _mockLoggerFactory.Object,
+                new HashSet<string> { "Migration1" },
+                canConnect: false);
+
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DbInitializer:ConnectionRetry:MaxAttempts"] = "3",
+                    ["DbInitializer:ConnectionRetry:DelaySeconds"] = "0",
+                })
+                .Build();
+
+            // Act
+            await initializer.InitializeAsync(_context, configuration);
+
+            // Assert: 全リトライ後もスキップ。試行 3 回のうち待機は 2 回
+            Assert.False(wasExecuted);
+            Assert.Equal(2, initializer.DelayCount);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenDatabaseNotReady_ShouldLogRetryWarning()
+        {
+            // Arrange: 1 回失敗後に接続確立
+            var seeder = new TestSeeder("Migration1", 100, () => { });
+
+            var seeders = new List<IDbSeeder> { seeder };
+            var initializer = new TestableDbInitializer(
+                seeders,
+                _mockLogger.Object,
+                _mockLoggerFactory.Object,
+                new HashSet<string> { "Migration1" },
+                canConnectResults: new[] { false, true });
+
+            var configuration = new ConfigurationBuilder().Build();
+
+            // Act
+            await initializer.InitializeAsync(_context, configuration);
+
+            // Assert: リトライ待機時に Warning ログが出る（AppServiceConsoleLogs で観測可能）
+            _mockLogger.Verify(
+                x => x.Log(
+                    LogLevel.Warning,
+                    It.IsAny<EventId>(),
+                    It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Database not ready")),
+                    It.IsAny<Exception>(),
+                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+                Times.Once);
+        }
+
         #endregion
 
         #region Error Handling Tests
@@ -285,21 +371,49 @@ namespace IdentityProvider.Test.Data
         private class TestableDbInitializer : DbInitializer
         {
             private readonly HashSet<string> _appliedMigrations;
-            private readonly bool _canConnect;
+            // CanConnectAsync の逐次結果。先頭から消費し、尽きたら最後の値を維持する。
+            private readonly Queue<bool> _canConnectResults;
+            private bool _lastCanConnect;
+
+            public int DelayCount { get; private set; }
 
             public TestableDbInitializer(
                 IEnumerable<IDbSeeder> seeders,
                 ILogger<DbInitializer> logger,
                 ILoggerFactory loggerFactory,
                 HashSet<string> appliedMigrations,
-                bool canConnect = true) : base(seeders, logger, loggerFactory)
+                bool canConnect = true)
+                : this(seeders, logger, loggerFactory, appliedMigrations, new[] { canConnect })
+            {
+            }
+
+            public TestableDbInitializer(
+                IEnumerable<IDbSeeder> seeders,
+                ILogger<DbInitializer> logger,
+                ILoggerFactory loggerFactory,
+                HashSet<string> appliedMigrations,
+                IEnumerable<bool> canConnectResults) : base(seeders, logger, loggerFactory)
             {
                 _appliedMigrations = appliedMigrations;
-                _canConnect = canConnect;
+                _canConnectResults = new Queue<bool>(canConnectResults);
+                _lastCanConnect = _canConnectResults.Count > 0 ? _canConnectResults.Peek() : true;
             }
 
             protected override Task<bool> CanConnectAsync(EcAuthDbContext context)
-                => Task.FromResult(_canConnect);
+            {
+                if (_canConnectResults.Count > 0)
+                {
+                    _lastCanConnect = _canConnectResults.Dequeue();
+                }
+                return Task.FromResult(_lastCanConnect);
+            }
+
+            // 実時間の待機を回避しつつ、リトライ回数を検証できるようにする
+            protected override Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken = default)
+            {
+                DelayCount++;
+                return Task.CompletedTask;
+            }
 
             protected override Task<HashSet<string>> GetAppliedMigrationsAsync(EcAuthDbContext context)
                 => Task.FromResult(_appliedMigrations);
