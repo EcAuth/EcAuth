@@ -98,7 +98,17 @@ namespace IdentityProvider.Services
             // ローカル / CI の閉じたネットワーク内でのみ使用される。
             await client.ConnectAsync(host, port, SecureSocketOptions.None, ct);
             await client.SendAsync(message, ct);
-            await client.DisconnectAsync(true, ct);
+            // 送信は上の SendAsync（DATA→250）で確定済み。graceful QUIT は best-effort とし、
+            // 切断（QUIT 送信・221 待ち）での例外を送信失敗として扱わない。ここで例外を伝播させると
+            // 配送済みなのに SignupService は 500、MagicLinkService は誤ったエラーログを出すため。
+            try
+            {
+                await client.DisconnectAsync(true, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "SMTP サーバーからの切断中にエラーが発生しました（送信自体は成功）: To={ToEmail}", MaskEmail(toEmail));
+            }
         }
 
         /// <summary>
