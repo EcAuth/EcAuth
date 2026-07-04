@@ -189,7 +189,7 @@ namespace IdentityProvider.Test.Data
                 _mockLogger.Object,
                 _mockLoggerFactory.Object,
                 new HashSet<string> { "Migration1" },
-                canConnectResults: new[] { false, false, true });
+                canConnectResults: new bool?[] { false, false, true });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -244,7 +244,7 @@ namespace IdentityProvider.Test.Data
                 _mockLogger.Object,
                 _mockLoggerFactory.Object,
                 new HashSet<string> { "Migration1" },
-                canConnectResults: new[] { false, true });
+                canConnectResults: new bool?[] { false, true });
 
             var configuration = new ConfigurationBuilder().Build();
 
@@ -260,6 +260,38 @@ namespace IdentityProvider.Test.Data
                     It.IsAny<Exception>(),
                     It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
                 Times.Once);
+        }
+
+        [Fact]
+        public async Task InitializeAsync_WhenProbeTimesOut_ShouldTreatAsNotConnectedAndRetry()
+        {
+            // Arrange: 1 回目は無応答（プローブタイムアウト）、2 回目で接続確立。
+            // null は渡されたトークンがキャンセルされるまでハングする挙動を模擬する。
+            var wasExecuted = false;
+            var seeder = new TestSeeder("Migration1", 100, () => wasExecuted = true);
+
+            var seeders = new List<IDbSeeder> { seeder };
+            var initializer = new TestableDbInitializer(
+                seeders,
+                _mockLogger.Object,
+                _mockLoggerFactory.Object,
+                new HashSet<string> { "Migration1" },
+                canConnectResults: new bool?[] { null, true });
+
+            // プローブタイムアウトを最小値（1 秒）にしてテストを高速化
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DbInitializer:ConnectionRetry:ProbeTimeoutSeconds"] = "1",
+                })
+                .Build();
+
+            // Act
+            await initializer.InitializeAsync(_context, configuration);
+
+            // Assert: プローブタイムアウトは例外を伝播させず未接続扱いにし、リトライ後に成功する
+            Assert.True(wasExecuted);
+            Assert.Equal(1, initializer.DelayCount);
         }
 
         #endregion
@@ -372,7 +404,9 @@ namespace IdentityProvider.Test.Data
         {
             private readonly HashSet<string> _appliedMigrations;
             // CanConnectAsync の逐次結果。先頭から消費し、尽きたら最後の値を維持する。
-            private readonly Queue<bool> _canConnectResults;
+            // null はプローブタイムアウト（無応答）を模擬し、渡されたトークンが
+            // キャンセルされるまでハングして OperationCanceledException を投げる。
+            private readonly Queue<bool?> _canConnectResults;
             private bool _lastCanConnect;
 
             public int DelayCount { get; private set; }
@@ -383,7 +417,7 @@ namespace IdentityProvider.Test.Data
                 ILoggerFactory loggerFactory,
                 HashSet<string> appliedMigrations,
                 bool canConnect = true)
-                : this(seeders, logger, loggerFactory, appliedMigrations, new[] { canConnect })
+                : this(seeders, logger, loggerFactory, appliedMigrations, new bool?[] { canConnect })
             {
             }
 
@@ -392,20 +426,28 @@ namespace IdentityProvider.Test.Data
                 ILogger<DbInitializer> logger,
                 ILoggerFactory loggerFactory,
                 HashSet<string> appliedMigrations,
-                IEnumerable<bool> canConnectResults) : base(seeders, logger, loggerFactory)
+                IEnumerable<bool?> canConnectResults) : base(seeders, logger, loggerFactory)
             {
                 _appliedMigrations = appliedMigrations;
-                _canConnectResults = new Queue<bool>(canConnectResults);
-                _lastCanConnect = _canConnectResults.Count > 0 ? _canConnectResults.Peek() : true;
+                _canConnectResults = new Queue<bool?>(canConnectResults);
+                _lastCanConnect = false;
             }
 
-            protected override Task<bool> CanConnectAsync(EcAuthDbContext context)
+            protected override async Task<bool> CanConnectAsync(
+                EcAuthDbContext context, CancellationToken cancellationToken = default)
             {
-                if (_canConnectResults.Count > 0)
+                bool? result = _canConnectResults.Count > 0
+                    ? _canConnectResults.Dequeue()
+                    : _lastCanConnect;
+
+                if (result is null)
                 {
-                    _lastCanConnect = _canConnectResults.Dequeue();
+                    // 無応答を模擬: プローブタイムアウト（トークン）で打ち切られるまで待つ
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
                 }
-                return Task.FromResult(_lastCanConnect);
+
+                _lastCanConnect = result ?? false;
+                return _lastCanConnect;
             }
 
             // 実時間の待機を回避しつつ、リトライ回数を検証できるようにする

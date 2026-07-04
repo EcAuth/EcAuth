@@ -12,11 +12,22 @@ public class DbInitializer
     // DB 接続確立待ちのリトライ既定値。
     // デプロイ起動の一瞬だけ DB が未応答だと CanConnectAsync が false を返し、
     // 全シーダー（OrganizationClientSeeder の B2C→B2B 補正含む）がスキップされる事象への対策。
-    // App Service の warmup プローブは起動完了まで約 70 秒待つため、その猶予内でリトライする。
-    // 既定は最大 12 回・間隔 5 秒 = 最大約 55 秒待機。非秘密のチューニング定数のため
-    // 配線（Terraform / CI / .env）には入れず、必要時のみ appsettings/env で上書きする。
-    private const int DefaultMaxConnectionAttempts = 12;
-    private const int DefaultConnectionRetryDelaySeconds = 5;
+    //
+    // 重要: 各 CanConnectAsync は接続確立を待つため、DB が routable だが無応答
+    // （SYN drop 等）の場合、接続文字列の Connect Timeout（既定 15 秒）まで
+    // ブロックしうる。試行回数だけで待機上限を管理すると DB 恒久障害時に
+    // app.Run() 前で数分ブロックし、App Service の起動制限超過でコンテナ再起動
+    // ループを招く（可用性優先の設計「本番はシード失敗でも起動継続」と矛盾）。
+    // → 1 試行あたりの最大ブロック時間を ProbeTimeout（CancellationToken）で縛り、
+    //   最悪起動遅延を「試行あたりのブロック時間」に依らず有界にする。
+    //
+    // 既定: 最大 5 回・間隔 3 秒・各プローブ 3 秒上限 = 最悪 5×3 + 4×3 = 27 秒。
+    // App Service の起動制限内に収めつつ、約 15 秒の一過性未応答窓をカバーする。
+    // 非秘密のチューニング定数のため配線（Terraform / CI / .env）には入れず、
+    // 必要時のみ appsettings/env で上書きする。
+    private const int DefaultMaxConnectionAttempts = 5;
+    private const int DefaultConnectionRetryDelaySeconds = 3;
+    private const int DefaultConnectionProbeTimeoutSeconds = 3;
 
     private readonly IEnumerable<IDbSeeder> _seeders;
     private readonly ILogger<DbInitializer> _logger;
@@ -36,8 +47,13 @@ public class DbInitializer
     /// データベースに接続可能かどうかを確認します。
     /// テスト時にオーバーライドして接続状態を制御できます。
     /// </summary>
-    protected virtual async Task<bool> CanConnectAsync(EcAuthDbContext context)
-        => await context.Database.CanConnectAsync();
+    /// <param name="cancellationToken">
+    /// プローブのタイムアウト用トークン。routable だが無応答の DB で
+    /// 接続確立を無制限に待たないよう、呼び出し側が期限を設定する。
+    /// </param>
+    protected virtual async Task<bool> CanConnectAsync(
+        EcAuthDbContext context, CancellationToken cancellationToken = default)
+        => await context.Database.CanConnectAsync(cancellationToken);
 
     /// <summary>
     /// リトライ間の待機を行います。
@@ -57,6 +73,8 @@ public class DbInitializer
             "DbInitializer:ConnectionRetry:MaxAttempts", DefaultMaxConnectionAttempts);
         var delaySeconds = configuration.GetValue(
             "DbInitializer:ConnectionRetry:DelaySeconds", DefaultConnectionRetryDelaySeconds);
+        var probeTimeoutSeconds = configuration.GetValue(
+            "DbInitializer:ConnectionRetry:ProbeTimeoutSeconds", DefaultConnectionProbeTimeoutSeconds);
 
         // 不正値（0 以下）でも最低 1 回は試行する
         if (maxAttempts < 1)
@@ -67,10 +85,15 @@ public class DbInitializer
         {
             delaySeconds = 0;
         }
+        // プローブタイムアウトは正の値を要求（0 以下だと即キャンセル扱いになるため）
+        if (probeTimeoutSeconds < 1)
+        {
+            probeTimeoutSeconds = 1;
+        }
 
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            if (await CanConnectAsync(context))
+            if (await TryConnectAsync(context, TimeSpan.FromSeconds(probeTimeoutSeconds)))
             {
                 return true;
             }
@@ -87,6 +110,25 @@ public class DbInitializer
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// プローブタイムアウト付きで DB 接続可否を判定します。
+    /// routable だが無応答の DB で接続確立が Connect Timeout（既定 15 秒）まで
+    /// ブロックするのを防ぐため、指定時間で打ち切って false 扱いにします。
+    /// </summary>
+    private async Task<bool> TryConnectAsync(EcAuthDbContext context, TimeSpan probeTimeout)
+    {
+        using var cts = new CancellationTokenSource(probeTimeout);
+        try
+        {
+            return await CanConnectAsync(context, cts.Token);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            // プローブがタイムアウト。未接続として扱いリトライへ。
+            return false;
+        }
     }
 
     /// <summary>
