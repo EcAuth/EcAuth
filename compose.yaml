@@ -18,6 +18,7 @@ services:
         - GITHUB_TOKEN=${GITHUB_TOKEN}
     depends_on:
       - db
+      - mailpit
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: "8080"
@@ -60,6 +61,26 @@ services:
       E2E_TOKEN_ENDPOINT: ${E2E_TOKEN_ENDPOINT}
       E2E_USERINFO_ENDPOINT: ${E2E_USERINFO_ENDPOINT}
       E2E_REDIRECT_URI: ${E2E_REDIRECT_URI}
+      # Account 申込フロー（Phase D-1）/ マジックリンク（Phase D-2）用。
+      # AccountsOrganizationSeeder が accounts / stg-accounts Org と管理コンソール Client を
+      # 投入するために ACCOUNTS_* / STG_ACCOUNTS_* を container に渡す。
+      ACCOUNTS_CLIENT_ID: ${ACCOUNTS_CLIENT_ID}
+      ACCOUNTS_CLIENT_SECRET: ${ACCOUNTS_CLIENT_SECRET}
+      ACCOUNTS_ALLOWED_RP_IDS: ${ACCOUNTS_ALLOWED_RP_IDS}
+      ACCOUNTS_REDIRECT_URI: ${ACCOUNTS_REDIRECT_URI}
+      STG_ACCOUNTS_CLIENT_ID: ${STG_ACCOUNTS_CLIENT_ID}
+      STG_ACCOUNTS_CLIENT_SECRET: ${STG_ACCOUNTS_CLIENT_SECRET}
+      STG_ACCOUNTS_ALLOWED_RP_IDS: ${STG_ACCOUNTS_ALLOWED_RP_IDS}
+      STG_ACCOUNTS_REDIRECT_URI: ${STG_ACCOUNTS_REDIRECT_URI}
+      # 確認 URL / マジックリンク URL の基底（テナント別・リクエスト処理時に必須参照）。
+      Signup__ConfirmBaseUrl__accounts: ${Signup__ConfirmBaseUrl__accounts:-https://localhost:8081}
+      Signup__ConfirmBaseUrl__stg_accounts: ${Signup__ConfirmBaseUrl__stg_accounts:-https://localhost:8081}
+      MagicLink__BaseUrl__accounts: ${MagicLink__BaseUrl__accounts:-https://localhost:8081}
+      MagicLink__BaseUrl__stg_accounts: ${MagicLink__BaseUrl__stg_accounts:-https://localhost:8081}
+      # メール送信プロバイダ。ローカル / CI E2E は mailpit（SMTP）に送信して実メール経路を検証する。
+      Email__Provider: ${Email__Provider:-Smtp}
+      Smtp__Host: ${Smtp__Host:-mailpit}
+      Smtp__Port: ${Smtp__Port:-1025}
     ports:
       - "8080:8080"
       - "8081:8081"
@@ -67,6 +88,20 @@ services:
       - ${HOME}/.microsoft/usersecrets:/home/app/.microsoft/usersecrets:ro
     networks:
       - backend
+
+  # メールテスト用の SMTP サーバー（受信専用）。SMTP 1025 で受信し、Web UI / REST API を 8025 で提供。
+  # E2E テストは REST API（http://localhost:8025/api/v1/messages）で確認・マジックリンクのトークンを取得する。
+  mailpit:
+    image: axllent/mailpit:latest
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - backend
+    restart: unless-stopped
 
   db:
     image: mcr.microsoft.com/mssql/server:2022-latest

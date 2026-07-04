@@ -31,6 +31,18 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # Account 申込・マジックリンクの実メール経路を検証するための SMTP 受信サーバー。
+      # アプリは Email__Provider=Smtp で mailpit:1025 へ送信し、E2E は REST API（8025）で
+      # 本文からトークンを取得する。
+      mailpit:
+        image: axllent/mailpit:latest
+        env:
+          MP_SMTP_AUTH_ACCEPT_ANY: "1"
+          MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+        ports:
+          - 1025:1025
+          - 8025:8025
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -91,6 +103,21 @@ jobs:
           DEV_B2B_USER_EXTERNAL_ID=test-admin
           DEV_B2B_REDIRECT_URI=https://localhost:8081/admin/ecauth/callback
           DEV_B2B_ALLOWED_RP_IDS=localhost
+          # Account 申込フロー（Phase D-1）/ マジックリンク（Phase D-2）の E2E 用。
+          # AccountsOrganizationSeeder が accounts Org + 管理コンソール Client を投入するために必須。
+          # rp_id は passkey 登録のブラウザ origin（localhost）と一致させる。
+          ACCOUNTS_CLIENT_ID=ecauth-admin-console
+          ACCOUNTS_CLIENT_SECRET=accounts_client_secret
+          ACCOUNTS_ALLOWED_RP_IDS=accounts.ec-auth.io,localhost
+          ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
+          # 確認 URL / マジックリンク URL の基底（テナント別・リクエスト処理時に必須参照）。
+          # 未設定だと SignupService.BuildConfirmUrl / MagicLinkService.BuildMagicLinkUrl が例外で停止する。
+          Signup__ConfirmBaseUrl__accounts=https://localhost:8081
+          MagicLink__BaseUrl__accounts=https://localhost:8081
+          # メール送信は mailpit（SMTP）へ。実メール経路を CI 内で完結させる。
+          Email__Provider=Smtp
+          Smtp__Host=localhost
+          Smtp__Port=1025
           EOF
 
       - name: Set up environment variables
