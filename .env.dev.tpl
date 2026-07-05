@@ -103,12 +103,14 @@ STAGING_MOCK_IDP_USERINFO_ENDPOINT=https://localhost:9091/userinfo
 # Organization の code / tenant_name はサブドメイン解決と一致させるため Seeder 側で固定。
 ACCOUNTS_CLIENT_ID=ecauth-admin-console
 ACCOUNTS_CLIENT_SECRET=accounts_client_secret
-ACCOUNTS_ALLOWED_RP_IDS=localhost
+# passkey 登録/認証の E2E は accounts テナントの origin（accounts.ec-auth.io）でページを開くため、
+# rp_id に accounts.ec-auth.io を許可する。localhost も併記して手動検証を許容する。
+ACCOUNTS_ALLOWED_RP_IDS=accounts.ec-auth.io,localhost
 ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
 
 STG_ACCOUNTS_CLIENT_ID=ecauth-admin-console-stg
 STG_ACCOUNTS_CLIENT_SECRET=stg_accounts_client_secret
-STG_ACCOUNTS_ALLOWED_RP_IDS=localhost
+STG_ACCOUNTS_ALLOWED_RP_IDS=stg-accounts.ec-auth.io,localhost
 STG_ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
 
 # 申込・マジックリンクのメール送信 (Phase D で使用)。ローカルはダミー値。

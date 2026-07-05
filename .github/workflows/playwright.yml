@@ -31,6 +31,18 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # Account 申込・マジックリンクの実メール経路を検証するための SMTP 受信サーバー。
+      # アプリは Email__Provider=Smtp で mailpit:1025 へ送信し、E2E は REST API（8025）で
+      # 本文からトークンを取得する。
+      mailpit:
+        image: axllent/mailpit:latest
+        env:
+          MP_SMTP_AUTH_ACCEPT_ANY: "1"
+          MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+        ports:
+          - 1025:1025
+          - 8025:8025
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -41,6 +53,11 @@ jobs:
           # クレデンシャルは含まない。MOCK_IDP_BASE_URL 等の機密は後続 step で
           # secrets から注入する。変数展開を含む値（FEDERATE_OAUTH2_* / STAGING_MOCK_IDP_*_ENDPOINT）は
           # 旧 .env.dist でも除外されていたため、ここでも展開済みの値を後続 step で組み立てる。
+          # 注意: 以下の heredoc は $GITHUB_ENV に追記されるため KEY=value 行のみ許容。
+          # コメント行を混ぜると「Invalid format」で step が失敗する（Account/mailpit 系の
+          # 説明はこのブロック外に置く）。ACCOUNTS_* は AccountsOrganizationSeeder が accounts
+          # Org + 管理コンソール Client を投入するために必須。Email__Provider=Smtp / Smtp__* は
+          # 申込・マジックリンクの実メール経路を mailpit で検証するための切替。
           cat <<'EOF' >> $GITHUB_ENV
           DB_HOST=db
           MIGRATION_DB_HOST=localhost
@@ -91,6 +108,15 @@ jobs:
           DEV_B2B_USER_EXTERNAL_ID=test-admin
           DEV_B2B_REDIRECT_URI=https://localhost:8081/admin/ecauth/callback
           DEV_B2B_ALLOWED_RP_IDS=localhost
+          ACCOUNTS_CLIENT_ID=ecauth-admin-console
+          ACCOUNTS_CLIENT_SECRET=accounts_client_secret
+          ACCOUNTS_ALLOWED_RP_IDS=accounts.ec-auth.io,localhost
+          ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
+          Signup__ConfirmBaseUrl__accounts=https://localhost:8081
+          MagicLink__BaseUrl__accounts=https://localhost:8081
+          Email__Provider=Smtp
+          Smtp__Host=localhost
+          Smtp__Port=1025
           EOF
 
       - name: Set up environment variables
@@ -190,7 +216,7 @@ jobs:
           fi
 
       - name: Install pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           package_json_file: E2ETests/package.json
 

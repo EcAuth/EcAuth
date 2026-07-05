@@ -47,34 +47,15 @@ namespace IdentityProvider.Services
                 ?? _configuration["SENDGRID_FROM_NAME"]
                 ?? "EcAuth";
 
-            var subject = "【EcAuth】お申し込み確認のお願い";
-
+            var content = EmailTemplates.BuildSignupConfirmation(organizationName, confirmUrl);
             var displayOrganization = string.IsNullOrWhiteSpace(organizationName)
                 ? "ご登録の組織"
                 : organizationName;
 
-            var plainTextContent =
-                $"EcAuth へのお申し込みありがとうございます。\n\n" +
-                $"{displayOrganization} のお申し込みを受け付けました。\n" +
-                $"以下の URL にアクセスして、お申し込み内容のご確認をお願いいたします。\n\n" +
-                $"{confirmUrl}\n\n" +
-                $"このメールにお心当たりがない場合は、お手数ですが破棄してください。\n\n" +
-                $"-- \nEcAuth";
-
-            var htmlContent =
-                $"<p>EcAuth へのお申し込みありがとうございます。</p>" +
-                $"<p>{System.Net.WebUtility.HtmlEncode(displayOrganization)} のお申し込みを受け付けました。<br>" +
-                $"下記のボタン（リンク）から、お申し込み内容のご確認をお願いいたします。</p>" +
-                $"<p><a href=\"{System.Net.WebUtility.HtmlEncode(confirmUrl)}\">お申し込みを確認する</a></p>" +
-                $"<p>ボタンが動作しない場合は、以下の URL をブラウザに貼り付けてアクセスしてください。<br>" +
-                $"{System.Net.WebUtility.HtmlEncode(confirmUrl)}</p>" +
-                $"<p>このメールにお心当たりがない場合は、お手数ですが破棄してください。</p>" +
-                $"<p>--<br>EcAuth</p>";
-
             var client = new SendGridClient(apiKey);
             var from = new EmailAddress(fromEmail, fromName);
             var to = new EmailAddress(toEmail);
-            var message = MailHelper.CreateSingleEmail(from, to, subject, plainTextContent, htmlContent);
+            var message = MailHelper.CreateSingleEmail(from, to, content.Subject, content.PlainText, content.Html);
 
             var response = await client.SendEmailAsync(message, ct);
 
@@ -124,30 +105,12 @@ namespace IdentityProvider.Services
                 ?? _configuration["SENDGRID_FROM_NAME"]
                 ?? "EcAuth";
 
-            var subject = "【EcAuth】ログインリンクのお知らせ";
-
-            var plainTextContent =
-                $"EcAuth へのログインリクエストを受け付けました。\n\n" +
-                $"以下の URL にアクセスしてログインを完了してください（有効期限: 10 分）。\n\n" +
-                $"{magicLinkUrl}\n\n" +
-                $"このリンクは一度のみ使用できます。\n" +
-                $"心当たりがない場合は、このメールを破棄してください（操作は不要です）。\n\n" +
-                $"-- \nEcAuth";
-
-            var htmlContent =
-                $"<p>EcAuth へのログインリクエストを受け付けました。</p>" +
-                $"<p>下記のボタン（リンク）からログインを完了してください（有効期限: 10 分）。</p>" +
-                $"<p><a href=\"{System.Net.WebUtility.HtmlEncode(magicLinkUrl)}\">ログインする</a></p>" +
-                $"<p>ボタンが動作しない場合は、以下の URL をブラウザに貼り付けてアクセスしてください。<br>" +
-                $"{System.Net.WebUtility.HtmlEncode(magicLinkUrl)}</p>" +
-                $"<p>このリンクは一度のみ使用できます。<br>" +
-                $"心当たりがない場合は、このメールを破棄してください（操作は不要です）。</p>" +
-                $"<p>--<br>EcAuth</p>";
+            var content = EmailTemplates.BuildMagicLoginLink(magicLinkUrl);
 
             var client = new SendGridClient(apiKey);
             var from = new EmailAddress(fromEmail, fromName);
             var to = new EmailAddress(toEmail);
-            var message = MailHelper.CreateSingleEmail(from, to, subject, plainTextContent, htmlContent);
+            var message = MailHelper.CreateSingleEmail(from, to, content.Subject, content.PlainText, content.Html);
 
             var response = await client.SendEmailAsync(message, ct);
 
