@@ -48,10 +48,22 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        // ローカルDocker環境でのホスト名解決のため（GitHub Actions環境では不要）
-        launchOptions: process.env.CI ? {} : {
-          args: ['--host-resolver-rules=MAP mockopenidprovider:8081 127.0.0.1:9091,MAP mockopenidprovider:8080 127.0.0.1:9090']
-        }
+        // ホスト名解決のマッピング。
+        // - accounts.ec-auth.io: Account 申込フローの passkey 登録/認証で使う accounts テナント
+        //   （3 セグメント以上で TenantMiddleware が tenant=accounts に解決）。CI / ローカル両方で必要。
+        //   WebAuthn の rp_id を origin と一致させ、B2BUser 解決を accounts テナントで行うため、
+        //   passkey ページはこのホストで配信する。
+        // - mockopenidprovider: ローカル Docker 環境の MockIdP 解決（GitHub Actions では不要）。
+        launchOptions: {
+          args: [
+            '--host-resolver-rules=' + [
+              'MAP accounts.ec-auth.io 127.0.0.1',
+              ...(process.env.CI
+                ? []
+                : ['MAP mockopenidprovider:8081 127.0.0.1:9091', 'MAP mockopenidprovider:8080 127.0.0.1:9090']),
+            ].join(','),
+          ],
+        },
       },
     },
 

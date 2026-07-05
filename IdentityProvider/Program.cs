@@ -67,7 +67,18 @@ builder.Services.AddScoped<IB2BPasskeyService, B2BPasskeyService>();
 
 // Account 申込フロー（Phase D-1）関連サービス
 builder.Services.AddScoped<ISignupService, SignupService>();
-builder.Services.AddScoped<IEmailService, SendGridEmailService>();
+// メール送信プロバイダは Email:Provider で切替。既定は本番 / staging 用の SendGrid（HTTP API）。
+// ローカル開発 / CI E2E では Email:Provider=Smtp で MailKit ベースの SmtpEmailService に切替え、
+// mailpit（Smtp:Host / Smtp:Port）へ送信して実メール経路を検証する。
+var emailProvider = builder.Configuration["Email:Provider"];
+if (string.Equals(emailProvider, "Smtp", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddScoped<IEmailService, SmtpEmailService>();
+}
+else
+{
+    builder.Services.AddScoped<IEmailService, SendGridEmailService>();
+}
 // ブロックリストは不変のため singleton 登録（DisposableEmailChecker の設計）
 builder.Services.AddSingleton<IDisposableEmailChecker, DisposableEmailChecker>();
 
