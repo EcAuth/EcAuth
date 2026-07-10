@@ -3,6 +3,7 @@ using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdentityProvider.Telemetry;
+using IdpUtilities.Security;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -27,6 +28,7 @@ namespace IdentityProvider.Controllers
         private readonly IB2BUserService _b2bUserService;
         private readonly EcAuthDbContext _context;
         private readonly ILogger<B2BPasskeyController> _logger;
+        private readonly ISecretProtector _secretProtector;
 
         public B2BPasskeyController(
             IB2BPasskeyService passkeyService,
@@ -34,7 +36,8 @@ namespace IdentityProvider.Controllers
             ITokenService tokenService,
             IB2BUserService b2bUserService,
             EcAuthDbContext context,
-            ILogger<B2BPasskeyController> logger)
+            ILogger<B2BPasskeyController> logger,
+            ISecretProtector secretProtector)
         {
             _passkeyService = passkeyService;
             _authorizationCodeService = authorizationCodeService;
@@ -42,6 +45,7 @@ namespace IdentityProvider.Controllers
             _b2bUserService = b2bUserService;
             _context = context;
             _logger = logger;
+            _secretProtector = secretProtector;
         }
 
         #region Request/Response DTOs
@@ -679,11 +683,9 @@ namespace IdentityProvider.Controllers
                 return null;
             }
 
-            // タイミング攻撃対策: 定時間比較
-            var secretBytes = System.Text.Encoding.UTF8.GetBytes(clientSecret);
-            var storedSecretBytes = System.Text.Encoding.UTF8.GetBytes(client.ClientSecret);
-
-            if (System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(secretBytes, storedSecretBytes))
+            // 保存値は Key Vault 暗号化エンベロープ（レガシーは平文）。ISecretProtector が
+            // 復号(+キャッシュ)して定数時間比較を行う（タイミング攻撃対策）。
+            if (await _secretProtector.VerifyAsync(clientSecret, client.ClientSecret))
             {
                 return client;
             }

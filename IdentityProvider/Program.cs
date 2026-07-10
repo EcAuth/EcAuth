@@ -91,6 +91,15 @@ builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
 // 期限切れトークンの日次クリーンアップ（既定の保持期間 7 日）
 builder.Services.AddHostedService<MagicLinkCleanupService>();
 
+// client_secret 等の保存時暗号化（EcAuthDocs#106）。
+// Development はローカル例外として平文パススルー、それ以外は Key Vault の CryptographyClient で暗号化する。
+// KeyVaultKeyId は非秘密の鍵 URL のため app_settings（ClientSecretProtection__KeyVaultKeyId）で渡す。
+builder.Services.AddSecretProtection(options =>
+{
+    options.UsePlaintext = builder.Environment.IsDevelopment();
+    options.KeyVaultKeyId = builder.Configuration["ClientSecretProtection:KeyVaultKeyId"];
+});
+
 // データベース初期化（シーダー）
 builder.Services.AddScoped<IDbSeeder, OrganizationClientSeeder>();
 builder.Services.AddScoped<IDbSeeder, AccountsOrganizationSeeder>();

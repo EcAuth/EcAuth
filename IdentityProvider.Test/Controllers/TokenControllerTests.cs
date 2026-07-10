@@ -1,6 +1,7 @@
 using IdentityProvider.Controllers;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
+using IdpUtilities.Security;
 using IdentityProvider.Test.TestHelpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -43,7 +44,8 @@ namespace IdentityProvider.Test.Controllers
                 _mockB2BUserService.Object,
                 _mockAccountService.Object,
                 _mockLogger.Object,
-                _mockConfiguration.Object);
+                _mockConfiguration.Object,
+                new PlaintextSecretProtector());
         }
 
         [Fact]

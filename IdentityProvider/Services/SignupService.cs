@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Telemetry;
+using IdpUtilities.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace IdentityProvider.Services
@@ -33,6 +34,7 @@ namespace IdentityProvider.Services
         private readonly IDisposableEmailChecker _disposableEmailChecker;
         private readonly IConfiguration _configuration;
         private readonly ILogger<SignupService> _logger;
+        private readonly ISecretProtector _secretProtector;
 
         public SignupService(
             EcAuthDbContext context,
@@ -40,7 +42,8 @@ namespace IdentityProvider.Services
             IEmailService emailService,
             IDisposableEmailChecker disposableEmailChecker,
             IConfiguration configuration,
-            ILogger<SignupService> logger)
+            ILogger<SignupService> logger,
+            ISecretProtector secretProtector)
         {
             _context = context;
             _tenantService = tenantService;
@@ -48,6 +51,7 @@ namespace IdentityProvider.Services
             _disposableEmailChecker = disposableEmailChecker;
             _configuration = configuration;
             _logger = logger;
+            _secretProtector = secretProtector;
         }
 
         /// <inheritdoc />
@@ -238,6 +242,8 @@ namespace IdentityProvider.Services
                     await _context.SaveChangesAsync(ct);
 
                     var client = CreateClient(organization, site, signupRequest.OrganizationName);
+                    // 保存前に client_secret を暗号化する（レガシー/dev は平文パススルー）。
+                    client.ClientSecret = await _secretProtector.ProtectAsync(client.ClientSecret, ct);
                     _context.Clients.Add(client);
 
                     _context.RsaKeyPairs.Add(CreateRsaKeyPair(organization.Id));

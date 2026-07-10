@@ -4,6 +4,7 @@ using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdentityProvider.Test.TestHelpers;
+using IdpUtilities.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -102,7 +103,8 @@ namespace IdentityProvider.Test.Services
                 emailServiceMock.Object,
                 disposableCheckerMock.Object,
                 CreateConfiguration(withConfirmBaseUrl),
-                _logger);
+                _logger,
+                new PlaintextSecretProtector());
         }
 
         /// <summary>
@@ -220,7 +222,8 @@ namespace IdentityProvider.Test.Services
             disposableMock.Setup(x => x.IsDisposable(It.IsAny<string>())).Returns(false);
 
             var service = new SignupService(
-                context, tenantService, emailMock.Object, disposableMock.Object, config, _logger);
+                context, tenantService, emailMock.Object, disposableMock.Object, config, _logger,
+                new PlaintextSecretProtector());
 
             await service.RequestAsync(ValidInput());
 

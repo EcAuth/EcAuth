@@ -2,6 +2,7 @@ using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdentityProvider.Telemetry;
 using IdpUtilities;
+using IdpUtilities.Security;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -23,6 +24,7 @@ namespace IdentityProvider.Controllers
         private readonly IAccountService _accountService;
         private readonly ILogger<TokenController> _logger;
         private readonly IConfiguration _configuration;
+        private readonly ISecretProtector _secretProtector;
 
         public TokenController(
             EcAuthDbContext context,
@@ -32,7 +34,8 @@ namespace IdentityProvider.Controllers
             IB2BUserService b2bUserService,
             IAccountService accountService,
             ILogger<TokenController> logger,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            ISecretProtector secretProtector)
         {
             _context = context;
             _environment = environment;
@@ -42,6 +45,7 @@ namespace IdentityProvider.Controllers
             _accountService = accountService;
             _logger = logger;
             _configuration = configuration;
+            _secretProtector = secretProtector;
         }
 
         /// <summary>
@@ -146,9 +150,11 @@ namespace IdentityProvider.Controllers
                 }
 
                 // 4. client_secretの検証（設定されている場合のみ）
+                // 保存値は Key Vault 暗号化エンベロープ（レガシーは平文）。ISecretProtector が
+                // 復号(+キャッシュ)して定数時間比較を行う。
                 if (!string.IsNullOrEmpty(client.ClientSecret))
                 {
-                    if (string.IsNullOrEmpty(client_secret) || client.ClientSecret != client_secret)
+                    if (!await _secretProtector.VerifyAsync(client_secret, client.ClientSecret))
                     {
                         _logger.LogWarning("Invalid client_secret for client: {ClientId}", client_id);
                         return BadRequest(new
