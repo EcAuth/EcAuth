@@ -27,9 +27,15 @@ SQL_SERVER="${SQL_HOST%%.database.windows.net}"
 RULE_NAME="gh-backfill-${RUN_ID}"
 
 # リソースグループはサーバー名でサーバーサイド解決する。
-RESOURCE_GROUP=$(az resource list --name "${SQL_SERVER}" --resource-type "Microsoft.Sql/servers" --query "[0].resourceGroup" -o tsv)
+# az の一過性失敗で set -e により即死しないよう || true を付ける。
+RESOURCE_GROUP=$(az resource list --name "${SQL_SERVER}" --resource-type "Microsoft.Sql/servers" --query "[0].resourceGroup" -o tsv 2>/dev/null || true)
 if [ -z "${RESOURCE_GROUP}" ]; then
   echo "SQL Server が見つかりません: ${SQL_SERVER}" >&2
+  # remove は always() のクリーンアップで走るため、RG 未解決でもワークフローを
+  # 失敗扱いにしない（best-effort）。add は許可できないと backfill も失敗するため fail-fast。
+  if [ "${ACTION}" = "remove" ]; then
+    exit 0
+  fi
   exit 1
 fi
 
