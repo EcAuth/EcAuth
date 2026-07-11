@@ -243,7 +243,11 @@ namespace IdentityProvider.Services
 
                     var client = CreateClient(organization, site, signupRequest.OrganizationName);
                     // 保存前に client_secret を暗号化する（レガシー/dev は平文パススルー）。
-                    client.ClientSecret = await _secretProtector.ProtectAsync(client.ClientSecret, ct);
+                    // Key Vault 暗号化の所要時間を confirm 内の独立ステップとして計測する。
+                    using (TimingScope.Begin("client_secret_protect"))
+                    {
+                        client.ClientSecret = await _secretProtector.ProtectAsync(client.ClientSecret, ct);
+                    }
                     _context.Clients.Add(client);
 
                     _context.RsaKeyPairs.Add(CreateRsaKeyPair(organization.Id));

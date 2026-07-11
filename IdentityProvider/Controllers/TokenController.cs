@@ -151,10 +151,16 @@ namespace IdentityProvider.Controllers
 
                 // 4. client_secretの検証（設定されている場合のみ）
                 // 保存値は Key Vault 暗号化エンベロープ（レガシーは平文）。ISecretProtector が
-                // 復号(+キャッシュ)して定数時間比較を行う。
+                // 復号(+キャッシュ)して定数時間比較を行う。提示値が空なら復号せず即座に拒否する。
                 if (!string.IsNullOrEmpty(client.ClientSecret))
                 {
-                    if (!await _secretProtector.VerifyAsync(client_secret, client.ClientSecret))
+                    bool secretValid;
+                    using (TimingScope.Begin("client_secret_verify"))
+                    {
+                        secretValid = !string.IsNullOrEmpty(client_secret)
+                            && await _secretProtector.VerifyAsync(client_secret, client.ClientSecret);
+                    }
+                    if (!secretValid)
                     {
                         _logger.LogWarning("Invalid client_secret for client: {ClientId}", client_id);
                         return BadRequest(new

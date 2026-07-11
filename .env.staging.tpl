@@ -66,3 +66,11 @@ STAGING_B2B_ALLOWED_RP_IDS=op://EcAuth/ecauth-staging-app/b2b_allowed_rp_ids
 # SendGrid (Staging) - Phase D-1 申込 API / D-2 マジックリンクで使用
 # =============================================================================
 SENDGRID_API_KEY=op://EcAuth/ecauth-staging-app/sendgrid_api_key
+
+# =============================================================================
+# client_secret 保存時暗号化（EcAuthDocs#106）
+# =============================================================================
+# Key Vault 鍵の URI（非秘密）。アプリ実行時＋起動シーダーが参照する。
+# Azure ランタイムへの配線は ecauth-infrastructure の app_settings（staging main.tf）で実施済み。
+# ここはローカルから staging を動かす場合用。未設定なら平文フォールバックする（保険）。
+ClientSecretProtection__KeyVaultKeyId=https://ecauth-staging-kv.vault.azure.net/keys/client-secret-protection

@@ -62,13 +62,13 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 
 | エンドポイント | ステップ |
 |---|---|
-| `/token` | `client_lookup` / `auth_code_lookup` / `auth_code_mark_used` / `user_lookup` / `token_generate` |
+| `/token` | `client_lookup` / `client_secret_verify` / `auth_code_lookup` / `auth_code_mark_used` / `user_lookup` / `token_generate` |
 | `/userinfo` | `auth_header_parse` / `access_token_validate` / `user_lookup` |
 | `/api/external-userinfo` | `auth_header_parse` / `access_token_validate` / `external_userinfo_fetch` |
 | `register/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `fido2_make_credential` / `credential_persist` / `challenge_consume`） |
 | `authenticate/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `credential_lookup` / `fido2_make_assertion` / `signcount_persist` / `challenge_consume`） |
 | `/api/signup/request` | `validate` / `persist` / `send_email` |
-| `/api/signup/confirm` | `token_lookup` / `confirm` |
+| `/api/signup/confirm` | `token_lookup` / `confirm`（内訳: `client_secret_protect`） |
 | `/api/signup/status` | `status_lookup` |
 | `/api/account/magic-link/request` | `rate_limit` / `account_lookup` / `persist` / `send_email` |
 | `/api/account/magic-link/verify` | `token_lookup` / `token_consume` |
