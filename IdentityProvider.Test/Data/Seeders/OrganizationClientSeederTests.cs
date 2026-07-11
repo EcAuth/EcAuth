@@ -1,6 +1,7 @@
 using IdentityProvider.Data.Seeders;
 using IdentityProvider.Models;
 using IdentityProvider.Test.TestHelpers;
+using IdpUtilities.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -35,7 +36,7 @@ namespace IdentityProvider.Test.Data.Seeders
         public OrganizationClientSeederTests()
         {
             _context = TestDbContextHelper.CreateInMemoryContext();
-            _seeder = new OrganizationClientSeeder();
+            _seeder = new OrganizationClientSeeder(new PlaintextSecretProtector());
             _mockLogger = new Mock<ILogger>();
         }
 

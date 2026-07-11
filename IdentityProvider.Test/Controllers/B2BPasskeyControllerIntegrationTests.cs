@@ -4,6 +4,7 @@ using IdentityProvider.Controllers;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdentityProvider.Test.TestHelpers;
+using IdpUtilities.Security;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
@@ -81,7 +82,8 @@ namespace IdentityProvider.Test.Controllers
                 _tokenService,
                 _b2bUserService,
                 _context,
-                _mockControllerLogger.Object);
+                _mockControllerLogger.Object,
+                new PlaintextSecretProtector());
 
             _controller.ControllerContext = new ControllerContext
             {
@@ -97,7 +99,8 @@ namespace IdentityProvider.Test.Controllers
                 _mockTokenService.Object,
                 _b2bUserService,
                 _context,
-                _mockControllerLogger.Object);
+                _mockControllerLogger.Object,
+                new PlaintextSecretProtector());
 
             _controllerWithMockToken.ControllerContext = new ControllerContext
             {

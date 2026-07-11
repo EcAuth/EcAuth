@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using IdentityProvider.Models;
+using IdpUtilities.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace IdentityProvider.Data.Seeders;
@@ -14,6 +15,13 @@ namespace IdentityProvider.Data.Seeders;
 /// </summary>
 public class OrganizationClientSeeder : IDbSeeder
 {
+    private readonly ISecretProtector _secretProtector;
+
+    public OrganizationClientSeeder(ISecretProtector secretProtector)
+    {
+        _secretProtector = secretProtector;
+    }
+
     /// <inheritdoc />
     public string RequiredMigration => "20260328225834_AddKidAndIsActiveToRsaKeyPair";
 
@@ -67,7 +75,7 @@ public class OrganizationClientSeeder : IDbSeeder
 
         // 2. Client 作成
         var client = await SeedClientAsync(
-            context, clientId, clientSecret, appName, organization, logger);
+            context, clientId, clientSecret, appName, organization, _secretProtector, logger);
         hasChanges |= client.created;
 
         if (client.entity == null)
@@ -137,6 +145,7 @@ public class OrganizationClientSeeder : IDbSeeder
         string? clientSecret,
         string? appName,
         Organization organization,
+        ISecretProtector secretProtector,
         ILogger logger)
     {
         var existing = await context.Clients
@@ -175,7 +184,8 @@ public class OrganizationClientSeeder : IDbSeeder
         var client = new Client
         {
             ClientId = clientId,
-            ClientSecret = clientSecret,
+            // 保存前に client_secret を暗号化する（レガシー/dev は平文パススルー）。
+            ClientSecret = await secretProtector.ProtectAsync(clientSecret),
             AppName = appName ?? clientId,
             OrganizationId = organization.Id,
             // EC-CUBE 管理画面用の B2B パスキー Client。Client.SubjectType の

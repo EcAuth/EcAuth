@@ -4,6 +4,7 @@ using IdentityProvider.Controllers;
 using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
+using IdpUtilities.Security;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -48,7 +49,8 @@ namespace IdentityProvider.Test.Controllers
                 _mockTokenService.Object,
                 _mockB2BUserService.Object,
                 _context,
-                _mockLogger.Object);
+                _mockLogger.Object,
+                new PlaintextSecretProtector());
 
             _controller.ControllerContext = new ControllerContext
             {

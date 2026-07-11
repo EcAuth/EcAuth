@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using IdentityProvider.Models;
+using IdpUtilities.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace IdentityProvider.Data.Seeders;
@@ -18,6 +19,13 @@ namespace IdentityProvider.Data.Seeders;
 /// </summary>
 public class AccountsOrganizationSeeder : IDbSeeder
 {
+    private readonly ISecretProtector _secretProtector;
+
+    public AccountsOrganizationSeeder(ISecretProtector secretProtector)
+    {
+        _secretProtector = secretProtector;
+    }
+
     /// <inheritdoc />
     /// <remarks>
     /// Phase A で 4 マイグレーションが統合されたため、<c>AddSubjectTypeToClient</c> を含む
@@ -56,7 +64,7 @@ public class AccountsOrganizationSeeder : IDbSeeder
 
         foreach (var definition in Definitions)
         {
-            hasChanges |= await SeedDefinitionAsync(context, configuration, definition, logger);
+            hasChanges |= await SeedDefinitionAsync(context, configuration, definition, _secretProtector, logger);
         }
 
         if (hasChanges)
@@ -74,6 +82,7 @@ public class AccountsOrganizationSeeder : IDbSeeder
         EcAuthDbContext context,
         IConfiguration configuration,
         AccountOrgDefinition definition,
+        ISecretProtector secretProtector,
         ILogger logger)
     {
         var clientId = configuration[$"{definition.ConfigPrefix}_CLIENT_ID"];
@@ -98,7 +107,7 @@ public class AccountsOrganizationSeeder : IDbSeeder
 
         // 2. Client 作成（SubjectType.Account）
         var client = await SeedClientAsync(
-            context, definition, clientId, clientSecret, allowedRpIds, organization, logger);
+            context, definition, clientId, clientSecret, allowedRpIds, organization, secretProtector, logger);
         hasChanges |= client.created;
 
         if (client.entity == null)
@@ -154,6 +163,7 @@ public class AccountsOrganizationSeeder : IDbSeeder
         string? clientSecret,
         string? allowedRpIds,
         Organization organization,
+        ISecretProtector secretProtector,
         ILogger logger)
     {
         var existing = await context.Clients
@@ -177,7 +187,8 @@ public class AccountsOrganizationSeeder : IDbSeeder
         var client = new Client
         {
             ClientId = clientId,
-            ClientSecret = clientSecret,
+            // 保存前に client_secret を暗号化する（レガシー/dev は平文パススルー）。
+            ClientSecret = await secretProtector.ProtectAsync(clientSecret),
             AppName = definition.Name,
             OrganizationId = organization.Id,
             SubjectType = SubjectType.Account
