@@ -45,8 +45,11 @@ namespace EcAuthConsoleApp.Commands
         /// <param name="dryRun">-d, 実際には保存せず対象件数のみ表示する。</param>
         public async Task BackfillClientSecrets(bool dryRun = false, CancellationToken cancellationToken = default)
         {
-            // Client 自体はテナントフィルタを持たないが、将来フィルタが追加されても全テナントを
-            // 対象化できるよう防御的に IgnoreQueryFilters() を付ける。
+            // これは全テナント横断の管理バッチ（平文 client_secret を漏れなく暗号化する）であり、
+            // IgnoreQueryFilters() でテナント分離を意図的にバイパスするのが正しい挙動。
+            // Client 自体は現在テナントフィルタを持たないため今日時点では冗長だが、将来 Client に
+            // フィルタが追加されると、ConsoleApp は TenantName=null のため対象行をサイレントに取りこぼし、
+            // 平文の secret が暗号化されずに残る（移行ツールとして最悪の失敗）。それを防ぐため全件を対象化する。
             var clients = await _db.Clients
                 .IgnoreQueryFilters()
                 .ToListAsync(cancellationToken);
