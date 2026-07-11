@@ -20,7 +20,9 @@ fi
 
 # リソースグループを解決する。az webapp config appsettings list は --ids を受け付けず
 # -g/-n を必須要求するため、名前とリソースグループを引いて明示的に渡す。
-RESOURCE_GROUP=$(az webapp list --query "[?name=='${APP_NAME}'].resourceGroup | [0]" -o tsv)
+# az resource list は名前とリソースタイプでサーバーサイドフィルタするため、全 Web App を
+# 列挙する az webapp list より高速でレート制限にも当たりにくい。
+RESOURCE_GROUP=$(az resource list --name "${APP_NAME}" --resource-type "Microsoft.Web/sites" --query "[0].resourceGroup" -o tsv)
 if [ -z "${RESOURCE_GROUP}" ]; then
   echo "Web App が見つかりません: ${APP_NAME}" >&2
   exit 1
