@@ -94,10 +94,25 @@ builder.Services.AddHostedService<MagicLinkCleanupService>();
 // client_secret 等の保存時暗号化（EcAuthDocs#106）。
 // Development はローカル例外として平文パススルー、それ以外は Key Vault の CryptographyClient で暗号化する。
 // KeyVaultKeyId は非秘密の鍵 URL のため app_settings（ClientSecretProtection__KeyVaultKeyId）で渡す。
+//
+// 通常のデプロイ順序は「インフラ（鍵配線）→ アプリ」を維持する。ただし保険として、非 Development でも
+// 鍵 URL が未設定の場合は例外で起動失敗させず PlaintextSecretProtector にフォールバックする。これにより
+// 万一インフラ配線より先にアプリがデプロイされても、client_secret は現状どおり平文で動作し（元々平文の
+// ため回帰なし）、鍵を設定した時点で暗号化へ自動的に切り替わる。フォールバック時は運用者が気づけるよう
+// 起動ログ（stdout → AppServiceConsoleLogs）に警告を出す。
+var clientSecretKeyVaultKeyId = builder.Configuration["ClientSecretProtection:KeyVaultKeyId"];
+var usePlaintextSecretProtector = builder.Environment.IsDevelopment()
+    || string.IsNullOrEmpty(clientSecretKeyVaultKeyId);
+if (usePlaintextSecretProtector && !builder.Environment.IsDevelopment())
+{
+    Console.Error.WriteLine(
+        "[WARN] ClientSecretProtection:KeyVaultKeyId が未設定のため PlaintextSecretProtector に" +
+        "フォールバックします。client_secret は暗号化されません（鍵配線後に暗号化が有効化されます）。");
+}
 builder.Services.AddSecretProtection(options =>
 {
-    options.UsePlaintext = builder.Environment.IsDevelopment();
-    options.KeyVaultKeyId = builder.Configuration["ClientSecretProtection:KeyVaultKeyId"];
+    options.UsePlaintext = usePlaintextSecretProtector;
+    options.KeyVaultKeyId = clientSecretKeyVaultKeyId;
 });
 
 // データベース初期化（シーダー）
