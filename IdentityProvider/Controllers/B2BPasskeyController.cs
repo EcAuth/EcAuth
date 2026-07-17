@@ -114,6 +114,17 @@ namespace IdentityProvider.Controllers
             public string RedirectUri { get; set; } = string.Empty;
             [JsonPropertyName("state")]
             public string? State { get; set; }
+            /// <summary>
+            /// PKCE (RFC 7636) の code_challenge（オプション）。マイページ等の public client が
+            /// 指定する。認可コードに束縛し、/v1/token で code_verifier と突き合わせる。
+            /// </summary>
+            [JsonPropertyName("code_challenge")]
+            public string? CodeChallenge { get; set; }
+            /// <summary>
+            /// PKCE の code_challenge_method（"S256" のみ）。
+            /// </summary>
+            [JsonPropertyName("code_challenge_method")]
+            public string? CodeChallengeMethod { get; set; }
             [JsonPropertyName("response")]
             public AuthenticatorAssertionRawResponse Response { get; set; } = null!;
         }
@@ -513,7 +524,10 @@ namespace IdentityProvider.Controllers
                     ExpirationMinutes = 10,
                     // Client の SubjectType を反映（B2B 管理画面 = B2B、Account 管理コンソール = Account）。
                     // 認証機構（パスキー）は共通のため、認可コードの種別は Client 定義に従う。
-                    SubjectType = client.SubjectType
+                    SubjectType = client.SubjectType,
+                    // PKCE: public client（マイページ等）が指定した場合のみ束縛する。
+                    CodeChallenge = request.CodeChallenge,
+                    CodeChallengeMethod = request.CodeChallengeMethod
                 };
 
                 var authCode = await _authorizationCodeService.GenerateAuthorizationCodeAsync(authCodeRequest);

@@ -114,7 +114,8 @@ namespace IdentityProvider.Controllers
             [FromForm, Required] string code,
             [FromForm, Required] string redirect_uri,
             [FromForm, Required] string client_id,
-            [FromForm] string? client_secret)
+            [FromForm] string? client_secret,
+            [FromForm] string? code_verifier = null)
         {
             try
             {
@@ -232,6 +233,43 @@ namespace IdentityProvider.Controllers
                     {
                         error = "invalid_grant",
                         error_description = "client_idが一致しません。"
+                    });
+                }
+
+                // 9.5. PKCE (RFC 7636) 検証
+                // 認可コードに code_challenge が束縛されている場合は code_verifier 必須。
+                // public client（client_secret 未設定）は PKCE を必須とし、code_challenge を
+                // 持たない認可コードでのトークン交換を拒否する（認可コード横取り攻撃対策）。
+                var isPublicClient = string.IsNullOrEmpty(client.ClientSecret);
+                if (!string.IsNullOrEmpty(authorizationCode.CodeChallenge))
+                {
+                    if (string.IsNullOrEmpty(code_verifier))
+                    {
+                        _logger.LogWarning("PKCE code_verifier missing for client: {ClientId}", client_id);
+                        return BadRequest(new
+                        {
+                            error = "invalid_grant",
+                            error_description = "code_verifier が必要です。"
+                        });
+                    }
+
+                    if (!Security.PkceValidator.Verify(code_verifier, authorizationCode.CodeChallenge, authorizationCode.CodeChallengeMethod))
+                    {
+                        _logger.LogWarning("PKCE verification failed for client: {ClientId}", client_id);
+                        return BadRequest(new
+                        {
+                            error = "invalid_grant",
+                            error_description = "code_verifier が一致しません。"
+                        });
+                    }
+                }
+                else if (isPublicClient)
+                {
+                    _logger.LogWarning("Public client without PKCE rejected: {ClientId}", client_id);
+                    return BadRequest(new
+                    {
+                        error = "invalid_grant",
+                        error_description = "public client では PKCE (code_challenge) が必須です。"
                     });
                 }
 

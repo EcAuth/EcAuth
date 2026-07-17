@@ -44,6 +44,23 @@ namespace IdentityProvider.Models
         [MaxLength(500)]
         public string? State { get; set; }
 
+        /// <summary>
+        /// PKCE (RFC 7636) の code_challenge。認可リクエスト時に public client から
+        /// 受け取り、トークン交換時に code_verifier と突き合わせる。未使用（confidential
+        /// 経路など）の場合は null。
+        /// </summary>
+        [Column("code_challenge")]
+        [MaxLength(128)]
+        public string? CodeChallenge { get; set; }
+
+        /// <summary>
+        /// PKCE の code_challenge_method。本 IdP は "S256" のみサポートする。
+        /// CodeChallenge が null のときは null。
+        /// </summary>
+        [Column("code_challenge_method")]
+        [MaxLength(10)]
+        public string? CodeChallengeMethod { get; set; }
+
         [Column("expires_at")]
         public DateTimeOffset ExpiresAt { get; set; }
 
