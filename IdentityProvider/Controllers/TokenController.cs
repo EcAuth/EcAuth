@@ -4,6 +4,7 @@ using IdentityProvider.Telemetry;
 using IdpUtilities;
 using IdpUtilities.Security;
 using Asp.Versioning;
+using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
@@ -11,9 +12,12 @@ using System.ComponentModel.DataAnnotations;
 
 namespace IdentityProvider.Controllers
 {
+    // マイページ（ec-auth.io）が public client（PKCE）としてトークン交換するため、
+    // 申込 API と同じ SignupApiCors（ec-auth.io / www）を許可する。
     [Route("v{version:apiVersion}/token")]
     [ApiController]
     [ApiVersion("1.0")]
+    [EnableCors(SignupController.CorsPolicy)]
     public class TokenController : ControllerBase
     {
         private readonly EcAuthDbContext _context;
