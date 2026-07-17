@@ -67,6 +67,12 @@ namespace IdentityProvider.Controllers
             var managed = await _accountService.GetManagedOrganizationsAsync(subject);
             var orgIds = managed.Select(m => m.OrganizationId).ToHashSet();
 
+            // 管理対象が無ければ Client も無いので、DB を引かず空一覧を返す。
+            if (orgIds.Count == 0)
+            {
+                return Ok(new { clients = Array.Empty<object>() });
+            }
+
             // 管理対象 Organization は顧客テナント（別テナント）のため IgnoreQueryFilters で横断取得する。
             var clients = await _context.Clients
                 .IgnoreQueryFilters()
@@ -118,6 +124,17 @@ namespace IdentityProvider.Controllers
 
             var managed = await _accountService.GetManagedOrganizationsAsync(subject);
             var orgIds = managed.Select(m => m.OrganizationId).ToHashSet();
+
+            // 管理対象が無ければ所有権チェックは必ず失敗するため、DB を引かず 404 を返す。
+            if (orgIds.Count == 0)
+            {
+                _logger.LogWarning("Account {Subject} attempted to rotate secret for client {ClientDbId} without any managed organizations", subject, id);
+                return NotFound(new
+                {
+                    error = "not_found",
+                    error_description = "対象の Client が見つかりません。"
+                });
+            }
 
             var client = await _context.Clients
                 .IgnoreQueryFilters()

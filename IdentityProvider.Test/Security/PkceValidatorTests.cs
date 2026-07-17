@@ -43,5 +43,15 @@ namespace IdentityProvider.Test.Security
         {
             Assert.False(PkceValidator.Verify(verifier, challenge, "S256"));
         }
+
+        [Theory]
+        [InlineData(42)]   // 43 未満
+        [InlineData(129)]  // 128 超（極端に長い入力による資源枯渇対策）
+        public void Verify_VerifierLengthOutOfRange_ReturnsFalse(int length)
+        {
+            // RFC 7636 Section 4.1: code_verifier は 43〜128 文字
+            var verifier = new string('a', length);
+            Assert.False(PkceValidator.Verify(verifier, Challenge, "S256"));
+        }
     }
 }

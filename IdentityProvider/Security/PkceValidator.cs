@@ -22,6 +22,11 @@ namespace IdentityProvider.Security
             if (string.IsNullOrEmpty(codeVerifier) || string.IsNullOrEmpty(codeChallenge))
                 return false;
 
+            // RFC 7636 Section 4.1: code_verifier は 43〜128 文字。
+            // 範囲外は不正として即座に false（極端に長い入力による SHA256 の資源枯渇も防ぐ）。
+            if (codeVerifier.Length < 43 || codeVerifier.Length > 128)
+                return false;
+
             // 未指定時は S256 を既定とする（本 IdP は S256 のみ）
             var m = string.IsNullOrEmpty(method) ? "S256" : method;
             if (m != "S256")
