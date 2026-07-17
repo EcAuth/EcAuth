@@ -89,6 +89,11 @@ public class AccountsOrganizationSeeder : IDbSeeder
         var clientSecret = configuration[$"{definition.ConfigPrefix}_CLIENT_SECRET"];
         var allowedRpIds = configuration[$"{definition.ConfigPrefix}_ALLOWED_RP_IDS"];
         var redirectUri = configuration[$"{definition.ConfigPrefix}_REDIRECT_URI"];
+        // public client（PKCE）フラグ。true の場合は client_secret を持たない public client として
+        // 投入する（マイページ SPA が ec-auth.io から PKCE でトークン交換するため）。明示フラグに
+        // することで、CLIENT_SECRET の設定漏れによる意図しない public 化を防ぐ。
+        var isPublicClient = string.Equals(
+            configuration[$"{definition.ConfigPrefix}_CLIENT_PUBLIC"], "true", StringComparison.OrdinalIgnoreCase);
 
         // Client ID が未設定の環境（staging 等）ではこの Org を投入しない
         // 空白のみの値も未設定とみなす（誤設定による不正な Client ID 投入を防ぐ）
@@ -107,7 +112,7 @@ public class AccountsOrganizationSeeder : IDbSeeder
 
         // 2. Client 作成（SubjectType.Account）
         var client = await SeedClientAsync(
-            context, definition, clientId, clientSecret, allowedRpIds, organization, secretProtector, logger);
+            context, definition, clientId, clientSecret, isPublicClient, allowedRpIds, organization, secretProtector, logger);
         hasChanges |= client.created;
 
         if (client.entity == null)
@@ -161,6 +166,7 @@ public class AccountsOrganizationSeeder : IDbSeeder
         AccountOrgDefinition definition,
         string clientId,
         string? clientSecret,
+        bool isPublicClient,
         string? allowedRpIds,
         Organization organization,
         ISecretProtector secretProtector,
@@ -176,7 +182,9 @@ public class AccountsOrganizationSeeder : IDbSeeder
             return (existing, false);
         }
 
-        if (string.IsNullOrWhiteSpace(clientSecret))
+        // public client（PKCE）の場合は client_secret を持たない（空文字で保存）。
+        // それ以外は secret 必須（未設定なら安全側に倒して投入をスキップ）。
+        if (!isPublicClient && string.IsNullOrWhiteSpace(clientSecret))
         {
             logger.LogWarning(
                 "Client creation skipped for {Code} - {Prefix}_CLIENT_SECRET not configured",
@@ -187,12 +195,21 @@ public class AccountsOrganizationSeeder : IDbSeeder
         var client = new Client
         {
             ClientId = clientId,
-            // 保存前に client_secret を暗号化する（レガシー/dev は平文パススルー）。
-            ClientSecret = await secretProtector.ProtectAsync(clientSecret),
+            // public client は空 secret（TokenController が PKCE 必須と判定）。
+            // confidential は保存前に暗号化する（レガシー/dev は平文パススルー）。
+            ClientSecret = isPublicClient
+                ? string.Empty
+                : await secretProtector.ProtectAsync(clientSecret!),
             AppName = definition.Name,
             OrganizationId = organization.Id,
             SubjectType = SubjectType.Account
         };
+
+        if (isPublicClient)
+        {
+            logger.LogInformation(
+                "Seeding {ClientId} as PUBLIC client (PKCE required, no client_secret)", clientId);
+        }
 
         if (!string.IsNullOrWhiteSpace(allowedRpIds))
         {

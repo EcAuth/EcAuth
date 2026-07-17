@@ -102,13 +102,20 @@ STAGING_MOCK_IDP_USERINFO_ENDPOINT=https://localhost:9091/userinfo
 # 投入するために参照する。本番では Terraform app_settings (Phase E) から注入される。
 # Organization の code / tenant_name はサブドメイン解決と一致させるため Seeder 側で固定。
 ACCOUNTS_CLIENT_ID=ecauth-admin-console
+# マイページ SPA（ec-auth.io）が PKCE でトークン交換するため public client 化する。
+# CLIENT_PUBLIC=true のとき Seeder は client_secret を持たない public client を投入し、
+# TokenController は PKCE(code_challenge) を必須とする。CLIENT_SECRET は public 時は無視される。
+ACCOUNTS_CLIENT_PUBLIC=true
 ACCOUNTS_CLIENT_SECRET=accounts_client_secret
 # passkey 登録/認証の E2E は accounts テナントの origin（accounts.ec-auth.io）でページを開くため、
 # rp_id に accounts.ec-auth.io を許可する。localhost も併記して手動検証を許容する。
 ACCOUNTS_ALLOWED_RP_IDS=accounts.ec-auth.io,localhost
+# マイページのコールバックはフロント（ec-auth.io、本番）に着地する。本番 Terraform では
+# https://ec-auth.io/auth/callback を注入する。ローカルは Hugo dev の配信先に合わせて調整する。
 ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
 
 STG_ACCOUNTS_CLIENT_ID=ecauth-admin-console-stg
+STG_ACCOUNTS_CLIENT_PUBLIC=true
 STG_ACCOUNTS_CLIENT_SECRET=stg_accounts_client_secret
 STG_ACCOUNTS_ALLOWED_RP_IDS=stg-accounts.ec-auth.io,localhost
 STG_ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
