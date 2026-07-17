@@ -62,6 +62,19 @@ namespace IdentityProvider.Controllers
             {
                 _logger.LogInformation("UserInfo endpoint accessed");
 
+                // 0. OAuth 2.1 §5.3 / RFC 6750 §3.1: アクセストークンを URI クエリパラメータで
+                //    送信することは禁止（サーバーログ・ブラウザ履歴・Referer 経由の漏洩防止）。
+                //    ?access_token=... が付いている場合は無視せず明示的に 400 で拒否する。
+                if (HttpContext.Request.Query.ContainsKey("access_token"))
+                {
+                    _logger.LogWarning("Access token supplied via query parameter - rejected (OAuth 2.1 5.3)");
+                    return BadRequest(new
+                    {
+                        error = "invalid_request",
+                        error_description = "アクセストークンを URI クエリパラメータで送信することは許可されていません。Authorization ヘッダーを使用してください。"
+                    });
+                }
+
                 // 1. Authorization ヘッダーの取得 + Bearer Token 解析
                 string accessToken;
                 using (TimingScope.Begin("auth_header_parse"))

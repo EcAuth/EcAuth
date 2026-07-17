@@ -132,6 +132,23 @@ namespace IdentityProvider.Test.Controllers
         }
 
         [Fact]
+        public async Task Get_AccessTokenInQueryParameter_ReturnsBadRequest()
+        {
+            // Arrange - OAuth 2.1 §5.3: アクセストークンをクエリで送るのは禁止
+            _controller.HttpContext.Request.QueryString = new QueryString("?access_token=some-token");
+            // ヘッダーにも付けて「ヘッダーがあるから通す」を防ぐ（クエリ検出が優先されること）
+            _controller.HttpContext.Request.Headers["Authorization"] = "Bearer some-token";
+
+            // Act
+            var result = await _controller.Get();
+
+            // Assert - 400 invalid_request
+            var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+            var error = badRequest.Value!.GetType().GetProperty("error")?.GetValue(badRequest.Value);
+            Assert.Equal("invalid_request", error);
+        }
+
+        [Fact]
         public async Task Get_InvalidAuthorizationHeaderFormat_ReturnsUnauthorized()
         {
             // Arrange
