@@ -1,0 +1,29 @@
+using Microsoft.AspNetCore.Mvc;
+
+namespace IdentityProvider.Controllers
+{
+    /// <summary>
+    /// accounts オリジン（RP ID=accounts.ec-auth.io）で表示するパスキー認証 UI。
+    /// マイページ（ec-auth.io）は OAuth2(PKCE) の認可リクエストとして本ページに遷移し、
+    /// ここで navigator.credentials によるパスキー認証を行い、認可コードを
+    /// redirect_uri（ec-auth.io/auth/callback）へ返す。
+    ///
+    /// 静的ファイル（wwwroot）は本番でサブドメイン制約があるため、Razor ビュー +
+    /// コントローラルートで配信する（AuthorizationCallbackController と同じ流儀）。
+    /// バージョンプレフィックスは付けず、フロントの apiBaseUrl 直下（/passkey/...）に置く。
+    /// </summary>
+    [Route("passkey")]
+    public class PasskeyPageController : Controller
+    {
+        /// <summary>
+        /// GET /passkey/authenticate
+        /// クエリの client_id / redirect_uri / code_challenge / code_challenge_method / state を
+        /// JS が読み取り、パスキー認証 → authenticate/verify → 認可コードで redirect_uri へ遷移する。
+        /// </summary>
+        [HttpGet("authenticate")]
+        public IActionResult Authenticate()
+        {
+            return View("Authenticate");
+        }
+    }
+}
