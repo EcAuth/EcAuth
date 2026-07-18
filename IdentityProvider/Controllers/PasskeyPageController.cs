@@ -25,5 +25,17 @@ namespace IdentityProvider.Controllers
         {
             return View("Authenticate");
         }
+
+        /// <summary>
+        /// GET /passkey/register
+        /// 申込確認（confirm）直後の初回パスキー登録。クエリの registration_token / client_id を
+        /// JS が読み取り、register/options → navigator.credentials.create → register/verify
+        /// （registration_token で認可）を行い、成功後マイページへ誘導する。
+        /// </summary>
+        [HttpGet("register")]
+        public IActionResult Register()
+        {
+            return View("Register");
+        }
     }
 }
