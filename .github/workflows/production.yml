@@ -83,8 +83,9 @@ jobs:
           STG_ACCOUNTS_REDIRECT_URI: op://EcAuth/ecauth-prod-app/stg_accounts_redirect_uri
           # 管理コンソールを public client(PKCE) として投入するフラグ。非秘密のため
           # 1Password ではなくリテラルで配線する（AccountsOrganizationSeeder が起動時に参照）。
-          ACCOUNTS_CLIENT_PUBLIC: "true"
-          STG_ACCOUNTS_CLIENT_PUBLIC: "true"
+          # 有効化はマジックリンク×PKCE の解決と account 系 E2E の PKCE 対応後に true にする。
+          ACCOUNTS_CLIENT_PUBLIC: "false"
+          STG_ACCOUNTS_CLIENT_PUBLIC: "false"
           # Email delivery (signup / magic-link, Phase D)
           SENDGRID_API_KEY: op://EcAuth/ecauth-prod-app/sendgrid_api_key
           # Staging variables (required for idempotent script generation of staging migration)

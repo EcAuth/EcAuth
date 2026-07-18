@@ -102,10 +102,14 @@ STAGING_MOCK_IDP_USERINFO_ENDPOINT=https://localhost:9091/userinfo
 # 投入するために参照する。本番では Terraform app_settings (Phase E) から注入される。
 # Organization の code / tenant_name はサブドメイン解決と一致させるため Seeder 側で固定。
 ACCOUNTS_CLIENT_ID=ecauth-admin-console
-# マイページ SPA（ec-auth.io）が PKCE でトークン交換するため public client 化する。
-# CLIENT_PUBLIC=true のとき Seeder は client_secret を持たない public client を投入し、
-# TokenController は PKCE(code_challenge) を必須とする。CLIENT_SECRET は public 時は無視される。
-ACCOUNTS_CLIENT_PUBLIC=true
+# マイページ SPA（ec-auth.io）は PKCE でトークン交換するため、最終的には管理コンソールを
+# public client 化する（CLIENT_PUBLIC=true で Seeder が client_secret 無しの client を投入し、
+# TokenController が PKCE を必須にする）。
+# ただし有効化は下記2点の解決後に行う（それまで false のままにする）:
+#   1. マジックリンク × PKCE の衝突解決（リカバリ経路は verifier を持てない）
+#   2. account 系 E2E（account_signup_flow / account_magic_link_flow）の PKCE 対応
+# 現状 true にすると /v1/token が PKCE 必須になり、上記 E2E が失敗する。
+ACCOUNTS_CLIENT_PUBLIC=false
 ACCOUNTS_CLIENT_SECRET=accounts_client_secret
 # passkey 登録/認証の E2E は accounts テナントの origin（accounts.ec-auth.io）でページを開くため、
 # rp_id に accounts.ec-auth.io を許可する。localhost も併記して手動検証を許容する。
@@ -115,7 +119,8 @@ ACCOUNTS_ALLOWED_RP_IDS=accounts.ec-auth.io,localhost
 ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
 
 STG_ACCOUNTS_CLIENT_ID=ecauth-admin-console-stg
-STG_ACCOUNTS_CLIENT_PUBLIC=true
+# ACCOUNTS_CLIENT_PUBLIC と同じ理由で有効化は保留（上記コメント参照）。
+STG_ACCOUNTS_CLIENT_PUBLIC=false
 STG_ACCOUNTS_CLIENT_SECRET=stg_accounts_client_secret
 STG_ACCOUNTS_ALLOWED_RP_IDS=stg-accounts.ec-auth.io,localhost
 STG_ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
