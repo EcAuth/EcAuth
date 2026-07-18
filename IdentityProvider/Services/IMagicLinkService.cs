@@ -22,22 +22,38 @@ namespace IdentityProvider.Services
         Task RequestAsync(string? email, string? ipAddress, string? userAgent, CancellationToken ct = default);
 
         /// <summary>
-        /// マジックリンクのトークンを検証して単発消費し、認可コードを発行する。
+        /// マジックリンクのトークンを検証して単発消費し、アクセストークン／ID トークンを直接発行する。
         /// <para>
         /// 単発使用は Compare-And-Set（<c>used_at IS NULL</c> 条件の原子的 UPDATE）で保証する。
         /// 無効／期限切れ／使用済みはいずれも区別せず同一の <see cref="Exceptions.MagicLinkException"/>（400）をスローする。
         /// </para>
+        /// <para>
+        /// <strong>認可コードを介さずトークンを直接返す理由</strong>: 管理コンソール（マイページ）は
+        /// public client であり、<c>/v1/token</c> は public client に PKCE（RFC 7636）を必須とする。
+        /// マジックリンクはメール往復（別端末・別ブラウザもあり得る）のため <c>code_verifier</c> を
+        /// リンク着地側と紐づけられず、認可コード経由では原理的に PKCE 要件を満たせない。
+        /// 「PKCE 免除の認可コード」を作ると横取り対策の不変条件に穴が空くため、
+        /// リカバリ経路では認可コード自体を発行しない設計とする。トークン窃取に対する保護は
+        /// トークンの単発消費（Compare-And-Set）と短い有効期限が担う。
+        /// </para>
         /// </summary>
         /// <param name="token">メールリンクから受け取った平文トークン</param>
         /// <param name="ct">キャンセルトークン</param>
-        /// <returns>認可コードを付与したクライアントのリダイレクト先 URL</returns>
+        /// <returns>発行済みトークン一式</returns>
         Task<MagicLinkVerifyResult> VerifyAsync(string token, CancellationToken ct = default);
     }
 
     /// <summary>
-    /// マジックリンク検証の結果。フロントエンドは <see cref="RedirectUri"/> へブラウザ遷移し、
-    /// クライアント（管理コンソール）が認可コードをトークンに交換する。
+    /// マジックリンク検証の結果。フロントエンド（マイページ）はこのトークンをそのまま保持し、
+    /// 認可コード交換（<c>/auth/callback</c>）を経ずにマイページを表示する。
     /// </summary>
-    /// <param name="RedirectUri">認可コード（<c>code</c>）を付与したクライアントのリダイレクト先 URL</param>
-    public sealed record MagicLinkVerifyResult(string RedirectUri);
+    /// <param name="AccessToken">アクセストークン（<c>managed_orgs</c> クレームを含む）</param>
+    /// <param name="IdToken">ID トークン</param>
+    /// <param name="ExpiresIn">アクセストークンの有効期間（秒）</param>
+    /// <param name="TokenType">トークン種別（<c>Bearer</c>）</param>
+    public sealed record MagicLinkVerifyResult(
+        string AccessToken,
+        string IdToken,
+        int ExpiresIn,
+        string TokenType);
 }

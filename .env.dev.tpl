@@ -105,10 +105,11 @@ ACCOUNTS_CLIENT_ID=ecauth-admin-console
 # マイページ SPA（ec-auth.io）は PKCE でトークン交換するため、最終的には管理コンソールを
 # public client 化する（CLIENT_PUBLIC=true で Seeder が client_secret 無しの client を投入し、
 # TokenController が PKCE を必須にする）。
-# ただし有効化は下記2点の解決後に行う（それまで false のままにする）:
-#   1. マジックリンク × PKCE の衝突解決（リカバリ経路は verifier を持てない）
-#   2. account 系 E2E（account_signup_flow / account_magic_link_flow）の PKCE 対応
-# 現状 true にすると /v1/token が PKCE 必須になり、上記 E2E が失敗する。
+# ただし有効化は下記の解決後に行う（それまで false のままにする）:
+#   1. [解決済] マジックリンク × PKCE の衝突 → verify がトークンを直接返す方式に変更し、
+#      リカバリ経路は認可コードを介さなくなった（account_magic_link_flow も client_secret 不要に）
+#   2. [未解決] account_signup_flow E2E の PKCE 対応（パスキー経路で client_secret を使っている）
+# 現状 true にすると /v1/token が PKCE 必須になり、上記 2 の E2E が失敗する。
 ACCOUNTS_CLIENT_PUBLIC=false
 ACCOUNTS_CLIENT_SECRET=accounts_client_secret
 # passkey 登録/認証の E2E は accounts テナントの origin（accounts.ec-auth.io）でページを開くため、

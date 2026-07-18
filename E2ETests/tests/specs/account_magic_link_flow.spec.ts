@@ -5,19 +5,19 @@ import { waitForMessage, deleteMessages, extractToken } from '../helpers/mailpit
  * マジックリンクログインの E2E テスト（mailpit ベース）。
  *
  * 事前に申込 → confirm で Account を作成し、
- * request → メール（mailpit）→ リンク抽出 → verify → 認可コード → /token → managed_orgs を検証。
+ * request → メール（mailpit）→ リンク抽出 → verify → トークン + managed_orgs を検証。
  * さらに異常系（second-use / レート制限）も検証する。
+ *
+ * verify は認可コードではなくトークンを直接返す（管理コンソールは public client で
+ * /v1/token が PKCE 必須だが、マジックリンクはメール往復のため verifier を保持できない）。
+ * したがって本 spec は /v1/token を叩かず、client_secret も使わない。
  *
  * マジックリンクは UI を介さない純粋な API フローのため、テナント（accounts）解決は
  * すべて Host ヘッダで行う（パスキーのようなブラウザ操作は不要）。
  */
 test.describe.serial('マジックリンクログインの E2E テスト', () => {
   const baseUrl = process.env.E2E_BASE_URL || 'https://localhost:8081';
-  const tokenEndpoint = process.env.E2E_TOKEN_ENDPOINT || `${baseUrl}/v1/token`;
   const accountsHost = process.env.E2E_ACCOUNTS_HOST || 'accounts.ec-auth.io';
-  const accountsClientId = process.env.ACCOUNTS_CLIENT_ID || 'ecauth-admin-console';
-  const accountsClientSecret = process.env.ACCOUNTS_CLIENT_SECRET || 'accounts_client_secret';
-  const accountsRedirectUri = process.env.ACCOUNTS_REDIRECT_URI || 'https://localhost:8081/auth/callback';
 
   const runSuffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const email = `e2e-magic-${runSuffix}@example.com`;
@@ -71,7 +71,7 @@ test.describe.serial('マジックリンクログインの E2E テスト', () =>
     await mailpitCtx?.dispose();
   });
 
-  test('マジックリンク要求 → メール → verify → 認可コード → トークン + managed_orgs', async () => {
+  test('マジックリンク要求 → メール → verify → トークン + managed_orgs', async () => {
     test.setTimeout(30000);
 
     const reqRes = await apiAccounts.post(`${baseUrl}/api/account/magic-link/request`, {
@@ -94,32 +94,16 @@ test.describe.serial('マジックリンクログインの E2E テスト', () =>
       console.log('Magic-link verify body:', JSON.stringify(verifyBody));
     }
     expect(verifyRes.status()).toBe(200);
-    expect(verifyBody.location).toBeTruthy();
 
-    const location = new URL(verifyBody.location);
-    const code = location.searchParams.get('code')!;
-    expect(code).toBeTruthy();
+    // 認可コードを介さず、verify がそのままトークンを返す。
+    expect(verifyBody.access_token).toBeTruthy();
+    expect(verifyBody.id_token).toBeTruthy();
+    expect(verifyBody.token_type).toBe('Bearer');
+    expect(verifyBody.expires_in).toBeGreaterThan(0);
+    // 認可コードは発行されない（PKCE 必須の不変条件に例外を作らないため）。
+    expect(verifyBody.location).toBeUndefined();
 
-    const tokenRes = await apiAccounts.post(tokenEndpoint, {
-      form: {
-        client_id: accountsClientId,
-        client_secret: accountsClientSecret,
-        code,
-        redirect_uri: accountsRedirectUri,
-        grant_type: 'authorization_code',
-        scope: 'openid',
-      },
-    });
-    console.log('Token status:', tokenRes.status());
-    const tokenBody = await tokenRes.json();
-    if (tokenRes.status() !== 200) {
-      console.log('Token body:', JSON.stringify(tokenBody));
-    }
-    expect(tokenRes.status()).toBe(200);
-    expect(tokenBody.access_token).toBeTruthy();
-    expect(tokenBody.id_token).toBeTruthy();
-
-    const idPayload = JSON.parse(Buffer.from(tokenBody.id_token.split('.')[1], 'base64url').toString());
+    const idPayload = JSON.parse(Buffer.from(verifyBody.id_token.split('.')[1], 'base64url').toString());
     const managedOrgs = idPayload.managed_orgs;
     expect(Array.isArray(managedOrgs)).toBe(true);
     const owned = managedOrgs.find((o: { code: string }) => o.code === expectedOrgCode);
