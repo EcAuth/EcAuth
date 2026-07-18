@@ -40,11 +40,14 @@
     (function () {
         'use strict';
         var params = new URLSearchParams(window.location.search);
-        var registrationToken = params.get('token');
+        // 登録トークンは URL フラグメント（#token=…）で受け取る。フラグメントはサーバへ
+        // 送信されないため、アクセスログ / Azure Monitor / Referer にトークンが残らない。
+        var hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+        var registrationToken = hashParams.get('token');
         var clientId = params.get('client_id');
         var email = params.get('email');
         var rpId = window.location.hostname;
-        var mypageUrl = 'https://ec-auth.io/mypage/';
+        var mypageUrl = '@(ViewData["FrontendBaseUrl"])/mypage/';
 
         var btn = document.getElementById('reg-btn');
         var statusEl = document.getElementById('status');

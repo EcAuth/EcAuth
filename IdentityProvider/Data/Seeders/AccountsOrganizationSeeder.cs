@@ -178,6 +178,14 @@ public class AccountsOrganizationSeeder : IDbSeeder
 
         if (existing != null)
         {
+            // 既に confidential で投入済みの client に public 化が要求された場合は、
+            // client_secret を空にして public（PKCE 必須）へ切り替える。
+            if (isPublicClient && !string.IsNullOrEmpty(existing.ClientSecret))
+            {
+                existing.ClientSecret = string.Empty;
+                logger.LogInformation("Flipped existing client {ClientId} to PUBLIC (cleared client_secret)", clientId);
+                return (existing, true);
+            }
             logger.LogInformation("Client {ClientId} already exists, skipping", clientId);
             return (existing, false);
         }

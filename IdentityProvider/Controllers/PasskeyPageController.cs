@@ -15,6 +15,20 @@ namespace IdentityProvider.Controllers
     [Route("passkey")]
     public class PasskeyPageController : Controller
     {
+        private readonly IConfiguration _configuration;
+
+        public PasskeyPageController(IConfiguration configuration)
+        {
+            _configuration = configuration;
+        }
+
+        /// <summary>
+        /// フロント（申込〜マイページ）の配信元 base URL。環境ごとに切り替える
+        /// （本番 ec-auth.io / staging プレビュー / ローカル）。ビューの遷移先に使う。
+        /// </summary>
+        private string FrontendBaseUrl =>
+            (_configuration["Frontend:BaseUrl"] ?? "https://ec-auth.io").TrimEnd('/');
+
         /// <summary>
         /// GET /passkey/authenticate
         /// クエリの client_id / redirect_uri / code_challenge / code_challenge_method / state を
@@ -23,18 +37,21 @@ namespace IdentityProvider.Controllers
         [HttpGet("authenticate")]
         public IActionResult Authenticate()
         {
+            ViewData["FrontendBaseUrl"] = FrontendBaseUrl;
             return View("Authenticate");
         }
 
         /// <summary>
         /// GET /passkey/register
-        /// 申込確認（confirm）直後の初回パスキー登録。クエリの registration_token / client_id を
-        /// JS が読み取り、register/options → navigator.credentials.create → register/verify
-        /// （registration_token で認可）を行い、成功後マイページへ誘導する。
+        /// 申込確認（confirm）直後の初回パスキー登録。登録トークンは URL フラグメント（#token=）で
+        /// 受け取り（サーバへ送信されずアクセスログ/Referer に残さない）、client_id はクエリで受ける。
+        /// register/options → navigator.credentials.create → register/verify（registration_token で認可）
+        /// を行い、成功後マイページへ誘導する。
         /// </summary>
         [HttpGet("register")]
         public IActionResult Register()
         {
+            ViewData["FrontendBaseUrl"] = FrontendBaseUrl;
             return View("Register");
         }
     }

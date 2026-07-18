@@ -65,9 +65,19 @@ namespace IdentityProvider.Services
             if (string.IsNullOrEmpty(token)) return false;
             var hash = HashToken(token);
             var now = DateTimeOffset.UtcNow;
+
+            // 注: used_at の更新は read-then-update のため、厳密には同時リクエストで
+            // 二重消費し得る（TOCTOU）。ただし登録フローの single-use は WebAuthn の
+            // チャレンジセッション（register/options で発行し verify で消費される session_id）が
+            // 本質的に担保しており、本トークンの used_at は多重防御として機能する。
+            // 二重消費が成立しても影響は「アカウント所有者が自分のパスキーを追加登録する」に
+            // とどまり、他者へのなりすましには繋がらない。
+            // （原子的 UPDATE には ExecuteUpdateAsync が適するが、テストの EF InMemory
+            //   プロバイダが未対応のため採用していない。）
             var entity = await _context.PasskeyRegistrationTokens
                 .FirstOrDefaultAsync(t => t.TokenHash == hash && t.UsedAt == null && t.ExpiresAt > now, ct);
             if (entity == null) return false;
+
             entity.UsedAt = now;
             await _context.SaveChangesAsync(ct);
             _logger.LogInformation("Passkey registration token consumed for subject {Subject}", entity.Subject);

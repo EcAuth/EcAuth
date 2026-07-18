@@ -188,7 +188,9 @@ namespace IdentityProvider.Controllers
                 return null;
             }
 
-            if (authHeaderValue.Scheme != "Bearer" || string.IsNullOrEmpty(authHeaderValue.Parameter))
+            // RFC 7235: auth-scheme は大文字小文字を区別しない
+            if (!string.Equals(authHeaderValue.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrEmpty(authHeaderValue.Parameter))
             {
                 return null;
             }
