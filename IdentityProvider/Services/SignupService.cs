@@ -35,6 +35,7 @@ namespace IdentityProvider.Services
         private readonly IConfiguration _configuration;
         private readonly ILogger<SignupService> _logger;
         private readonly ISecretProtector _secretProtector;
+        private readonly IPasskeyRegistrationTokenService _registrationTokenService;
 
         public SignupService(
             EcAuthDbContext context,
@@ -43,7 +44,8 @@ namespace IdentityProvider.Services
             IDisposableEmailChecker disposableEmailChecker,
             IConfiguration configuration,
             ILogger<SignupService> logger,
-            ISecretProtector secretProtector)
+            ISecretProtector secretProtector,
+            IPasskeyRegistrationTokenService registrationTokenService)
         {
             _context = context;
             _tenantService = tenantService;
@@ -52,6 +54,7 @@ namespace IdentityProvider.Services
             _configuration = configuration;
             _logger = logger;
             _secretProtector = secretProtector;
+            _registrationTokenService = registrationTokenService;
         }
 
         /// <inheritdoc />
@@ -117,7 +120,7 @@ namespace IdentityProvider.Services
         }
 
         /// <inheritdoc />
-        public async Task<SignupRequest> ConfirmAsync(string token, CancellationToken ct = default)
+        public async Task<ISignupService.ConfirmResult> ConfirmAsync(string token, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(token))
             {
@@ -263,13 +266,18 @@ namespace IdentityProvider.Services
                 signupRequest.ConfirmedAt = DateTimeOffset.UtcNow;
 
                 await _context.SaveChangesAsync(ct);
+
+                // 初回パスキー登録を認可する一回限りトークンを同一トランザクションで発行する。
+                // accounts コンソールは public client のため、登録 API はこのトークンで認可する。
+                var registrationToken = await _registrationTokenService.IssueAsync(subject, ct);
+
                 await transaction.CommitAsync(ct);
 
                 _logger.LogInformation(
                     "申込を確認し本登録が完了しました: Tenant={Tenant}, TokenHash={TokenHash}, Subject={Subject}, Orgs={OrgCount}",
                     signupRequest.TenantName, TokenHashPrefix(token), subject, sites.Sites.Count);
 
-                return signupRequest;
+                return new ISignupService.ConfirmResult(signupRequest, registrationToken);
             }
             catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
             {

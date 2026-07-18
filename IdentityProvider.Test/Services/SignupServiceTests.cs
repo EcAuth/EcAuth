@@ -104,7 +104,8 @@ namespace IdentityProvider.Test.Services
                 disposableCheckerMock.Object,
                 CreateConfiguration(withConfirmBaseUrl),
                 _logger,
-                new PlaintextSecretProtector());
+                new PlaintextSecretProtector(),
+                new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()));
         }
 
         /// <summary>
@@ -223,7 +224,8 @@ namespace IdentityProvider.Test.Services
 
             var service = new SignupService(
                 context, tenantService, emailMock.Object, disposableMock.Object, config, _logger,
-                new PlaintextSecretProtector());
+                new PlaintextSecretProtector(),
+                new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()));
 
             await service.RequestAsync(ValidInput());
 
@@ -427,7 +429,8 @@ namespace IdentityProvider.Test.Services
 
             var confirmed = await service.ConfirmAsync(token);
 
-            Assert.NotNull(confirmed.ConfirmedAt);
+            Assert.NotNull(confirmed.Request.ConfirmedAt);
+            Assert.False(string.IsNullOrEmpty(confirmed.RegistrationToken));
             var customerOrgs = await context.Organizations
                 .IgnoreQueryFilters()
                 .Where(o => o.Code != Tenant)

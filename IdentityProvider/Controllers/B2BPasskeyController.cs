@@ -29,6 +29,7 @@ namespace IdentityProvider.Controllers
         private readonly EcAuthDbContext _context;
         private readonly ILogger<B2BPasskeyController> _logger;
         private readonly ISecretProtector _secretProtector;
+        private readonly IPasskeyRegistrationTokenService _registrationTokenService;
 
         public B2BPasskeyController(
             IB2BPasskeyService passkeyService,
@@ -37,7 +38,8 @@ namespace IdentityProvider.Controllers
             IB2BUserService b2bUserService,
             EcAuthDbContext context,
             ILogger<B2BPasskeyController> logger,
-            ISecretProtector secretProtector)
+            ISecretProtector secretProtector,
+            IPasskeyRegistrationTokenService registrationTokenService)
         {
             _passkeyService = passkeyService;
             _authorizationCodeService = authorizationCodeService;
@@ -46,6 +48,7 @@ namespace IdentityProvider.Controllers
             _context = context;
             _logger = logger;
             _secretProtector = secretProtector;
+            _registrationTokenService = registrationTokenService;
         }
 
         #region Request/Response DTOs
@@ -59,6 +62,12 @@ namespace IdentityProvider.Controllers
             public string ClientId { get; set; } = string.Empty;
             [JsonPropertyName("client_secret")]
             public string ClientSecret { get; set; } = string.Empty;
+            /// <summary>
+            /// 初回パスキー登録トークン（accounts の public client 経路）。指定時は client_secret の
+            /// 代わりにこれで認可し、b2b_subject / external_id はトークンから確定する。
+            /// </summary>
+            [JsonPropertyName("registration_token")]
+            public string? RegistrationToken { get; set; }
             [JsonPropertyName("rp_id")]
             public string RpId { get; set; } = string.Empty;
             [JsonPropertyName("b2b_subject")]
@@ -80,6 +89,9 @@ namespace IdentityProvider.Controllers
             public string ClientId { get; set; } = string.Empty;
             [JsonPropertyName("client_secret")]
             public string ClientSecret { get; set; } = string.Empty;
+            /// <summary>初回パスキー登録トークン（register/options と同じ値）。指定時は client_secret 不要。</summary>
+            [JsonPropertyName("registration_token")]
+            public string? RegistrationToken { get; set; }
             [JsonPropertyName("session_id")]
             public string SessionId { get; set; } = string.Empty;
             [JsonPropertyName("response")]
@@ -154,34 +166,62 @@ namespace IdentityProvider.Controllers
                     });
                 }
 
-                if (string.IsNullOrWhiteSpace(request.B2BSubject))
+                // 認可: registration_token 経路（accounts の初回登録・public client）と
+                // 従来の client_secret 経路（EC-CUBE プラグイン等）で分岐する。
+                Client client;
+                string b2bSubject;
+                string externalId;
+                if (!string.IsNullOrWhiteSpace(request.RegistrationToken))
                 {
-                    return BadRequest(new
+                    var authz = await AuthorizeByRegistrationTokenAsync(request.ClientId, request.RegistrationToken);
+                    if (authz == null)
                     {
-                        error = "invalid_request",
-                        error_description = "b2b_subject は必須です。"
-                    });
+                        _logger.LogWarning("Registration token authorization failed for client: {ClientId}", request.ClientId);
+                        return Unauthorized(new
+                        {
+                            error = "invalid_grant",
+                            error_description = "登録トークンが無効か期限切れです。"
+                        });
+                    }
+                    // b2b_subject / external_id はトークンから確定する（リクエスト値は使わない）。
+                    client = authz.Value.Client;
+                    b2bSubject = authz.Value.Subject;
+                    externalId = authz.Value.ExternalId;
                 }
-
-                if (string.IsNullOrWhiteSpace(request.ExternalId))
+                else
                 {
-                    return BadRequest(new
+                    if (string.IsNullOrWhiteSpace(request.B2BSubject))
                     {
-                        error = "invalid_request",
-                        error_description = "external_id は必須です。"
-                    });
-                }
+                        return BadRequest(new
+                        {
+                            error = "invalid_request",
+                            error_description = "b2b_subject は必須です。"
+                        });
+                    }
 
-                // クライアント認証
-                var client = await AuthenticateClientAsync(request.ClientId, request.ClientSecret);
-                if (client == null)
-                {
-                    _logger.LogWarning("Client authentication failed for: {ClientId}", request.ClientId);
-                    return Unauthorized(new
+                    if (string.IsNullOrWhiteSpace(request.ExternalId))
                     {
-                        error = "invalid_client",
-                        error_description = "クライアント認証に失敗しました。"
-                    });
+                        return BadRequest(new
+                        {
+                            error = "invalid_request",
+                            error_description = "external_id は必須です。"
+                        });
+                    }
+
+                    // クライアント認証（client_secret）
+                    var authenticated = await AuthenticateClientAsync(request.ClientId, request.ClientSecret);
+                    if (authenticated == null)
+                    {
+                        _logger.LogWarning("Client authentication failed for: {ClientId}", request.ClientId);
+                        return Unauthorized(new
+                        {
+                            error = "invalid_client",
+                            error_description = "クライアント認証に失敗しました。"
+                        });
+                    }
+                    client = authenticated;
+                    b2bSubject = request.B2BSubject;
+                    externalId = request.ExternalId;
                 }
 
                 Activity.Current?.SetTag("client.id", client.ClientId);
@@ -191,10 +231,10 @@ namespace IdentityProvider.Controllers
                 {
                     ClientId = request.ClientId,
                     RpId = request.RpId,
-                    B2BSubject = request.B2BSubject,
+                    B2BSubject = b2bSubject,
                     DisplayName = request.DisplayName,
                     DeviceName = request.DeviceName,
-                    ExternalId = request.ExternalId
+                    ExternalId = externalId
                 };
 
                 var result = await _passkeyService.CreateRegistrationOptionsAsync(serviceRequest);
@@ -271,19 +311,28 @@ namespace IdentityProvider.Controllers
                     });
                 }
 
-                // クライアント認証
+                // 認可: registration_token 経路（public client）と client_secret 経路で分岐する。
                 Client? client;
+                var useRegistrationToken = !string.IsNullOrWhiteSpace(request.RegistrationToken);
                 using (TimingScope.Begin("client_authenticate"))
                 {
-                    client = await AuthenticateClientAsync(request.ClientId, request.ClientSecret);
+                    if (useRegistrationToken)
+                    {
+                        var authz = await AuthorizeByRegistrationTokenAsync(request.ClientId, request.RegistrationToken!);
+                        client = authz?.Client;
+                    }
+                    else
+                    {
+                        client = await AuthenticateClientAsync(request.ClientId, request.ClientSecret);
+                    }
                 }
                 if (client == null)
                 {
                     _logger.LogWarning("Client authentication failed for: {ClientId}", request.ClientId);
                     return Unauthorized(new
                     {
-                        error = "invalid_client",
-                        error_description = "クライアント認証に失敗しました。"
+                        error = useRegistrationToken ? "invalid_grant" : "invalid_client",
+                        error_description = useRegistrationToken ? "登録トークンが無効か期限切れです。" : "クライアント認証に失敗しました。"
                     });
                 }
 
@@ -312,6 +361,12 @@ namespace IdentityProvider.Controllers
                         error = "invalid_request",
                         error_description = result.ErrorMessage ?? "パスキー登録の検証に失敗しました。"
                     });
+                }
+
+                // 登録成功時、使い捨ての登録トークンを消費する（再利用防止）。
+                if (useRegistrationToken)
+                {
+                    await _registrationTokenService.ConsumeAsync(request.RegistrationToken!);
                 }
 
                 _logger.LogInformation("B2B Passkey registered successfully. CredentialId: {CredentialId}", result.CredentialId);
@@ -680,6 +735,46 @@ namespace IdentityProvider.Controllers
         ///
         /// 参考: https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.cryptographicoperations.fixedtimeequals
         /// </remarks>
+        /// <summary>
+        /// 登録トークンによる認可（accounts の初回パスキー登録・public client 経路）。
+        /// トークンを検証して対象 Subject を得、public な Account コンソール client を
+        /// client_secret 無しで解決し、external_id を confirm 済み B2BUser から確定する。
+        /// 無効・不一致なら null。
+        /// </summary>
+        private async Task<(Client Client, string Subject, string ExternalId)?> AuthorizeByRegistrationTokenAsync(
+            string clientId, string registrationToken)
+        {
+            if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(registrationToken))
+            {
+                return null;
+            }
+
+            var subject = await _registrationTokenService.ValidateAsync(registrationToken);
+            if (subject == null)
+            {
+                return null;
+            }
+
+            // public な Account コンソール client を client_id で解決（secret 不要）。
+            var client = await _context.Clients
+                .IgnoreQueryFilters()
+                .Include(c => c.RedirectUris)
+                .FirstOrDefaultAsync(c => c.ClientId == clientId);
+            if (client == null || client.SubjectType != SubjectType.Account)
+            {
+                return null;
+            }
+
+            // external_id は confirm で作成済みの B2BUser（Subject 共有）から解決する。
+            var b2bUser = await _b2bUserService.GetBySubjectAsync(subject);
+            if (b2bUser == null)
+            {
+                return null;
+            }
+
+            return (client, subject, b2bUser.ExternalId);
+        }
+
         private async Task<Client?> AuthenticateClientAsync(string clientId, string clientSecret)
         {
             if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
