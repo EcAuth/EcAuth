@@ -772,6 +772,18 @@ namespace IdentityProvider.Controllers
                 return null;
             }
 
+            // トークンを発行元テナントへ束縛する。SubjectType.Account の確認だけでは、
+            // 別の Account 種別 Client（例: accounts のトークンを stg-accounts コンソールへ）へ
+            // 持ち込めてしまうため、提示された client の Organization が対象アカウントの
+            // 所属 Organization と一致することを必須にする。
+            if (client.OrganizationId == null || client.OrganizationId != b2bUser.OrganizationId)
+            {
+                _logger.LogWarning(
+                    "Registration token presented to a client of a different organization. ClientId={ClientId}",
+                    client.ClientId);
+                return null;
+            }
+
             return (client, subject, b2bUser.ExternalId);
         }
 
