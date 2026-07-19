@@ -1203,7 +1203,7 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
-        public async Task CreateAuthenticationOptionsAsync_WithoutSubject_ShouldNotDiscloseCredentials()
+        public async Task CreateAuthenticationOptionsAsync_WithoutSubject_ShouldGetAllCredentialsForRpId()
         {
             // Arrange
             // 複数ユーザーのクレデンシャルを追加
@@ -1265,8 +1265,56 @@ namespace IdentityProvider.Test.Services
             Assert.NotNull(result);
             // 手動構築されたAssertionOptionsの内容を確認
             Assert.Equal(challengeBytes, result.Options.Challenge);
-            // b2b_subject 未指定時は allowCredentials を空にする（discoverable credential フロー）。
-            // 組織内の全クレデンシャル ID を無認証で列挙させないため。
+            // Account 以外の client（EC-CUBE プラグイン等の稼働中経路）は従来動作を維持する。
+            // 既存クレデンシャルが discoverable とは限らず、空にするとログイン不能を招くため。
+            Assert.Equal(2, result.Options.AllowCredentials!.Count);
+        }
+
+        [Fact]
+        public async Task CreateAuthenticationOptionsAsync_WithoutSubject_AccountClient_ShouldNotDiscloseCredentials()
+        {
+            // Arrange: accounts の管理コンソール（SubjectType.Account）は discoverable credential 前提のため、
+            // b2b_subject 未指定でも allowCredentials を返さない（組織内の全クレデンシャル ID を秘匿する）。
+            var accountClient = new Client
+            {
+                Id = 3,
+                ClientId = "accounts-console-id",
+                ClientSecret = string.Empty,
+                AppName = "Accounts コンソール",
+                OrganizationId = 1,
+                SubjectType = SubjectType.Account,
+                AllowedRpIds = new List<string> { "shop.example.com" }
+            };
+            _context.Clients.Add(accountClient);
+            _context.B2BPasskeyCredentials.Add(new B2BPasskeyCredential
+            {
+                B2BSubject = TestB2BSubject,
+                CredentialId = Encoding.UTF8.GetBytes("credential-account"),
+                PublicKey = Encoding.UTF8.GetBytes("public-key-account"),
+                SignCount = 0,
+                AaGuid = Guid.NewGuid()
+            });
+            await _context.SaveChangesAsync();
+
+            var challengeBytes = Encoding.UTF8.GetBytes("auth-challenge");
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(new IWebAuthnChallengeService.ChallengeResult
+                {
+                    SessionId = "auth-session-account",
+                    Challenge = WebEncoders.Base64UrlEncode(challengeBytes),
+                    ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+                });
+
+            // Act
+            var result = await _service.CreateAuthenticationOptionsAsync(
+                new IB2BPasskeyService.AuthenticationOptionsRequest
+                {
+                    ClientId = "accounts-console-id",
+                    RpId = "shop.example.com",
+                    B2BSubject = null
+                });
+
+            // Assert
             Assert.Empty(result.Options.AllowCredentials!);
         }
 

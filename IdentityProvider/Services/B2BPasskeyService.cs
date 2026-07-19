@@ -553,20 +553,47 @@ namespace IdentityProvider.Services
             }
 
             // 許可されるクレデンシャルを取得
-            //
-            // b2b_subject 未指定（誰がログインするか未確定）の場合は allowCredentials を空にする。
-            // 以前は「クライアントに紐づく Organization の全ユーザー」の credential ID を返していたが、
-            // この API は無認証で呼べるため、client_id を知る第三者が組織内の全クレデンシャル ID と
-            // 登録ユーザー数を列挙できてしまう（本人確認前の情報漏えい）。
-            // 空の allowCredentials は WebAuthn の discoverable credential（resident key）フローとなり、
-            // 認証器側がユーザーを選択するため、サーバーが事前に候補を開示する必要がない。
             var allowCredentials = new List<PublicKeyCredentialDescriptor>();
             if (b2bSubject != null)
             {
-                // 特定ユーザーのクレデンシャルのみ（EC-CUBE プラグイン等、ユーザー確定済みの経路）
+                // 特定ユーザーのクレデンシャルのみ（ユーザー確定済みの経路）
                 allowCredentials = await _context.B2BPasskeyCredentials
                     .IgnoreQueryFilters()
                     .Where(c => c.B2BSubject == b2bSubject)
+                    .Select(c => new PublicKeyCredentialDescriptor(
+                        PublicKeyCredentialType.PublicKey,
+                        c.CredentialId,
+                        ParseTransports(c.TransportsJson)))
+                    .ToListAsync();
+            }
+            else if (client.SubjectType != SubjectType.Account)
+            {
+                // b2b_subject 未指定（誰がログインするか未確定）の経路。
+                //
+                // 本来は allowCredentials を空にして discoverable credential フローに寄せたい。
+                // この API は無認証で呼べるため、client_id を知る第三者が組織内の全クレデンシャル ID と
+                // 登録ユーザー数を列挙できてしまうため（本人確認前の情報漏えい）。
+                //
+                // ただし EC-CUBE プラグインの管理画面ログインはこの経路を使っており、既存クレデンシャルは
+                // ResidentKey=Preferred で登録されている。Preferred は discoverable を保証しないうえ、
+                // B2BPasskeyCredential には resident key か否かを保存していないため、既存クレデンシャルが
+                // discoverable かを事後に判定できない。ここで空にすると非 discoverable なクレデンシャルの
+                // ユーザーがログイン不能になり、復旧にはログインが必要という詰みを招く。
+                //
+                // そのため稼働中の経路（Account 以外）は従来動作を維持し、列挙対策は
+                // 「rk フラグの保存 → 新規登録を Required 化 → 既存ユーザーの再登録 → 空へ切替」
+                // の移行を経て別途行う。accounts の管理コンソール（SubjectType.Account）は本 PR で
+                // 新設した経路で既存ユーザーが存在せず、登録時に ResidentKey=Required としているため、
+                // 上記 else 側（空の allowCredentials）で安全に運用できる。
+                var orgUserSubjects = await _context.B2BUsers
+                    .IgnoreQueryFilters()
+                    .Where(u => u.OrganizationId == client.OrganizationId)
+                    .Select(u => u.Subject)
+                    .ToListAsync();
+
+                allowCredentials = await _context.B2BPasskeyCredentials
+                    .IgnoreQueryFilters()
+                    .Where(c => orgUserSubjects.Contains(c.B2BSubject))
                     .Select(c => new PublicKeyCredentialDescriptor(
                         PublicKeyCredentialType.PublicKey,
                         c.CredentialId,
