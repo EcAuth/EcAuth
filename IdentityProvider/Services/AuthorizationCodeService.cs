@@ -57,6 +57,20 @@ namespace IdentityProvider.Services
 
             if (request.ExpirationMinutes <= 0 || request.ExpirationMinutes > 30)
                 throw new ArgumentException("ExpirationMinutes は1分から30分の範囲で指定してください", nameof(request.ExpirationMinutes));
+
+            // PKCE: CodeChallenge を指定する場合の検証
+            if (!string.IsNullOrEmpty(request.CodeChallenge))
+            {
+                // AuthorizationCode.CodeChallenge は MaxLength(128)。128 文字超は保存時に
+                // DbUpdateException（桁溢れ）→ 500 になるため、ここで弾いて 400 相当にする。
+                if (request.CodeChallenge.Length > 128)
+                    throw new ArgumentException("code_challenge は128文字以下である必要があります", nameof(request.CodeChallenge));
+
+                // method は "S256" のみ許容する
+                var method = string.IsNullOrEmpty(request.CodeChallengeMethod) ? "S256" : request.CodeChallengeMethod;
+                if (method != "S256")
+                    throw new ArgumentException("code_challenge_method は S256 のみサポートします", nameof(request.CodeChallengeMethod));
+            }
         }
 
 
@@ -94,6 +108,10 @@ namespace IdentityProvider.Services
                 RedirectUri = request.RedirectUri,
                 Scope = request.Scope,
                 State = request.State,
+                CodeChallenge = string.IsNullOrEmpty(request.CodeChallenge) ? null : request.CodeChallenge,
+                CodeChallengeMethod = string.IsNullOrEmpty(request.CodeChallenge)
+                    ? null
+                    : (string.IsNullOrEmpty(request.CodeChallengeMethod) ? "S256" : request.CodeChallengeMethod),
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(request.ExpirationMinutes),
                 IsUsed = false,
                 CreatedAt = DateTimeOffset.UtcNow

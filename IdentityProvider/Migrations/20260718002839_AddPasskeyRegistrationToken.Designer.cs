@@ -4,6 +4,7 @@ using IdentityProvider.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IdentityProvider.Migrations
 {
     [DbContext(typeof(EcAuthDbContext))]
-    partial class EcAuthDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260718002839_AddPasskeyRegistrationToken")]
+    partial class AddPasskeyRegistrationToken
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -766,11 +769,6 @@ namespace IdentityProvider.Migrations
                         .HasColumnType("datetimeoffset")
                         .HasColumnName("expires_at");
 
-                    b.Property<string>("SessionId")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)")
-                        .HasColumnName("session_id");
-
                     b.Property<string>("Subject")
                         .IsRequired()
                         .HasMaxLength(255)
@@ -784,7 +782,6 @@ namespace IdentityProvider.Migrations
                         .HasColumnName("token_hash");
 
                     b.Property<DateTimeOffset?>("UsedAt")
-                        .IsConcurrencyToken()
                         .HasColumnType("datetimeoffset")
                         .HasColumnName("used_at");
 

@@ -50,7 +50,8 @@ namespace IdentityProvider.Test.Controllers
                 _mockB2BUserService.Object,
                 _context,
                 _mockLogger.Object,
-                new PlaintextSecretProtector());
+                new PlaintextSecretProtector(),
+                new Mock<IPasskeyRegistrationTokenService>().Object);
 
             _controller.ControllerContext = new ControllerContext
             {

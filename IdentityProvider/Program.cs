@@ -88,6 +88,7 @@ builder.Services.AddSingleton<IDisposableEmailChecker, DisposableEmailChecker>()
 builder.Services.Configure<MagicLinkOptions>(
     builder.Configuration.GetSection(MagicLinkOptions.SectionName));
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
+builder.Services.AddScoped<IPasskeyRegistrationTokenService, PasskeyRegistrationTokenService>();
 // 期限切れトークンの日次クリーンアップ（既定の保持期間 7 日）
 builder.Services.AddHostedService<MagicLinkCleanupService>();
 

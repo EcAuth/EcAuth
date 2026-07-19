@@ -27,11 +27,17 @@ namespace IdentityProvider.Services
         /// </summary>
         /// <param name="token">確認メールに埋め込まれた平文トークン。</param>
         /// <param name="ct">キャンセルトークン。</param>
-        /// <returns>確認済みとなった <see cref="SignupRequest"/>。</returns>
+        /// <returns>確認済みの <see cref="SignupRequest"/> と、初回パスキー登録を認可する一回限りトークン。</returns>
         /// <exception cref="Exceptions.SignupValidationException">
         /// トークンが無効・期限切れ・確認済みの場合、または再バリデーション違反時（組織コード衝突は HTTP 409 相当）。
         /// </exception>
-        Task<SignupRequest> ConfirmAsync(string token, CancellationToken ct = default);
+        Task<ConfirmResult> ConfirmAsync(string token, CancellationToken ct = default);
+
+        /// <summary>
+        /// 本登録の結果。<paramref name="RegistrationToken"/> は accounts のパスキー登録ページへ
+        /// 引き渡す一回限りの平文トークン（public client のため client_secret の代替として使う）。
+        /// </summary>
+        public sealed record ConfirmResult(SignupRequest Request, string RegistrationToken);
 
         /// <summary>
         /// 確認トークンに対応する申込の状況を返す。
