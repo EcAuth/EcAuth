@@ -144,7 +144,10 @@ namespace IdentityProvider.Controllers
                     Scope = stateData.Scope,
                     State = state,
                     ExpirationMinutes = 10,
-                    SubjectType = SubjectType.B2C  // B2C認証（外部IdPフェデレーション）
+                    SubjectType = SubjectType.B2C,  // B2C認証（外部IdPフェデレーション）
+                    // PKCE: /v1/authorization で受け取り封緘した State から復元して認可コードに束縛する
+                    CodeChallenge = stateData.CodeChallenge,
+                    CodeChallengeMethod = stateData.CodeChallengeMethod
                 };
 
                 var authorizationCode = await _authorizationCodeService.GenerateAuthorizationCodeAsync(authCodeRequest);
