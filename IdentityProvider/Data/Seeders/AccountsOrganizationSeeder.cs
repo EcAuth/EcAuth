@@ -186,6 +186,25 @@ public class AccountsOrganizationSeeder : IDbSeeder
                 logger.LogInformation("Flipped existing client {ClientId} to PUBLIC (cleared client_secret)", clientId);
                 return (existing, true);
             }
+
+            // 逆方向（public → confidential）も同じ設定値で戻せるようにする。
+            // 片方向だけだと、public 化を切り戻したい場合に DB を手作業で直す必要があり、
+            // 本番でのロールバック手段が事実上失われるため。
+            if (!isPublicClient && string.IsNullOrEmpty(existing.ClientSecret))
+            {
+                if (string.IsNullOrWhiteSpace(clientSecret))
+                {
+                    logger.LogWarning(
+                        "Client {ClientId} is PUBLIC but {Prefix}_CLIENT_PUBLIC=false; cannot revert without {Prefix}_CLIENT_SECRET",
+                        clientId, definition.ConfigPrefix, definition.ConfigPrefix);
+                    return (existing, false);
+                }
+
+                existing.ClientSecret = await secretProtector.ProtectAsync(clientSecret);
+                logger.LogInformation("Reverted existing client {ClientId} to CONFIDENTIAL (restored client_secret)", clientId);
+                return (existing, true);
+            }
+
             logger.LogInformation("Client {ClientId} already exists, skipping", clientId);
             return (existing, false);
         }

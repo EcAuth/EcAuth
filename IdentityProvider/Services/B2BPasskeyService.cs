@@ -212,7 +212,13 @@ namespace IdentityProvider.Services
             var authenticatorSelection = new AuthenticatorSelection
             {
                 AuthenticatorAttachment = AuthenticatorAttachment.Platform,
-                ResidentKey = ResidentKeyRequirement.Preferred,
+                // accounts の管理コンソール（SubjectType.Account）はログイン時に b2b_subject を
+                // 特定できないため、allowCredentials 空の discoverable credential フローで認証する。
+                // そのため登録時点で resident key を必須にする（Preferred のままだと認証器によっては
+                // 非 discoverable で登録され、以後ログインできなくなる）。
+                ResidentKey = client.SubjectType == SubjectType.Account
+                    ? ResidentKeyRequirement.Required
+                    : ResidentKeyRequirement.Preferred,
                 UserVerification = UserVerificationRequirement.Preferred
             };
 
@@ -369,6 +375,22 @@ namespace IdentityProvider.Services
                     {
                         Success = false,
                         ErrorMessage = "Challenge has expired"
+                    };
+                }
+
+                // Subject 突合（登録トークン経路のみ）
+                // 認可に使ったトークンの Subject と、登録先となるチャレンジセッションの Subject が
+                // 一致しない場合は、別アカウント宛のセッションへの登録試行として遮断する。
+                if (!string.IsNullOrEmpty(request.ExpectedSubject)
+                    && !string.Equals(challenge.Subject, request.ExpectedSubject, StringComparison.Ordinal))
+                {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "subject_mismatch", "Session subject does not match the authorized subject");
+                    return new IB2BPasskeyService.RegistrationVerifyResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Session does not match the authorized account"
                     };
                 }
 
@@ -531,32 +553,26 @@ namespace IdentityProvider.Services
             }
 
             // 許可されるクレデンシャルを取得
-            IQueryable<B2BPasskeyCredential> credentialQuery = _context.B2BPasskeyCredentials
-                .IgnoreQueryFilters();
-
+            //
+            // b2b_subject 未指定（誰がログインするか未確定）の場合は allowCredentials を空にする。
+            // 以前は「クライアントに紐づく Organization の全ユーザー」の credential ID を返していたが、
+            // この API は無認証で呼べるため、client_id を知る第三者が組織内の全クレデンシャル ID と
+            // 登録ユーザー数を列挙できてしまう（本人確認前の情報漏えい）。
+            // 空の allowCredentials は WebAuthn の discoverable credential（resident key）フローとなり、
+            // 認証器側がユーザーを選択するため、サーバーが事前に候補を開示する必要がない。
+            var allowCredentials = new List<PublicKeyCredentialDescriptor>();
             if (b2bSubject != null)
             {
-                // 特定ユーザーのクレデンシャルのみ
-                credentialQuery = credentialQuery.Where(c => c.B2BSubject == b2bSubject);
-            }
-            else
-            {
-                // クライアントに紐づくOrganizationの全ユーザー
-                var orgUserSubjects = await _context.B2BUsers
+                // 特定ユーザーのクレデンシャルのみ（EC-CUBE プラグイン等、ユーザー確定済みの経路）
+                allowCredentials = await _context.B2BPasskeyCredentials
                     .IgnoreQueryFilters()
-                    .Where(u => u.OrganizationId == client.OrganizationId)
-                    .Select(u => u.Subject)
+                    .Where(c => c.B2BSubject == b2bSubject)
+                    .Select(c => new PublicKeyCredentialDescriptor(
+                        PublicKeyCredentialType.PublicKey,
+                        c.CredentialId,
+                        ParseTransports(c.TransportsJson)))
                     .ToListAsync();
-
-                credentialQuery = credentialQuery.Where(c => orgUserSubjects.Contains(c.B2BSubject));
             }
-
-            var allowCredentials = await credentialQuery
-                .Select(c => new PublicKeyCredentialDescriptor(
-                    PublicKeyCredentialType.PublicKey,
-                    c.CredentialId,
-                    ParseTransports(c.TransportsJson)))
-                .ToListAsync();
 
             // チャレンジ生成
             var challengeResult = await _challengeService.GenerateChallengeAsync(

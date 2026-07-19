@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using Asp.Versioning;
+using IdentityProvider.Filters;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdpUtilities.Security;
@@ -24,6 +25,8 @@ namespace IdentityProvider.Controllers
     [ApiController]
     [ApiVersion("1.0")]
     [EnableCors(SignupController.CorsPolicy)]
+    // client_secret を返す経路があるため、レスポンスをキャッシュさせない。
+    [NoStore]
     public class AccountController : ControllerBase
     {
         private readonly EcAuthDbContext _context;
@@ -49,7 +52,11 @@ namespace IdentityProvider.Controllers
         /// <summary>
         /// GET /v1/account/clients
         /// 呼び出し Account が管理する Organization に属する Client 一覧を返す。
-        /// client_secret は復号した平文を返し、マスク表示はマイページ（UI）側で行う。
+        ///
+        /// client_secret は **含めない**。一覧に全 Client の平文 secret を載せると、
+        /// マイページに XSS が 1 箇所でも入った時点で管理下の全 Client の secret が
+        /// 一度に流出する（単一障害点になる）ため、参照はユーザーの明示操作を伴う
+        /// <see cref="RevealSecret"/> で 1 件ずつ行う。
         /// </summary>
         [HttpGet("clients")]
         public async Task<IActionResult> GetClients()
@@ -84,15 +91,12 @@ namespace IdentityProvider.Controllers
             var result = new List<object>(clients.Count);
             foreach (var c in clients)
             {
-                var revealedSecret = string.IsNullOrEmpty(c.ClientSecret)
-                    ? string.Empty
-                    : await _secretProtector.UnprotectAsync(c.ClientSecret);
-
                 result.Add(new
                 {
                     id = c.Id,
                     client_id = c.ClientId,
-                    client_secret = revealedSecret,
+                    // 値そのものは返さず、設定済みかどうかだけを返す（UI のマスク表示用）。
+                    has_secret = !string.IsNullOrEmpty(c.ClientSecret),
                     app_name = c.AppName,
                     is_sandbox = c.Organization?.IsSandbox ?? false,
                     organization_code = c.Organization?.Code,
@@ -112,47 +116,14 @@ namespace IdentityProvider.Controllers
         [HttpPost("clients/{id:int}/secret")]
         public async Task<IActionResult> RegenerateSecret(int id)
         {
-            var subject = await ValidateAccountTokenAsync();
-            if (subject == null)
+            var (client, subject, failure) = await ResolveOwnedClientAsync(id, "rotate secret");
+            if (failure != null)
             {
-                return Unauthorized(new
-                {
-                    error = "invalid_token",
-                    error_description = "有効な Account アクセストークンが必要です。"
-                });
-            }
-
-            var managed = await _accountService.GetManagedOrganizationsAsync(subject);
-            var orgIds = managed.Select(m => m.OrganizationId).ToHashSet();
-
-            // 管理対象が無ければ所有権チェックは必ず失敗するため、DB を引かず 404 を返す。
-            if (orgIds.Count == 0)
-            {
-                _logger.LogWarning("Account {Subject} attempted to rotate secret for client {ClientDbId} without any managed organizations", subject, id);
-                return NotFound(new
-                {
-                    error = "not_found",
-                    error_description = "対象の Client が見つかりません。"
-                });
-            }
-
-            var client = await _context.Clients
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(c => c.Id == id);
-
-            // 所有権チェック: 対象 Client の Organization が呼び出し Account の管理対象か
-            if (client == null || client.OrganizationId == null || !orgIds.Contains(client.OrganizationId.Value))
-            {
-                _logger.LogWarning("Account {Subject} attempted to rotate secret for client {ClientDbId} without ownership", subject, id);
-                return NotFound(new
-                {
-                    error = "not_found",
-                    error_description = "対象の Client が見つかりません。"
-                });
+                return failure;
             }
 
             var newSecret = GenerateClientSecret();
-            client.ClientSecret = await _secretProtector.ProtectAsync(newSecret);
+            client!.ClientSecret = await _secretProtector.ProtectAsync(newSecret);
             client.UpdatedAt = DateTimeOffset.UtcNow;
             await _context.SaveChangesAsync();
 
@@ -164,6 +135,88 @@ namespace IdentityProvider.Controllers
                 client_id = client.ClientId,
                 client_secret = newSecret
             });
+        }
+
+        /// <summary>
+        /// POST /v1/account/clients/{id}/secret/reveal
+        /// 指定 Client の client_secret を 1 件だけ復号して返す。ユーザーが「表示」を
+        /// 明示操作したときのみ呼ばれる想定で、一覧 API では secret を返さない。
+        ///
+        /// 参照系だが副作用（復号・監査ログ）を伴い、URL や履歴に残さないため POST とする。
+        /// </summary>
+        [HttpPost("clients/{id:int}/secret/reveal")]
+        public async Task<IActionResult> RevealSecret(int id)
+        {
+            var (client, subject, failure) = await ResolveOwnedClientAsync(id, "reveal secret");
+            if (failure != null)
+            {
+                return failure;
+            }
+
+            var revealed = string.IsNullOrEmpty(client!.ClientSecret)
+                ? string.Empty
+                : await _secretProtector.UnprotectAsync(client.ClientSecret);
+
+            _logger.LogInformation("client_secret revealed for client {ClientId} by account {Subject}", client.ClientId, subject);
+
+            return Ok(new
+            {
+                id = client.Id,
+                client_id = client.ClientId,
+                client_secret = revealed
+            });
+        }
+
+        /// <summary>
+        /// アクセストークンを検証し、指定 Client が呼び出し Account の管理対象 Organization に
+        /// 属するかを確認する。問題があれば <c>failure</c> にそのまま返すべきレスポンスを詰めて返す。
+        /// 存在しない Client と権限の無い Client はいずれも 404 に揃える（存在を漏らさない）。
+        /// </summary>
+        private async Task<(Client? Client, string? Subject, IActionResult? Failure)> ResolveOwnedClientAsync(
+            int id, string operation)
+        {
+            var subject = await ValidateAccountTokenAsync();
+            if (subject == null)
+            {
+                return (null, null, Unauthorized(new
+                {
+                    error = "invalid_token",
+                    error_description = "有効な Account アクセストークンが必要です。"
+                }));
+            }
+
+            IActionResult NotFoundResult()
+            {
+                _logger.LogWarning(
+                    "Account {Subject} attempted to {Operation} for client {ClientDbId} without ownership",
+                    subject, operation, id);
+                return NotFound(new
+                {
+                    error = "not_found",
+                    error_description = "対象の Client が見つかりません。"
+                });
+            }
+
+            var managed = await _accountService.GetManagedOrganizationsAsync(subject);
+            var orgIds = managed.Select(m => m.OrganizationId).ToHashSet();
+
+            // 管理対象が無ければ所有権チェックは必ず失敗するため、DB を引かず 404 を返す。
+            if (orgIds.Count == 0)
+            {
+                return (null, subject, NotFoundResult());
+            }
+
+            var client = await _context.Clients
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.Id == id);
+
+            // 所有権チェック: 対象 Client の Organization が呼び出し Account の管理対象か
+            if (client == null || client.OrganizationId == null || !orgIds.Contains(client.OrganizationId.Value))
+            {
+                return (null, subject, NotFoundResult());
+            }
+
+            return (client, subject, null);
         }
 
         /// <summary>

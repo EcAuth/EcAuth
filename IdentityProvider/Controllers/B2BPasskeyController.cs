@@ -1,5 +1,6 @@
 using Fido2NetLib;
 using IdentityProvider.Exceptions;
+using IdentityProvider.Filters;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdentityProvider.Telemetry;
@@ -20,6 +21,8 @@ namespace IdentityProvider.Controllers
     [Route("v{version:apiVersion}/b2b/passkey")]
     [ApiController]
     [ApiVersion("1.0")]
+    // authenticate/verify が認可コードを含む redirect_url を返すため、キャッシュさせない。
+    [NoStore]
     public class B2BPasskeyController : ControllerBase
     {
         private readonly IB2BPasskeyService _passkeyService;
@@ -239,6 +242,20 @@ namespace IdentityProvider.Controllers
 
                 var result = await _passkeyService.CreateRegistrationOptionsAsync(serviceRequest);
 
+                // 登録トークン経路では、発行した session_id をトークンへ束縛する。
+                // verify はこの session_id でのみ受理されるため、1 つのトークンから
+                // 複数のセッションを並行させて複数クレデンシャルを登録することはできない。
+                if (!string.IsNullOrWhiteSpace(request.RegistrationToken)
+                    && !await _registrationTokenService.BindSessionAsync(request.RegistrationToken, result.SessionId))
+                {
+                    _logger.LogWarning("Failed to bind session to registration token for client: {ClientId}", request.ClientId);
+                    return Unauthorized(new
+                    {
+                        error = "invalid_grant",
+                        error_description = "登録トークンが無効か期限切れです。"
+                    });
+                }
+
                 _logger.LogInformation("B2B Passkey RegisterOptions generated successfully. SessionId: {SessionId}", result.SessionId);
 
                 return Ok(new
@@ -313,6 +330,8 @@ namespace IdentityProvider.Controllers
 
                 // 認可: registration_token 経路（public client）と client_secret 経路で分岐する。
                 Client? client;
+                // 登録トークン経路では、トークンが指す Subject を検証対象セッションと突き合わせる。
+                string? expectedSubject = null;
                 var useRegistrationToken = !string.IsNullOrWhiteSpace(request.RegistrationToken);
                 using (TimingScope.Begin("client_authenticate"))
                 {
@@ -320,6 +339,20 @@ namespace IdentityProvider.Controllers
                     {
                         var authz = await AuthorizeByRegistrationTokenAsync(request.ClientId, request.RegistrationToken!);
                         client = authz?.Client;
+
+                        // session_id はトークンに束縛済みのものと一致しなければならない。
+                        // 一致しない = そのトークンで最後に開始したセッション以外での登録試行。
+                        if (client != null && !string.Equals(authz!.Value.BoundSessionId, request.SessionId, StringComparison.Ordinal))
+                        {
+                            _logger.LogWarning(
+                                "Registration token is not bound to the presented session. ClientId={ClientId}",
+                                request.ClientId);
+                            client = null;
+                        }
+                        else
+                        {
+                            expectedSubject = authz?.Subject;
+                        }
                     }
                     else
                     {
@@ -338,13 +371,30 @@ namespace IdentityProvider.Controllers
 
                 Activity.Current?.SetTag("client.id", client.ClientId);
 
+                // 登録トークンは「ゲート」として、クレデンシャルを永続化する前に消費する。
+                // 検証成功後に消費すると、消費に失敗（＝別リクエストが先に消費）してもクレデンシャルは
+                // 既に保存済みとなり、1 トークンから複数のクレデンシャルが登録され得るため。
+                // 副作用として WebAuthn 検証がサーバー側で失敗した場合もトークンは失効する。
+                // その場合は申込確認メールから再度リンクを取得してもらう（再取得経路は #460 で整備）。
+                if (useRegistrationToken
+                    && !await _registrationTokenService.ConsumeAsync(request.RegistrationToken!, request.SessionId))
+                {
+                    _logger.LogWarning("Registration token could not be consumed for client: {ClientId}", request.ClientId);
+                    return Unauthorized(new
+                    {
+                        error = "invalid_grant",
+                        error_description = "登録トークンが無効か期限切れです。お手数ですが、もう一度お手続きをやり直してください。"
+                    });
+                }
+
                 // サービス呼び出し
                 var serviceRequest = new IB2BPasskeyService.RegistrationVerifyRequest
                 {
                     SessionId = request.SessionId,
                     ClientId = request.ClientId,
                     AttestationResponse = request.Response,
-                    DeviceName = request.DeviceName
+                    DeviceName = request.DeviceName,
+                    ExpectedSubject = expectedSubject
                 };
 
                 IB2BPasskeyService.RegistrationVerifyResult result;
@@ -361,12 +411,6 @@ namespace IdentityProvider.Controllers
                         error = "invalid_request",
                         error_description = result.ErrorMessage ?? "パスキー登録の検証に失敗しました。"
                     });
-                }
-
-                // 登録成功時、使い捨ての登録トークンを消費する（再利用防止）。
-                if (useRegistrationToken)
-                {
-                    await _registrationTokenService.ConsumeAsync(request.RegistrationToken!);
                 }
 
                 _logger.LogInformation("B2B Passkey registered successfully. CredentialId: {CredentialId}", result.CredentialId);
@@ -741,7 +785,7 @@ namespace IdentityProvider.Controllers
         /// client_secret 無しで解決し、external_id を confirm 済み B2BUser から確定する。
         /// 無効・不一致なら null。
         /// </summary>
-        private async Task<(Client Client, string Subject, string ExternalId)?> AuthorizeByRegistrationTokenAsync(
+        private async Task<(Client Client, string Subject, string ExternalId, string? BoundSessionId)?> AuthorizeByRegistrationTokenAsync(
             string clientId, string registrationToken)
         {
             if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(registrationToken))
@@ -749,11 +793,12 @@ namespace IdentityProvider.Controllers
                 return null;
             }
 
-            var subject = await _registrationTokenService.ValidateAsync(registrationToken);
-            if (subject == null)
+            var tokenInfo = await _registrationTokenService.ValidateAsync(registrationToken);
+            if (tokenInfo == null)
             {
                 return null;
             }
+            var subject = tokenInfo.Subject;
 
             // public な Account コンソール client を client_id で解決（secret 不要）。
             var client = await _context.Clients
@@ -784,7 +829,7 @@ namespace IdentityProvider.Controllers
                 return null;
             }
 
-            return (client, subject, b2bUser.ExternalId);
+            return (client, subject, b2bUser.ExternalId, tokenInfo.SessionId);
         }
 
         private async Task<Client?> AuthenticateClientAsync(string clientId, string clientSecret)

@@ -1,3 +1,4 @@
+using IdentityProvider.Filters;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdentityProvider.Telemetry;
@@ -18,6 +19,8 @@ namespace IdentityProvider.Controllers
     [ApiController]
     [ApiVersion("1.0")]
     [EnableCors(SignupController.CorsPolicy)]
+    // RFC 6749 §5.1: token endpoint のレスポンスはキャッシュさせない。
+    [NoStore]
     public class TokenController : ControllerBase
     {
         private readonly EcAuthDbContext _context;

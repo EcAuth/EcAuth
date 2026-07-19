@@ -1203,7 +1203,7 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
-        public async Task CreateAuthenticationOptionsAsync_WithoutSubject_ShouldGetAllCredentialsForRpId()
+        public async Task CreateAuthenticationOptionsAsync_WithoutSubject_ShouldNotDiscloseCredentials()
         {
             // Arrange
             // 複数ユーザーのクレデンシャルを追加
@@ -1265,7 +1265,9 @@ namespace IdentityProvider.Test.Services
             Assert.NotNull(result);
             // 手動構築されたAssertionOptionsの内容を確認
             Assert.Equal(challengeBytes, result.Options.Challenge);
-            Assert.Equal(2, result.Options.AllowCredentials!.Count);
+            // b2b_subject 未指定時は allowCredentials を空にする（discoverable credential フロー）。
+            // 組織内の全クレデンシャル ID を無認証で列挙させないため。
+            Assert.Empty(result.Options.AllowCredentials!);
         }
 
         [Fact]

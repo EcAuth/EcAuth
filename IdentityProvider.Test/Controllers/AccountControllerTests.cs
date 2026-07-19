@@ -109,9 +109,10 @@ namespace IdentityProvider.Test.Controllers
             Assert.Contains("client-prod", clientIds);
             Assert.Contains("client-test", clientIds);
             Assert.DoesNotContain("client-other", clientIds);
-            // client_secret は復号された平文が返る
+            // 一覧では client_secret の値を返さず、設定済みかどうかのみ返す
             var prod = clients.First(c => (string)GetProp(c, "client_id") == "client-prod");
-            Assert.Equal("secret-prod", (string)GetProp(prod, "client_secret"));
+            Assert.Null(prod.GetType().GetProperty("client_secret"));
+            Assert.True((bool)GetProp(prod, "has_secret"));
             Assert.False((bool)GetProp(prod, "is_sandbox"));
         }
 
@@ -178,6 +179,48 @@ namespace IdentityProvider.Test.Controllers
             // 変更されていない
             var stored = await _context.Clients.IgnoreQueryFilters().FirstAsync(c => c.Id == 30);
             Assert.Equal("other-secret", stored.ClientSecret);
+        }
+
+        [Fact]
+        public async Task RevealSecret_OwnedClient_ReturnsPlaintextSecret()
+        {
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret-prod");
+            _mockAccountService.Setup(x => x.GetManagedOrganizationsAsync(AccountSubject))
+                .ReturnsAsync(new List<IAccountService.ManagedOrganization> { new(1, "shop1", "owner") });
+            SetupValidAccountToken();
+            SetBearer(AccountToken);
+
+            var result = await _controller.RevealSecret(10);
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            Assert.Equal("client-prod", (string)GetProp(ok.Value!, "client_id"));
+            Assert.Equal("secret-prod", (string)GetProp(ok.Value!, "client_secret"));
+        }
+
+        [Fact]
+        public async Task RevealSecret_NotOwnedClient_ReturnsNotFound()
+        {
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret-prod");
+            await SeedOrgWithClient(3, "other", false, 30, "client-other", "other-secret");
+            _mockAccountService.Setup(x => x.GetManagedOrganizationsAsync(AccountSubject))
+                .ReturnsAsync(new List<IAccountService.ManagedOrganization> { new(1, "shop1", "owner") });
+            SetupValidAccountToken();
+            SetBearer(AccountToken);
+
+            var result = await _controller.RevealSecret(30);
+
+            Assert.IsType<NotFoundObjectResult>(result);
+        }
+
+        [Fact]
+        public async Task RevealSecret_NoToken_ReturnsUnauthorized()
+        {
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret-prod");
+            SetBearer(null);
+
+            var result = await _controller.RevealSecret(10);
+
+            Assert.IsType<UnauthorizedObjectResult>(result);
         }
 
         // 匿名オブジェクトのプロパティをリフレクションで取り出すヘルパー

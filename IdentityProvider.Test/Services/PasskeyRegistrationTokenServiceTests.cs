@@ -25,8 +25,11 @@ namespace IdentityProvider.Test.Services
             var token = await _service.IssueAsync("subject-1");
             Assert.False(string.IsNullOrEmpty(token));
 
-            var subject = await _service.ValidateAsync(token);
-            Assert.Equal("subject-1", subject);
+            var info = await _service.ValidateAsync(token);
+            Assert.NotNull(info);
+            Assert.Equal("subject-1", info!.Subject);
+            // options 未実行なのでセッションは未束縛
+            Assert.Null(info.SessionId);
         }
 
         [Fact]
@@ -49,11 +52,47 @@ namespace IdentityProvider.Test.Services
         public async Task Consume_MarksUsed_AndSecondValidateFails()
         {
             var token = await _service.IssueAsync("subject-1");
+            Assert.True(await _service.BindSessionAsync(token, "session-1"));
 
-            Assert.True(await _service.ConsumeAsync(token));
+            Assert.True(await _service.ConsumeAsync(token, "session-1"));
             // 消費後は検証も消費も失敗する（一回限り）
             Assert.Null(await _service.ValidateAsync(token));
-            Assert.False(await _service.ConsumeAsync(token));
+            Assert.False(await _service.ConsumeAsync(token, "session-1"));
+        }
+
+        [Fact]
+        public async Task Consume_WithUnboundSession_Fails()
+        {
+            var token = await _service.IssueAsync("subject-1");
+            await _service.BindSessionAsync(token, "session-1");
+
+            // 束縛されていない session_id では消費できない
+            Assert.False(await _service.ConsumeAsync(token, "session-2"));
+            // トークンは未使用のまま（正規セッションでは引き続き消費できる）
+            Assert.True(await _service.ConsumeAsync(token, "session-1"));
+        }
+
+        [Fact]
+        public async Task BindSession_Rebinding_InvalidatesPreviousSession()
+        {
+            var token = await _service.IssueAsync("subject-1");
+            await _service.BindSessionAsync(token, "session-1");
+            await _service.BindSessionAsync(token, "session-2");
+
+            var info = await _service.ValidateAsync(token);
+            Assert.Equal("session-2", info!.SessionId);
+            // 1 トークンにつき verify できるセッションは常に最新の 1 つだけ
+            Assert.False(await _service.ConsumeAsync(token, "session-1"));
+            Assert.True(await _service.ConsumeAsync(token, "session-2"));
+        }
+
+        [Fact]
+        public async Task Consume_WithoutBoundSession_Fails()
+        {
+            var token = await _service.IssueAsync("subject-1");
+
+            // options を経ずに verify へ直行する経路は認めない
+            Assert.False(await _service.ConsumeAsync(token, "session-1"));
         }
 
         [Fact]

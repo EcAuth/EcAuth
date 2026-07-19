@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using IdentityProvider.Exceptions;
+using IdentityProvider.Filters;
 using IdentityProvider.Services;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
@@ -13,6 +14,8 @@ namespace IdentityProvider.Controllers
     [Route("api/signup")]
     [ApiController]
     [EnableCors(SignupController.CorsPolicy)]
+    // confirm は登録トークンを返すため、レスポンスをキャッシュさせない。
+    [NoStore]
     public class SignupController : ControllerBase
     {
         /// <summary>申込 API（accounts サイト）向けの CORS ポリシー名。</summary>

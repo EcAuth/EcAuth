@@ -31,11 +31,30 @@ namespace IdentityProvider.Models
         [Required]
         public string TokenHash { get; set; } = string.Empty;
 
+        /// <summary>
+        /// このトークンで開始した WebAuthn 登録セッション（register/options が発行した session_id）。
+        /// register/verify は「トークンに束縛された session_id」でのみ受理する。
+        ///
+        /// トークン検証だけでは 1 つのトークンから複数の登録セッションを並行して走らせられるため、
+        /// used_at の single-use が事実上機能しない（各セッションが個別にクレデンシャルを登録できる）。
+        /// options 呼び出しごとに束縛先を上書きすることで、常に「最後に開始したセッション 1 つだけ」が
+        /// verify できる状態に保ち、1 トークン = 最大 1 クレデンシャルを保証する。
+        /// </summary>
+        [Column("session_id")]
+        [MaxLength(64)]
+        public string? SessionId { get; set; }
+
         [Column("expires_at")]
         [Required]
         public DateTimeOffset ExpiresAt { get; set; }
 
+        /// <summary>
+        /// 使用済み日時。<see cref="ConcurrencyCheckAttribute"/> を付けることで UPDATE 文に
+        /// <c>WHERE used_at IS NULL</c> 相当の条件が入り、read-then-update の TOCTOU で
+        /// 二重消費が成立しなくなる（敗者は DbUpdateConcurrencyException になる）。
+        /// </summary>
         [Column("used_at")]
+        [ConcurrencyCheck]
         public DateTimeOffset? UsedAt { get; set; }
 
         [Column("created_at")]
