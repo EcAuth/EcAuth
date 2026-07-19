@@ -1,18 +1,27 @@
 import { test, expect, BrowserContext, Page, APIRequestContext, request } from '@playwright/test';
-import { randomUUID } from 'crypto';
 import { waitForMessage, extractToken, deleteMessages } from '../helpers/mailpit';
+import { generatePkcePair } from '../helpers/pkce';
 
 /**
  * Account 申込フローの E2E テスト（mailpit ベース）。
  *
- * 申込 → 確認メール（mailpit）→ トークン抽出 → /api/signup/confirm → Account 作成 →
- * パスキー登録（既存 B2B 仮想認証器を流用）→ 認証 → 認可コード → /token → managed_orgs 検証。
+ * 申込 → 確認メール（mailpit）→ トークン抽出 → /api/signup/confirm → Account 作成 ＋ 登録トークン発行 →
+ * パスキー登録（/passkey/register）→ パスキー認証（/passkey/authenticate）→ 認可コード →
+ * /token（PKCE）→ managed_orgs 検証。
+ *
+ * 本 spec は **本番と同じ Razor ページ**（/passkey/register・/passkey/authenticate）を通す。
+ * 旧実装は wwwroot/b2b-passkey-test.html（テスト専用ページ・PKCE 非対応）を叩いていたため、
+ * マイページが実際に通る経路を検証できていなかった。
+ *
+ * PKCE:
+ *   管理コンソール Client は public client（ACCOUNTS_CLIENT_PUBLIC=true → client_secret 無し）
+ *   のため、/token は PKCE 必須。認可コードへの code_challenge 束縛は authenticate/verify で行われる。
  *
  * テナント解決:
  *   - /api/signup/* と /token はテナント（accounts）に依存するため Host ヘッダを付与する
  *     （TenantMiddleware は host のセグメント数が 3 以上のときのみ先頭をテナント名にする）。
- *   - パスキー register/authenticate は Client の Organization 経由で解決され（IgnoreQueryFilters）、
- *     リクエストのテナントに依存しない。よってブラウザは localhost のまま rp_id=localhost で動く。
+ *   - パスキーページは accounts テナントの origin で開く。ページ内 JS は rp_id に
+ *     window.location.hostname を使うため、origin と rp_id が自動的に一致する。
  */
 test.describe.serial('Account 申込フローの E2E テスト', () => {
   const baseUrl = process.env.E2E_BASE_URL || 'https://localhost:8081';
@@ -21,17 +30,14 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
   // accounts テナントに解決させる 3 セグメント以上の Host。
   // TenantMiddleware は host セグメント数が 3 以上のときのみ先頭をテナント名にする。
   const accountsHost = process.env.E2E_ACCOUNTS_HOST || 'accounts.ec-auth.io';
-  // passkey ページの配信元。playwright.config.ts の --host-resolver-rules で
+  // パスキーページの配信元。playwright.config.ts の --host-resolver-rules で
   // accounts.ec-auth.io → 127.0.0.1 にマップ済み。ページの fetch は tenant=accounts に解決され、
   // WebAuthn の rp_id を origin（accountsHost）と一致させられる。
   const accountsPageBaseUrl = process.env.E2E_ACCOUNTS_PAGE_URL || `https://${accountsHost}:8081`;
 
   // Account 管理コンソール Client（AccountsOrganizationSeeder が accounts Org に投入）。
+  // public client のため client_secret は持たない。
   const accountsClientId = process.env.ACCOUNTS_CLIENT_ID || 'ecauth-admin-console';
-  const accountsClientSecret = process.env.ACCOUNTS_CLIENT_SECRET || 'accounts_client_secret';
-  // rp_id は passkey ページの origin（accountsHost）と一致させる。accounts Client の
-  // AllowedRpIds に accountsHost を含めておく必要がある（ACCOUNTS_ALLOWED_RP_IDS）。
-  const accountsRpId = process.env.E2E_ACCOUNTS_RP_ID || accountsHost;
   const accountsRedirectUri = process.env.ACCOUNTS_REDIRECT_URI || 'https://localhost:8081/auth/callback';
 
   // Run ごとに一意化（前回 run の残存データとの衝突を回避）。
@@ -43,19 +49,18 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
   const productionSiteUrl = `https://${productionSiteHost}`;
   const expectedOrgCode = productionSiteHost.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
-  // register/authenticate は external_id フォールバックで既存 Account の B2BUser に解決させる。
-  // external_id はサーバー側で ExternalIdHasher.Hash されるため、申込メールと同じ生 email を渡す。
-  const b2bSubject = randomUUID();
-  const deviceName = 'E2E Signup Device';
-
   let apiAccounts: APIRequestContext; // Host=accounts を付与した API コンテキスト
   let mailpitCtx: APIRequestContext; // mailpit REST 用（http）
   let context: BrowserContext;
   let page: Page;
 
   let confirmToken: string;
+  let registrationToken: string;
   let authorizationCode: string;
   const messageIds: string[] = [];
+
+  // PKCE。authenticate/verify で認可コードに challenge を束縛し、/token で verifier を提示する。
+  const { codeVerifier, codeChallenge } = generatePkcePair();
 
   test.beforeAll(async ({ browser }) => {
     apiAccounts = await request.newContext({
@@ -64,13 +69,34 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
     });
     mailpitCtx = await request.newContext();
 
-    // passkey ページは accounts テナントの origin で開く（fetch が tenant=accounts に解決され、
-    // 申込で作った accounts org の B2BUser を external_id で引き当てられる）。
     context = await browser.newContext({ ignoreHTTPSErrors: true });
     await context.credentials.install();
+
+    // サーバーが返す timeout=0 を上書き（既存 B2B テストと同じ対処）。
+    // ページ遷移をまたぐため addInitScript で全ページに適用する。
+    await context.addInitScript(() => {
+      const originalCreate = navigator.credentials.create.bind(navigator.credentials);
+      navigator.credentials.create = (options?: CredentialCreationOptions) => {
+        if (options?.publicKey && (!options.publicKey.timeout || options.publicKey.timeout === 0)) {
+          options.publicKey.timeout = 60000;
+        }
+        return originalCreate(options);
+      };
+      const originalGet = navigator.credentials.get.bind(navigator.credentials);
+      navigator.credentials.get = (options?: CredentialRequestOptions) => {
+        if (options?.publicKey && (!options.publicKey.timeout || options.publicKey.timeout === 0)) {
+          options.publicKey.timeout = 60000;
+        }
+        return originalGet(options);
+      };
+    });
+
+    // マイページ（フロント）は E2E 環境に存在しないため、到達を検知できるよう握り潰す。
+    await context.route(/\/mypage\//, (route) =>
+      route.fulfill({ status: 200, contentType: 'text/html', body: '<html><body>mypage stub</body></html>' })
+    );
+
     page = await context.newPage();
-    await page.goto(`${accountsPageBaseUrl}/b2b-passkey-test.html`);
-    await page.waitForLoadState('domcontentloaded');
   });
 
   test.afterAll(async () => {
@@ -98,7 +124,7 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
     expect(response.status()).toBe(202);
   });
 
-  test('確認メール受信 → トークン抽出 → confirm（200）', async () => {
+  test('確認メール受信 → トークン抽出 → confirm（200・登録トークン発行）', async () => {
     test.setTimeout(30000);
 
     const message = await waitForMessage(mailpitCtx, email, { subjectIncludes: 'お申し込み確認' });
@@ -114,82 +140,89 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
 
     console.log('Confirm status:', response.status());
     const body = await response.json();
-    console.log('Confirm body:', JSON.stringify(body));
     expect(response.status()).toBe(200);
     expect(body.email).toBe(email);
+
+    // 登録トークンは client_secret の代替として register/options・verify を認可する。
+    // public client 化により、パスキー登録で client_secret を使う経路は存在しない。
+    registrationToken = body.registration_token;
+    expect(registrationToken).toBeTruthy();
   });
 
-  test('パスキー登録（既存 Account を external_id で解決）', async () => {
+  test('パスキー登録（/passkey/register・登録トークンで認可）', async () => {
     test.setTimeout(30000);
 
-    await page.fill('#clientId', accountsClientId);
-    await page.fill('#clientSecret', accountsClientSecret);
-    await page.fill('#rpId', accountsRpId);
-    await page.fill('#b2bSubject', b2bSubject);
-    await page.fill('#externalId', email);
-    await page.fill('#redirectUri', accountsRedirectUri);
-    await page.fill('#displayName', organizationName);
-    await page.fill('#deviceName', deviceName);
+    // 登録トークンはフラグメントで渡す（サーバへ送信されずアクセスログに残らない）。
+    const registerUrl = `${accountsPageBaseUrl}/passkey/register`
+      + `?client_id=${encodeURIComponent(accountsClientId)}`
+      + `&email=${encodeURIComponent(email)}`
+      + `#token=${encodeURIComponent(registrationToken)}`;
 
-    // サーバーが返す timeout=0 を上書き（既存 B2B テストと同じ対処）。
-    await page.evaluate(() => {
-      const originalCreate = navigator.credentials.create.bind(navigator.credentials);
-      navigator.credentials.create = (options?: CredentialCreationOptions) => {
-        if (options?.publicKey && (!options.publicKey.timeout || options.publicKey.timeout === 0)) {
-          options.publicKey.timeout = 60000;
-        }
-        return originalCreate(options);
-      };
-      const originalGet = navigator.credentials.get.bind(navigator.credentials);
-      navigator.credentials.get = (options?: CredentialRequestOptions) => {
-        if (options?.publicKey && (!options.publicKey.timeout || options.publicKey.timeout === 0)) {
-          options.publicKey.timeout = 60000;
-        }
-        return originalGet(options);
-      };
-    });
+    await page.goto(registerUrl);
+    await page.waitForLoadState('domcontentloaded');
 
-    await page.click('button:has-text("Register New Passkey")');
+    await page.click('#reg-btn');
 
-    const registerResult = page.locator('#registerResult');
-    await expect(registerResult).toBeVisible({ timeout: 15000 });
+    const status = page.locator('#status');
+    await expect(status).toBeVisible({ timeout: 15000 });
 
-    const resultClass = await registerResult.getAttribute('class');
-    if (resultClass?.includes('error')) {
-      console.log('Register error:', await registerResult.textContent());
-      console.log('Debug log:', (await page.locator('#debugLog').textContent())?.substring(0, 2000));
+    // 失敗時は原因をログに出してから落とす。
+    const statusClass = await status.getAttribute('class');
+    if (statusClass?.includes('err')) {
+      console.log('Register error:', await status.textContent());
     }
-    await expect(registerResult).toHaveClass(/success/, { timeout: 15000 });
+
+    // 登録成功後、ページは自動でマイページへ遷移する（route で stub 済み）。
+    await page.waitForURL(new RegExp('/mypage/'), { timeout: 15000 });
   });
 
-  test('パスキー認証 → 認可コード取得', async () => {
+  test('パスキー認証（/passkey/authenticate・PKCE）→ 認可コード取得', async () => {
     test.setTimeout(30000);
 
-    await page.fill('#state', `e2e-signup-state-${Date.now()}`);
-    await page.click('button:has-text("Authenticate with Passkey")');
+    const clientState = `e2e-signup-state-${runSuffix}`;
+    const authenticateUrl = `${accountsPageBaseUrl}/passkey/authenticate`
+      + `?client_id=${encodeURIComponent(accountsClientId)}`
+      + `&redirect_uri=${encodeURIComponent(accountsRedirectUri)}`
+      + `&code_challenge=${encodeURIComponent(codeChallenge)}`
+      + `&code_challenge_method=S256`
+      + `&state=${encodeURIComponent(clientState)}`;
 
-    const authenticateResult = page.locator('#authenticateResult');
-    await expect(authenticateResult).toBeVisible({ timeout: 15000 });
-    await expect(authenticateResult).toHaveClass(/success/, { timeout: 15000 });
+    await page.goto(authenticateUrl);
+    await page.waitForLoadState('domcontentloaded');
 
-    const preContent = await authenticateResult.locator('pre').textContent();
-    const responseData = JSON.parse(preContent!);
-    const redirectUrl = new URL(responseData.redirect_url);
-    authorizationCode = redirectUrl.searchParams.get('code')!;
+    await page.click('#auth-btn');
+
+    const status = page.locator('#status');
+    await expect(status).toBeVisible({ timeout: 15000 });
+    const statusClass = await status.getAttribute('class');
+    if (statusClass?.includes('err')) {
+      console.log('Authenticate error:', await status.textContent());
+    }
+
+    // 認証成功でサーバーが生成した redirect_url へ遷移する。
+    // redirect_uri（/auth/callback）は IdP 側に実体が無く 404 になるが、
+    // ナビゲーション自体は完了するため URL から認可コードを取り出せる。
+    const escapedRedirectUri = accountsRedirectUri.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    await page.waitForURL(new RegExp(escapedRedirectUri + '\\?code='), { timeout: 15000 });
+
+    const url = new URL(page.url());
+    authorizationCode = url.searchParams.get('code')!;
     expect(authorizationCode).toBeTruthy();
+    // RFC 6749 Section 4.1.2: クライアントの state がそのまま返ること
+    expect(url.searchParams.get('state')).toBe(clientState);
   });
 
-  test('トークン交換 → managed_orgs claim 検証', async () => {
+  test('トークン交換（PKCE・client_secret 無し）→ managed_orgs claim 検証', async () => {
     expect(authorizationCode).toBeTruthy();
 
     const response = await apiAccounts.post(tokenEndpoint, {
       form: {
         client_id: accountsClientId,
-        client_secret: accountsClientSecret,
         code: authorizationCode,
         redirect_uri: accountsRedirectUri,
         grant_type: 'authorization_code',
         scope: 'openid',
+        code_verifier: codeVerifier,
       },
     });
 
