@@ -56,7 +56,10 @@ jobs:
           # 注意: 以下の heredoc は $GITHUB_ENV に追記されるため KEY=value 行のみ許容。
           # コメント行を混ぜると「Invalid format」で step が失敗する（Account/mailpit 系の
           # 説明はこのブロック外に置く）。ACCOUNTS_* は AccountsOrganizationSeeder が accounts
-          # Org + 管理コンソール Client を投入するために必須。Email__Provider=Smtp / Smtp__* は
+          # Org + 管理コンソール Client を投入するために必須。ACCOUNTS_CLIENT_PUBLIC=true は
+          # 管理コンソールを public client(PKCE) として投入する指定で、account_signup_flow spec は
+          # client_secret を使わず code_verifier でトークン交換するため必要（未設定だと Seeder 既定の
+          # false = confidential になり CI だけ落ちる）。Email__Provider=Smtp / Smtp__* は
           # 申込・マジックリンクの実メール経路を mailpit で検証するための切替。
           cat <<'EOF' >> $GITHUB_ENV
           DB_HOST=db
@@ -109,6 +112,7 @@ jobs:
           DEV_B2B_REDIRECT_URI=https://localhost:8081/admin/ecauth/callback
           DEV_B2B_ALLOWED_RP_IDS=localhost
           ACCOUNTS_CLIENT_ID=ecauth-admin-console
+          ACCOUNTS_CLIENT_PUBLIC=true
           ACCOUNTS_CLIENT_SECRET=accounts_client_secret
           ACCOUNTS_ALLOWED_RP_IDS=accounts.ec-auth.io,localhost
           ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback

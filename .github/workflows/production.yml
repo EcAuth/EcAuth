@@ -83,7 +83,15 @@ jobs:
           STG_ACCOUNTS_REDIRECT_URI: op://EcAuth/ecauth-prod-app/stg_accounts_redirect_uri
           # 管理コンソールを public client(PKCE) として投入するフラグ。非秘密のため
           # 1Password ではなくリテラルで配線する（AccountsOrganizationSeeder が起動時に参照）。
-          # 有効化はマジックリンク×PKCE の解決と account 系 E2E の PKCE 対応後に true にする。
+          #
+          # 有効化の前提条件（マジックリンク×PKCE の解決・account 系 E2E の PKCE 対応）は
+          # 解消済みだが、本番はまだ false に据え置く。理由:
+          #   - 本ブロックは CI 配線であり、ランタイムへ流す step は無い（実際の注入は
+          #     Terraform app_settings）。ここだけ true にしても本番の挙動は変わらず、
+          #     「CI は true / Terraform は false / 実挙動は confidential」の三者不一致になる
+          #   - true にするとシーダーが本番 Client の client_secret を消去する破壊的変更のため、
+          #     Terraform 配線および ecauth-website の公開と順序を合わせて実施する
+          # → 有効化は infra 側 PR（staging → production 順）と同一タイミングで行う。
           ACCOUNTS_CLIENT_PUBLIC: "false"
           STG_ACCOUNTS_CLIENT_PUBLIC: "false"
           # Email delivery (signup / magic-link, Phase D)
