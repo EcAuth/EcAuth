@@ -8,6 +8,7 @@ using IdpUtilities.Security;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
@@ -24,6 +25,9 @@ namespace IdentityProvider.Test.Controllers
         private readonly Mock<ILogger<B2BPasskeyController>> _mockLogger;
         private readonly EcAuthDbContext _context;
         private readonly B2BPasskeyController _controller;
+
+        // PKCE (RFC 7636) Appendix B の公式テストベクタの code_challenge（43 文字）
+        private const string ValidCodeChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
         public B2BPasskeyControllerTests()
         {
@@ -51,7 +55,8 @@ namespace IdentityProvider.Test.Controllers
                 _context,
                 _mockLogger.Object,
                 new PlaintextSecretProtector(),
-                new Mock<IPasskeyRegistrationTokenService>().Object);
+                new Mock<IPasskeyRegistrationTokenService>().Object,
+                new ConfigurationBuilder().Build());
 
             _controller.ControllerContext = new ControllerContext
             {
@@ -473,6 +478,9 @@ namespace IdentityProvider.Test.Controllers
                 SessionId = "test-session-id",
                 RedirectUri = "https://shop.example.com/admin/ecauth/callback",
                 State = "test-state",
+                // PKCE 必須化（PkcePolicy）により code_challenge が必要
+                CodeChallenge = ValidCodeChallenge,
+                CodeChallengeMethod = "S256",
                 Response = new AuthenticatorAssertionRawResponse()
             };
 
@@ -512,6 +520,74 @@ namespace IdentityProvider.Test.Controllers
             Assert.NotNull(redirectUrl);
             Assert.Contains("code=test-auth-code", redirectUrl);
             Assert.Contains("state=test-state", redirectUrl);
+        }
+
+        [Fact]
+        public async Task AuthenticateVerify_WithoutCodeChallenge_ReturnsBadRequest()
+        {
+            // PKCE 必須化（PkcePolicy、コード既定 true）: code_challenge 無しは認可コード発行前に拒否する
+            var client = await CreateTestClientAsync();
+
+            var request = new B2BPasskeyController.AuthenticateVerifyRequest
+            {
+                ClientId = client.ClientId,
+                SessionId = "test-session-id",
+                RedirectUri = "https://shop.example.com/admin/ecauth/callback",
+                State = "test-state",
+                Response = new AuthenticatorAssertionRawResponse()
+            };
+
+            _mockPasskeyService.Setup(x => x.VerifyAuthenticationAsync(It.IsAny<AuthenticationVerifyRequest>()))
+                .ReturnsAsync(new AuthenticationVerifyResult
+                {
+                    Success = true,
+                    B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                    CredentialId = "credential-id"
+                });
+
+            var result = await _controller.AuthenticateVerify(request);
+
+            Assert.IsType<BadRequestObjectResult>(result);
+            // 認可コードは発行されないこと
+            _mockAuthCodeService.Verify(
+                x => x.GenerateAuthorizationCodeAsync(It.IsAny<IAuthorizationCodeService.AuthorizationCodeRequest>()),
+                Times.Never);
+        }
+
+        [Theory]
+        [InlineData("too-short")]                                       // 43 文字未満
+        [InlineData("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-c+")]     // unreserved 外（'+'）
+        public async Task AuthenticateVerify_InvalidCodeChallengeFormat_ReturnsBadRequest(string codeChallenge)
+        {
+            // RFC 7636 Section 4.2 の 43*128unreserved 違反は発行前に拒否する。
+            // 素通しするとトークン交換時まで誤りが発覚せず、128 文字超は MaxLength(128) で 500 になる。
+            var client = await CreateTestClientAsync();
+
+            var request = new B2BPasskeyController.AuthenticateVerifyRequest
+            {
+                ClientId = client.ClientId,
+                SessionId = "test-session-id",
+                RedirectUri = "https://shop.example.com/admin/ecauth/callback",
+                State = "test-state",
+                CodeChallenge = codeChallenge,
+                CodeChallengeMethod = "S256",
+                Response = new AuthenticatorAssertionRawResponse()
+            };
+
+            _mockPasskeyService.Setup(x => x.VerifyAuthenticationAsync(It.IsAny<AuthenticationVerifyRequest>()))
+                .ReturnsAsync(new AuthenticationVerifyResult
+                {
+                    Success = true,
+                    B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                    CredentialId = "credential-id"
+                });
+
+            var result = await _controller.AuthenticateVerify(request);
+
+            Assert.IsType<BadRequestObjectResult>(result);
+            _mockAuthCodeService.Verify(
+                x => x.GenerateAuthorizationCodeAsync(It.IsAny<IAuthorizationCodeService.AuthorizationCodeRequest>()),
+                Times.Never);
         }
 
         [Fact]

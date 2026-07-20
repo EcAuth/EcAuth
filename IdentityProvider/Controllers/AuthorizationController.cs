@@ -19,13 +19,6 @@ namespace IdentityProvider.Controllers
         private readonly IConfiguration _configuration;
         private readonly ILogger<AuthorizationController> _logger;
 
-        /// <summary>
-        /// PKCE (RFC 7636 Section 4.2) の code_challenge = 43*128unreserved。
-        /// unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
-        /// </summary>
-        private static readonly System.Text.RegularExpressions.Regex CodeChallengePattern =
-            new(@"^[A-Za-z0-9\-._~]{43,128}$", System.Text.RegularExpressions.RegexOptions.Compiled);
-
         public AuthorizationController(
             EcAuthDbContext context,
             ITenantService tenantService,
@@ -66,13 +59,23 @@ namespace IdentityProvider.Controllers
             _logger.LogDebug("Authorization request for tenant: {TenantName}", _tenantService.TenantName);
 
             // PKCE (RFC 7636) パラメータの検証。
-            // code_challenge 未指定なら PKCE 束縛なし（従来動作）。指定時のみ検証する。
             // エラーは redirect_uri へリダイレクトせず 400 で返す。redirect_uri の正当性を
             // 検証する前にリダイレクトするとオープンリダイレクタになるため。
             string? codeChallengeMethod = null;
+            if (string.IsNullOrEmpty(code_challenge) && Security.PkcePolicy.IsRequired(_configuration))
+            {
+                // 必須化時は認可の入口で弾く。トークン交換時だけの拒否だと、外部 IdP での
+                // 認証まで進んでから失敗するため原因が分かりにくい。
+                _logger.LogWarning("PKCE required but code_challenge missing for client: {ClientId}", client_id);
+                return BadRequest(new
+                {
+                    error = "invalid_request",
+                    error_description = "code_challenge が必要です。"
+                });
+            }
             if (!string.IsNullOrEmpty(code_challenge))
             {
-                if (!CodeChallengePattern.IsMatch(code_challenge))
+                if (!Security.PkceValidator.IsValidChallengeFormat(code_challenge))
                 {
                     _logger.LogWarning("Invalid code_challenge format for client: {ClientId}", client_id);
                     return BadRequest(new

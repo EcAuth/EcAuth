@@ -246,9 +246,11 @@ namespace IdentityProvider.Controllers
 
                 // 9.5. PKCE (RFC 7636) 検証
                 // 認可コードに code_challenge が束縛されている場合は code_verifier 必須。
-                // public client（client_secret 未設定）は PKCE を必須とし、code_challenge を
-                // 持たない認可コードでのトークン交換を拒否する（認可コード横取り攻撃対策）。
+                // PkcePolicy 有効時は全 client、無効時でも public client（client_secret 未設定）は、
+                // code_challenge を持たない認可コードでのトークン交換を拒否する
+                // （認可コード横取り攻撃対策 / OAuth 2.1 準拠）。
                 var isPublicClient = string.IsNullOrEmpty(client.ClientSecret);
+                var pkceRequired = Security.PkcePolicy.IsRequired(_configuration);
                 if (!string.IsNullOrEmpty(authorizationCode.CodeChallenge))
                 {
                     if (string.IsNullOrEmpty(code_verifier))
@@ -271,13 +273,18 @@ namespace IdentityProvider.Controllers
                         });
                     }
                 }
-                else if (isPublicClient)
+                else if (pkceRequired || isPublicClient)
                 {
-                    _logger.LogWarning("Public client without PKCE rejected: {ClientId}", client_id);
+                    // 発行段階でも弾いているため通常は到達しない。到達するのは必須化デプロイの
+                    // 直前に発行された認可コード（有効期限 10 分）が交換された場合で、
+                    // ユーザーの再ログインで解消する。
+                    _logger.LogWarning(
+                        "Authorization code without PKCE rejected: {ClientId} (pkceRequired={PkceRequired}, isPublicClient={IsPublicClient})",
+                        client_id, pkceRequired, isPublicClient);
                     return BadRequest(new
                     {
                         error = "invalid_grant",
-                        error_description = "public client では PKCE (code_challenge) が必須です。"
+                        error_description = "PKCE (code_challenge) が必須です。"
                     });
                 }
 

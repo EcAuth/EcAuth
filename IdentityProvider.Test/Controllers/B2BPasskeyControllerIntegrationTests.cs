@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using System.Text;
@@ -36,6 +37,9 @@ namespace IdentityProvider.Test.Controllers
         private readonly Mock<ITokenService> _mockTokenService;
         private readonly Mock<ILogger<B2BPasskeyController>> _mockControllerLogger;
         private readonly B2BPasskeyController _controller;
+
+        // PKCE (RFC 7636) Appendix B の公式テストベクタの code_challenge（43 文字）
+        private const string ValidCodeChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
         private readonly B2BPasskeyController _controllerWithMockToken;
         private readonly MockTenantService _mockTenantService;
         private readonly Organization _organization;
@@ -84,7 +88,8 @@ namespace IdentityProvider.Test.Controllers
                 _context,
                 _mockControllerLogger.Object,
                 new PlaintextSecretProtector(),
-                new Mock<IPasskeyRegistrationTokenService>().Object);
+                new Mock<IPasskeyRegistrationTokenService>().Object,
+                new ConfigurationBuilder().Build());
 
             _controller.ControllerContext = new ControllerContext
             {
@@ -102,7 +107,8 @@ namespace IdentityProvider.Test.Controllers
                 _context,
                 _mockControllerLogger.Object,
                 new PlaintextSecretProtector(),
-                new Mock<IPasskeyRegistrationTokenService>().Object);
+                new Mock<IPasskeyRegistrationTokenService>().Object,
+                new ConfigurationBuilder().Build());
 
             _controllerWithMockToken.ControllerContext = new ControllerContext
             {
@@ -451,6 +457,9 @@ namespace IdentityProvider.Test.Controllers
                 SessionId = sessionId,
                 RedirectUri = "https://shop.example.com/admin/ecauth/callback",
                 State = "test-state",
+                // PKCE 必須化（PkcePolicy）により code_challenge が必要
+                CodeChallenge = ValidCodeChallenge,
+                CodeChallengeMethod = "S256",
                 Response = assertionResponse
             };
 
@@ -636,6 +645,9 @@ namespace IdentityProvider.Test.Controllers
                 SessionId = sessionId,
                 RedirectUri = "https://shop.example.com/admin/ecauth/callback",
                 State = "test-state",
+                // PKCE 必須化（PkcePolicy）により code_challenge が必要
+                CodeChallenge = ValidCodeChallenge,
+                CodeChallengeMethod = "S256",
                 Response = assertionResponse
             };
 

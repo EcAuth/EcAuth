@@ -33,6 +33,7 @@ namespace IdentityProvider.Controllers
         private readonly ILogger<B2BPasskeyController> _logger;
         private readonly ISecretProtector _secretProtector;
         private readonly IPasskeyRegistrationTokenService _registrationTokenService;
+        private readonly IConfiguration _configuration;
 
         public B2BPasskeyController(
             IB2BPasskeyService passkeyService,
@@ -42,8 +43,10 @@ namespace IdentityProvider.Controllers
             EcAuthDbContext context,
             ILogger<B2BPasskeyController> logger,
             ISecretProtector secretProtector,
-            IPasskeyRegistrationTokenService registrationTokenService)
+            IPasskeyRegistrationTokenService registrationTokenService,
+            IConfiguration configuration)
         {
+            _configuration = configuration;
             _passkeyService = passkeyService;
             _authorizationCodeService = authorizationCodeService;
             _tokenService = tokenService;
@@ -610,6 +613,44 @@ namespace IdentityProvider.Controllers
                         error = "invalid_request",
                         error_description = result.ErrorMessage ?? "パスキー認証の検証に失敗しました。"
                     });
+                }
+
+                // PKCE (RFC 7636) の検証。認可コードへ束縛する前に行う。
+                // ここで弾かないと、形式不正は AuthorizationCodeService の ArgumentException
+                // 経由で 500 になる（この経路は catch (Exception) しか持たないため）。
+                if (string.IsNullOrEmpty(request.CodeChallenge))
+                {
+                    if (Security.PkcePolicy.IsRequired(_configuration))
+                    {
+                        _logger.LogWarning("PKCE required but code_challenge missing for client: {ClientId}", request.ClientId);
+                        return BadRequest(new
+                        {
+                            error = "invalid_request",
+                            error_description = "code_challenge が必要です。"
+                        });
+                    }
+                }
+                else
+                {
+                    if (!Security.PkceValidator.IsValidChallengeFormat(request.CodeChallenge))
+                    {
+                        _logger.LogWarning("Invalid code_challenge format for client: {ClientId}", request.ClientId);
+                        return BadRequest(new
+                        {
+                            error = "invalid_request",
+                            error_description = "code_challenge の形式が不正です。"
+                        });
+                    }
+
+                    if (!Security.PkceValidator.IsSupportedMethod(request.CodeChallengeMethod))
+                    {
+                        _logger.LogWarning("Unsupported code_challenge_method: {Method}", request.CodeChallengeMethod);
+                        return BadRequest(new
+                        {
+                            error = "invalid_request",
+                            error_description = "code_challenge_method は S256 のみサポートします。"
+                        });
+                    }
                 }
 
                 // 認可コード生成

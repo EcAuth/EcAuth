@@ -61,14 +61,15 @@ namespace IdentityProvider.Services
             // PKCE: CodeChallenge を指定する場合の検証
             if (!string.IsNullOrEmpty(request.CodeChallenge))
             {
-                // AuthorizationCode.CodeChallenge は MaxLength(128)。128 文字超は保存時に
-                // DbUpdateException（桁溢れ）→ 500 になるため、ここで弾いて 400 相当にする。
-                if (request.CodeChallenge.Length > 128)
-                    throw new ArgumentException("code_challenge は128文字以下である必要があります", nameof(request.CodeChallenge));
+                // RFC 7636 Section 4.2 の 43*128unreserved。呼び出し側（各コントローラ）でも
+                // 検証して 400 を返すが、ここは多層防御。AuthorizationCode.CodeChallenge は
+                // MaxLength(128) のため、128 文字超を素通しすると保存時に
+                // DbUpdateException（桁溢れ）→ 500 になる。
+                if (!Security.PkceValidator.IsValidChallengeFormat(request.CodeChallenge))
+                    throw new ArgumentException("code_challenge の形式が不正です", nameof(request.CodeChallenge));
 
                 // method は "S256" のみ許容する
-                var method = string.IsNullOrEmpty(request.CodeChallengeMethod) ? "S256" : request.CodeChallengeMethod;
-                if (method != "S256")
+                if (!Security.PkceValidator.IsSupportedMethod(request.CodeChallengeMethod))
                     throw new ArgumentException("code_challenge_method は S256 のみサポートします", nameof(request.CodeChallengeMethod));
             }
         }
