@@ -65,10 +65,14 @@ services:
       # AccountsOrganizationSeeder が accounts / stg-accounts Org と管理コンソール Client を
       # 投入するために ACCOUNTS_* / STG_ACCOUNTS_* を container に渡す。
       ACCOUNTS_CLIENT_ID: ${ACCOUNTS_CLIENT_ID}
+      # public client（PKCE）フラグ。マイページは ec-auth.io から PKCE でトークン交換するため
+      # true。Seeder が client_secret 無しの client を投入し、/v1/token が PKCE を必須にする。
+      ACCOUNTS_CLIENT_PUBLIC: ${ACCOUNTS_CLIENT_PUBLIC}
       ACCOUNTS_CLIENT_SECRET: ${ACCOUNTS_CLIENT_SECRET}
       ACCOUNTS_ALLOWED_RP_IDS: ${ACCOUNTS_ALLOWED_RP_IDS}
       ACCOUNTS_REDIRECT_URI: ${ACCOUNTS_REDIRECT_URI}
       STG_ACCOUNTS_CLIENT_ID: ${STG_ACCOUNTS_CLIENT_ID}
+      STG_ACCOUNTS_CLIENT_PUBLIC: ${STG_ACCOUNTS_CLIENT_PUBLIC}
       STG_ACCOUNTS_CLIENT_SECRET: ${STG_ACCOUNTS_CLIENT_SECRET}
       STG_ACCOUNTS_ALLOWED_RP_IDS: ${STG_ACCOUNTS_ALLOWED_RP_IDS}
       STG_ACCOUNTS_REDIRECT_URI: ${STG_ACCOUNTS_REDIRECT_URI}

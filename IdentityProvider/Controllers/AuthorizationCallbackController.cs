@@ -142,7 +142,12 @@ namespace IdentityProvider.Controllers
                     ClientId = client.Id,
                     RedirectUri = stateData.RedirectUri,
                     Scope = stateData.Scope,
-                    State = state,
+                    // クライアントから受け取った state を保存する（RFC 6749 Section 4.1.2）。
+                    // 従来は封緘済みの内部 State（外部 IdP 往復用の Iron blob）をそのまま
+                    // 保存しており、B2B パスキー経路（request.State）と意味が食い違っていた。
+                    // 内部 State は誰も読まないうえ、認可コードの state 列（500 文字）を
+                    // 圧迫し、State にプロパティを 1 つ足すだけで桁溢れで 500 になる状態だった。
+                    State = stateData.ClientState,
                     ExpirationMinutes = 10,
                     SubjectType = SubjectType.B2C,  // B2C認証（外部IdPフェデレーション）
                     // PKCE: /v1/authorization で受け取り封緘した State から復元して認可コードに束縛する
