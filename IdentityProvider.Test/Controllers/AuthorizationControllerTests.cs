@@ -35,15 +35,16 @@ namespace IdentityProvider.Test.Controllers
 
         public AuthorizationControllerTests()
         {
-            Environment.SetEnvironmentVariable("STATE_PASSWORD", StatePassword);
-
             _context = TestDbContextHelper.CreateInMemoryContext();
             SeedClientAndProvider();
 
+            // STATE_PASSWORD は IConfiguration 経由で解決されるため、環境変数を書き換えずに
+            // in-memory collection で注入できる（グローバル状態を汚さない）。
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["DEFAULT_ORGANIZATION_REDIRECT_URI"] = "https://localhost:8081/v1/auth/callback"
+                    ["DEFAULT_ORGANIZATION_REDIRECT_URI"] = "https://localhost:8081/v1/auth/callback",
+                    ["STATE_PASSWORD"] = StatePassword
                 })
                 .Build();
 
@@ -209,7 +210,6 @@ namespace IdentityProvider.Test.Controllers
         public void Dispose()
         {
             _context.Dispose();
-            Environment.SetEnvironmentVariable("STATE_PASSWORD", null);
         }
     }
 }

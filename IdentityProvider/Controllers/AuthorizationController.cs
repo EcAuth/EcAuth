@@ -152,7 +152,11 @@ namespace IdentityProvider.Controllers
                 CodeChallenge = code_challenge,
                 CodeChallengeMethod = codeChallengeMethod
             };
-            var password = Environment.GetEnvironmentVariable("STATE_PASSWORD");
+            // STATE_PASSWORD は IConfiguration 経由で解決する（環境変数プロバイダも含むため
+            // 既存のデプロイと互換）。seal 側と unseal 側（AuthorizationCallbackController /
+            // TokenController）で解決経路を必ず揃えること。片方だけ変えると、環境変数以外で
+            // 設定された場合に封緘した State を開封できなくなる。
+            var password = _configuration["STATE_PASSWORD"];
             var options = new Iron.Options();
 
             var sealedData = await Iron.Seal<State>(data, password, options);

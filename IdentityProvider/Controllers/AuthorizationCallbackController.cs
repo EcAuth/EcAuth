@@ -77,7 +77,8 @@ namespace IdentityProvider.Controllers
                 _logger.LogInformation("Authorization callback received with code: {Code}", code);
 
                 // 1. State パラメータをデコード
-                var password = Environment.GetEnvironmentVariable("STATE_PASSWORD");
+                // seal 側（AuthorizationController）と解決経路を揃える。
+                var password = _configuration["STATE_PASSWORD"];
                 var options = new Iron.Options();
                 var stateData = await Iron.Unseal<State>(state, password, options);
 

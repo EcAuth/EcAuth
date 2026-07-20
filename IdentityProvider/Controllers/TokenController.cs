@@ -67,7 +67,8 @@ namespace IdentityProvider.Controllers
         [Route("exchange")]
         public async Task<IActionResult> Exchange([FromForm] string code, [FromForm] string state, [FromForm] string scope)
         {
-            var password = Environment.GetEnvironmentVariable("STATE_PASSWORD");
+            // seal 側（AuthorizationController）と解決経路を揃える。
+            var password = _configuration["STATE_PASSWORD"];
             var options = new Iron.Options();
             var State = await Iron.Unseal<State>(state, password, options);
             var IdentityProviderId = State.OpenIdProviderId;
