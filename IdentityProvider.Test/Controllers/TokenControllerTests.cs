@@ -22,7 +22,9 @@ namespace IdentityProvider.Test.Controllers
         private readonly Mock<IB2BUserService> _mockB2BUserService;
         private readonly Mock<IAccountService> _mockAccountService;
         private readonly Mock<ILogger<TokenController>> _mockLogger;
-        private readonly Mock<IConfiguration> _mockConfiguration;
+        // Mock<IConfiguration> は使わない。GetValue<T> は拡張メソッドで GetSection を呼ぶため、
+        // loose Mock だと null が返り NullReferenceException になる（PkcePolicy.IsRequired が該当）。
+        private readonly IConfiguration _configuration;
         private readonly TokenController _controller;
 
         public TokenControllerTests()
@@ -34,7 +36,7 @@ namespace IdentityProvider.Test.Controllers
             _mockB2BUserService = new Mock<IB2BUserService>();
             _mockAccountService = new Mock<IAccountService>();
             _mockLogger = new Mock<ILogger<TokenController>>();
-            _mockConfiguration = new Mock<IConfiguration>();
+            _configuration = new ConfigurationBuilder().Build();
 
             _controller = new TokenController(
                 _context,
@@ -44,7 +46,7 @@ namespace IdentityProvider.Test.Controllers
                 _mockB2BUserService.Object,
                 _mockAccountService.Object,
                 _mockLogger.Object,
-                _mockConfiguration.Object,
+                _configuration,
                 new PlaintextSecretProtector());
         }
 
@@ -88,6 +90,9 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 Scope = "openid profile",
+                // PKCE 必須化（PkcePolicy）により confidential client でも束縛が必要
+                CodeChallenge = PkceChallenge,
+                CodeChallengeMethod = "S256",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
                 IsUsed = false
             };
@@ -115,7 +120,8 @@ namespace IdentityProvider.Test.Controllers
                 "test-code",
                 "https://example.com/callback",
                 "1",
-                "test-secret");
+                "test-secret",
+                code_verifier: PkceVerifier);
 
             // Assert
             var okResult = Assert.IsType<OkObjectResult>(result);
@@ -163,6 +169,9 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = 1,
                 RedirectUri = "https://accounts.ec-auth.io/callback",
                 Scope = "openid b2b",
+                // PKCE 必須化（PkcePolicy）により束縛が必要
+                CodeChallenge = PkceChallenge,
+                CodeChallengeMethod = "S256",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
                 IsUsed = false
             };
@@ -203,7 +212,8 @@ namespace IdentityProvider.Test.Controllers
                 "account-code",
                 "https://accounts.ec-auth.io/callback",
                 "ecauth-admin-console",
-                "account-secret");
+                "account-secret",
+                code_verifier: PkceVerifier);
 
             // Assert
             Assert.IsType<OkObjectResult>(result);
@@ -251,6 +261,10 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = 1,
                 RedirectUri = "https://accounts.ec-auth.io/callback",
                 Scope = "openid b2b",
+                // PKCE を束縛しておく。省くと PKCE 必須化の分岐で BadRequest になり、
+                // 本来検証したい「アカウント不在」に到達しないまま緑になってしまう。
+                CodeChallenge = PkceChallenge,
+                CodeChallengeMethod = "S256",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
                 IsUsed = false
             };
@@ -266,7 +280,8 @@ namespace IdentityProvider.Test.Controllers
                 "account-code",
                 "https://accounts.ec-auth.io/callback",
                 "ecauth-admin-console",
-                "account-secret");
+                "account-secret",
+                code_verifier: PkceVerifier);
 
             // Assert
             Assert.IsType<BadRequestObjectResult>(result);
@@ -669,6 +684,10 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 Scope = "openid profile",
+                // PKCE を束縛しておく。省くと PKCE 必須化の分岐で BadRequest になり、
+                // 本来検証したい「ユーザー不在」に到達しないまま緑になってしまう。
+                CodeChallenge = PkceChallenge,
+                CodeChallengeMethod = "S256",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
                 IsUsed = false
             };
@@ -684,7 +703,8 @@ namespace IdentityProvider.Test.Controllers
                 "test-code",
                 "https://example.com/callback",
                 "1",
-                "test-secret");
+                "test-secret",
+                code_verifier: PkceVerifier);
 
             // Assert
             var badRequestResult = Assert.IsType<BadRequestObjectResult>(result);

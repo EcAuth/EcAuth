@@ -106,15 +106,13 @@ namespace IdentityProvider.Test.Controllers
         }
 
         [Fact]
-        public async Task Federate_WithoutCodeChallenge_DoesNotBindPkce()
+        public async Task Federate_WithoutCodeChallenge_ReturnsInvalidRequest()
         {
-            // 後方互換: PKCE 未指定の既存クライアントは従来どおり動作する
+            // PKCE 必須化（PkcePolicy、コード既定 true）: code_challenge 未指定は
+            // 認可の入口で拒否する。外部 IdP での認証まで進んでから失敗させない。
             var result = await Federate(null, null);
 
-            var state = await UnsealStateFrom(result);
-            Assert.Null(state.CodeChallenge);
-            Assert.Null(state.CodeChallengeMethod);
-            Assert.Equal("client-state", state.ClientState);
+            Assert.Equal("invalid_request", GetError(result));
         }
 
         [Fact]

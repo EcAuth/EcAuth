@@ -11,6 +11,32 @@ namespace IdentityProvider.Security
     public static class PkceValidator
     {
         /// <summary>
+        /// PKCE (RFC 7636 Section 4.2) の code_challenge = 43*128unreserved。
+        /// unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
+        /// </summary>
+        private static readonly System.Text.RegularExpressions.Regex CodeChallengePattern =
+            new(@"^[A-Za-z0-9\-._~]{43,128}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        /// <summary>
+        /// code_challenge が RFC 7636 Section 4.2 の形式（43〜128 文字の unreserved）かを検証する。
+        /// 認可コードへ束縛する前に呼ぶこと。形式不正を素通しすると、トークン交換時まで
+        /// 誤りが発覚せず（S256 変換ミス等の原因究明が困難になる）、128 文字超は
+        /// AuthorizationCode.CodeChallenge の MaxLength(128) に阻まれ 500 になる。
+        /// </summary>
+        public static bool IsValidChallengeFormat(string? codeChallenge)
+        {
+            return !string.IsNullOrEmpty(codeChallenge) && CodeChallengePattern.IsMatch(codeChallenge);
+        }
+
+        /// <summary>
+        /// code_challenge_method が本 IdP のサポート範囲（未指定 = S256 既定、または "S256"）かを検証する。
+        /// </summary>
+        public static bool IsSupportedMethod(string? method)
+        {
+            return string.IsNullOrEmpty(method) || method == "S256";
+        }
+
+        /// <summary>
         /// code_verifier が code_challenge と一致するか検証する。
         /// method は "S256" のみ許容し、それ以外は false を返す。
         /// </summary>
