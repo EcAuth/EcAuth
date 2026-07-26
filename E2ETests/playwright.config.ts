@@ -53,11 +53,16 @@ export default defineConfig({
         //   （3 セグメント以上で TenantMiddleware が tenant=accounts に解決）。CI / ローカル両方で必要。
         //   WebAuthn の rp_id を origin と一致させ、B2BUser 解決を accounts テナントで行うため、
         //   passkey ページはこのホストで配信する。
+        // - ec-auth.io: ecauth-website（Hugo）のフロント配信元。website_signup_flow spec が
+        //   本番と同じホスト名でフロントを開くために必要（MAP は完全一致なので accounts とは別に要る）。
+        //   crypto.subtle（PKCE）は secure context 必須で、ec-auth.io は localhost 扱いされないため、
+        //   フロントは hugo server --tlsAuto の HTTPS で配信する（証明書は ignoreHTTPSErrors で許容）。
         // - mockopenidprovider: ローカル Docker 環境の MockIdP 解決（GitHub Actions では不要）。
         launchOptions: {
           args: [
             '--host-resolver-rules=' + [
               'MAP accounts.ec-auth.io 127.0.0.1',
+              'MAP ec-auth.io 127.0.0.1',
               ...(process.env.CI
                 ? []
                 : ['MAP mockopenidprovider:8081 127.0.0.1:9091', 'MAP mockopenidprovider:8080 127.0.0.1:9090']),
