@@ -5,7 +5,19 @@ name: Playwright E2E Tests - IdentityProvider
 # main.yml に集約し、二重起動を避ける。
 on:
   workflow_call:
+    inputs:
+      website_ref:
+        description: 'ecauth-website の ref。空ならデフォルトブランチ（main）'
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
+    inputs:
+      website_ref:
+        description: 'ecauth-website の ref（例: feat/signup-form）。空ならデフォルトブランチ（main）'
+        type: string
+        required: false
+        default: ''
 
 jobs:
   test:
@@ -162,18 +174,39 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: EcAuth/ecauth-website
+          # 空文字ならデフォルトブランチ。申込／マイページが未マージの間は
+          # workflow_dispatch で website_ref にそのブランチを指定して検証する。
+          ref: ${{ inputs.website_ref }}
           path: ecauth-website
           token: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN || github.token }}
 
-      - name: Setup Hugo
+      # checkout できても、その ref に申込／マイページのテンプレートが無ければ
+      # 結合 E2E は回せない（未マージのデフォルトブランチなど）。ここで判定しておかないと
+      # hugo は起動するが全ページ 404 になり、テストが不可解なタイムアウトで落ちる。
+      - name: Check ecauth-website has the app pages
+        id: website_ready
         if: steps.checkout_website.outcome == 'success'
+        run: |
+          missing=""
+          for f in layouts/_default/signup.html layouts/_default/mypage.html layouts/_default/auth-callback.html; do
+            [ -f "ecauth-website/$f" ] || missing="$missing $f"
+          done
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> $GITHUB_OUTPUT
+            echo "::warning title=website E2E skipped::ecauth-website の ref に申込/マイページのテンプレートがありません（未マージ）:$missing"
+          else
+            echo "ready=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Hugo
+        if: steps.website_ready.outputs.ready == 'true'
         uses: peaceiris/actions-hugo@75d2e84710de30f6ff7268e08f310b60ef14033f # v3.0.0
         with:
           hugo-version: 'latest'
           extended: true
 
       - name: Configure frontend wiring
-        if: steps.checkout_website.outcome == 'success'
+        if: steps.website_ready.outputs.ready == 'true'
         run: |
           # PKCE（crypto.subtle）は secure context 必須。ec-auth.io は localhost 扱いされないため
           # フロントは HTTPS で配信する。証明書は自己署名で、Playwright 側が ignoreHTTPSErrors。
@@ -264,7 +297,7 @@ jobs:
           fi
 
       - name: Start ecauth-website (hugo)
-        if: steps.checkout_website.outcome == 'success'
+        if: steps.website_ready.outputs.ready == 'true'
         working-directory: ecauth-website
         env:
           # hugo.toml の既定値を E2E 環境に上書きする（baseof.html が window.ECAUTH に注入）。
@@ -275,16 +308,25 @@ jobs:
             --baseURL https://ec-auth.io:1313/ --appendPort=false --disableFastRender \
             > /tmp/hugo.log 2>&1 &
           echo $! > /tmp/hugo.pid
+          # -f を付けて 2xx 以外を失敗にする。-f 無しだと 404 でも exit 0 になり、
+          # 「hugo は起動したが全ページ 404」を ready と誤判定してしまう。
           for i in {1..30}; do
-            if curl -sk https://127.0.0.1:1313/signup/ > /dev/null 2>&1; then
+            if curl -fsk https://127.0.0.1:1313/signup/ -o /dev/null; then
               echo "ecauth-website is ready"
               break
             fi
             echo "Waiting for hugo... ($i/30)"
             sleep 2
           done
-          if ! curl -sk https://127.0.0.1:1313/signup/ > /dev/null 2>&1; then
-            echo "ERROR: hugo server failed to start"
+          # E2E が実際に開くページが 200 で返ることまで確認する。
+          failed=""
+          for path in /signup/ /signup/confirm/ /signin/ /signin/magic-link/ /mypage/ /auth/callback/; do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' "https://127.0.0.1:1313${path}")
+            echo "  ${path} -> ${code}"
+            [ "$code" = "200" ] || failed="$failed ${path}(${code})"
+          done
+          if [ -n "$failed" ]; then
+            echo "ERROR: ecauth-website のページが 200 を返しません:$failed"
             cat /tmp/hugo.log || true
             exit 1
           fi
