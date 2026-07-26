@@ -77,10 +77,10 @@ namespace IdentityProvider.Services
             // 送信元アドレス・表示名は SendGrid 実装と同じキーで解決する（両プロバイダで統一）。
             var fromEmail = _configuration["SendGrid:FromEmail"]
                 ?? _configuration["SENDGRID_FROM_EMAIL"]
-                ?? "noreply@ecauth.jp";
+                ?? EmailTemplates.DefaultFromEmail;
             var fromName = _configuration["SendGrid:FromName"]
                 ?? _configuration["SENDGRID_FROM_NAME"]
-                ?? "EcAuth";
+                ?? EmailTemplates.DefaultFromName;
 
             var message = new MimeMessage();
             message.From.Add(new MailboxAddress(fromName, fromEmail));
