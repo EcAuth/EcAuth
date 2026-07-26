@@ -200,10 +200,15 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
     }
 
     // 認証成功でサーバーが生成した redirect_url へ遷移する。
-    // redirect_uri（/auth/callback）は IdP 側に実体が無く 404 になるが、
-    // ナビゲーション自体は完了するため URL から認可コードを取り出せる。
+    // 本 spec は認可コードを URL から取り出すだけで、redirect_uri の先に実体があるかは問わない。
+    //   - IdP 上に実体が無い場合（既定の https://localhost:8081/auth/callback）は 404 になる
+    //   - ecauth-website を配信している場合（CI が ACCOUNTS_REDIRECT_URI をフロントに向ける）は
+    //     Hugo が正規形へ 301 するため、パスに末尾スラッシュが付く（/auth/callback → /auth/callback/）
+    // どちらでもナビゲーションは完了するので、末尾スラッシュを任意として待つ。
+    // なお、この着地ページ（auth-callback.js）は sessionStorage に state / verifier が無いと
+    // トークン交換せずエラー表示で留まるため、URL は書き換わらない。
     const escapedRedirectUri = accountsRedirectUri.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    await page.waitForURL(new RegExp(escapedRedirectUri + '\\?code='), { timeout: 15000 });
+    await page.waitForURL(new RegExp(escapedRedirectUri + '/?\\?code='), { timeout: 15000 });
 
     const url = new URL(page.url());
     authorizationCode = url.searchParams.get('code')!;
