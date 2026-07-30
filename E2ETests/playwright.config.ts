@@ -63,6 +63,13 @@ export default defineConfig({
             '--host-resolver-rules=' + [
               'MAP accounts.ec-auth.io 127.0.0.1',
               'MAP ec-auth.io 127.0.0.1',
+              // - *.test: 申込で作られた顧客 Client を検証する spec が使う疑似サイトホスト
+              //   （signup_client_b2b_login.spec.ts）。WebAuthn は rp_id と origin の一致を
+              //   要求するため、申込サイトのホスト名で IdP を開けるようにする。
+              //   .test は RFC 6761 の予約 TLD で公開解決されないため、実在ドメインと衝突しない。
+              //   TenantMiddleware が先頭セグメントをテナント名にするのは 3 セグメント以上の
+              //   ときだけなので、2 セグメントに保てば既定テナントに解決される。
+              'MAP *.test 127.0.0.1',
               ...(process.env.CI
                 ? []
                 : ['MAP mockopenidprovider:8081 127.0.0.1:9091', 'MAP mockopenidprovider:8080 127.0.0.1:9090']),
