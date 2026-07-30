@@ -74,6 +74,13 @@ for (const variant of VARIANTS) {
       `${variant.label} の店舗ホストが未設定のためスキップ（E2ETests/scripts/eccube-e2e.sh up で起動してください）`
     );
 
+    // この筋書きはリトライできない。申込は組織コードの重複を弾き
+    // （SignupService の organization_already_exists）、組織コードは compose 起動時に
+    // 確定した店舗ホストから導出されるため、再実行しても必ず同じコードになる。
+    // config の retries（CI では 2）のままだと、後段の失敗がリトライのたびに
+    // organization_already_exists に化けて本当の失敗理由が隠れる。
+    test.describe.configure({ retries: 0 });
+
     const baseUrl = process.env.E2E_BASE_URL || 'https://localhost:8081';
     const accountsHost = process.env.E2E_ACCOUNTS_HOST || 'accounts.ec-auth.io';
     const accountsPageBaseUrl = process.env.E2E_ACCOUNTS_PAGE_URL || `https://${accountsHost}:8081`;
