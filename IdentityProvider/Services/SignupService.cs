@@ -28,6 +28,9 @@ namespace IdentityProvider.Services
         // [A-Za-z0-9_] 以外を "_" に置換する（例: "stg-accounts" -> "stg_accounts"）。
         private static readonly Regex NonConfigKeyChar = new("[^A-Za-z0-9_]", RegexOptions.Compiled);
 
+        // 申込 URL のベースパス正規化: 末尾セグメントをファイル名とみなして落とす拡張子。
+        private static readonly string[] WebDocumentExtensions = [".php", ".html", ".htm"];
+
         private readonly EcAuthDbContext _context;
         private readonly ITenantService _tenantService;
         private readonly IEmailService _emailService;
@@ -585,14 +588,17 @@ namespace IdentityProvider.Services
         /// <summary>
         /// 申込 URL のパスを、コールバック URL の基点になるベースパスへ正規化する（先頭・末尾がスラッシュ）。
         /// EC-CUBE 2 系・4 系ともサブディレクトリインストールがあり得るため、パスを捨てずに引き継ぐ。
-        /// 末尾セグメントがファイル名（"." を含む）の場合は落とす（<c>.../index.php</c> を貼られるケース）。
+        /// 末尾セグメントがウェブ文書の場合のみ落とす（<c>.../index.php</c> を貼られるケース）。
         /// </summary>
         private static string NormalizeBasePath(string absolutePath)
         {
             var path = string.IsNullOrEmpty(absolutePath) ? "/" : absolutePath;
 
+            // ドットの有無で判定すると "ec-cube-4.2" のようなディレクトリ名をファイル名と
+            // 誤判定してサブディレクトリごと落としてしまうため、拡張子で判定する。
             var lastSlash = path.LastIndexOf('/');
-            if (lastSlash >= 0 && path[(lastSlash + 1)..].Contains('.'))
+            var lastSegment = lastSlash >= 0 ? path[(lastSlash + 1)..] : string.Empty;
+            if (WebDocumentExtensions.Any(ext => lastSegment.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
             {
                 path = path[..(lastSlash + 1)];
             }

@@ -591,20 +591,40 @@ namespace IdentityProvider.Test.Services
                 client.RedirectUris!.Single().Uri);
         }
 
-        [Fact]
-        public async Task ConfirmAsync_SiteUrlEndsWithFileName_DropsFileNameFromBasePath()
+        [Theory]
+        // トップページとして "…/index.php" を貼られるケース。
+        [InlineData("https://shop.example.jp/store/index.php", "https://shop.example.jp/store/ecauth/callback")]
+        // index 以外のウェブ文書でもファイル名として落とす。
+        [InlineData("https://shop.example.jp/top.php", "https://shop.example.jp/ecauth/callback")]
+        [InlineData("https://shop.example.jp/store/index.html", "https://shop.example.jp/store/ecauth/callback")]
+        public async Task ConfirmAsync_SiteUrlEndsWithWebDocument_DropsFileNameFromBasePath(
+            string siteUrl, string expectedUri)
         {
-            // トップページとして "https://shop.example.jp/store/index.php" を貼られるケース。
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
             var service = CreateService(context, tenantService, out var emailMock, out _);
 
-            var input = ValidInput() with { ProductionSiteUrl = "https://shop.example.jp/store/index.php" };
+            var input = ValidInput() with { ProductionSiteUrl = siteUrl };
             var client = await ConfirmAndGetClientAsync(service, emailMock, context, input, "shop-example-jp");
 
-            Assert.Equal(
-                "https://shop.example.jp/store/ecauth/callback",
-                client.RedirectUris!.Single().Uri);
+            Assert.Equal(expectedUri, client.RedirectUris!.Single().Uri);
+        }
+
+        [Theory]
+        // ドットを含むディレクトリ名（末尾スラッシュ無し）をファイル名と誤判定してはいけない。
+        [InlineData("https://shop.example.jp/ec-cube-4.2", "https://shop.example.jp/ec-cube-4.2/ecauth/callback")]
+        [InlineData("https://shop.example.jp/shop.jp", "https://shop.example.jp/shop.jp/ecauth/callback")]
+        public async Task ConfirmAsync_SiteUrlEndsWithDottedDirectory_KeepsDirectoryInBasePath(
+            string siteUrl, string expectedUri)
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with { ProductionSiteUrl = siteUrl };
+            var client = await ConfirmAndGetClientAsync(service, emailMock, context, input, "shop-example-jp");
+
+            Assert.Equal(expectedUri, client.RedirectUris!.Single().Uri);
         }
 
         [Fact]
