@@ -257,6 +257,38 @@ ECCUBE_AUTHENTICATION_KEY=$(op read 'op://EcAuth/eccube4-ecauth-plugin/eccube_au
 ボリュームごと破棄する。`E2E_RUN_ID` を環境変数で固定すると同じホストで再実行してしまうので、
 意図的に再現したいとき以外は設定しない。
 
+### 確認メールの受信口（mailpit と E2E メールボックスの使い分け）
+
+申込フローの E2E は確認メールの本文からトークンを取り出す必要がある（トークンは本文にしか
+存在せず、DB には SHA-256 ハッシュしか残らない）。受信口は環境で変わる。
+
+| 環境 | 受信口 | 参照方法 |
+|---|---|---|
+| ローカル / CI | mailpit | `tests/helpers/mailpit.ts`（`MAILPIT_BASE_URL`、既定 `http://localhost:8025`） |
+| staging / production | Cloudflare Worker の E2E メールボックス | 下記（**未実装**。デプロイ後 E2E を組むときに吸収層を作る） |
+
+デプロイ済み環境は SendGrid 送信なので mailpit が使えない。代わりに
+`ecauth-infrastructure` が用意した受信口を使う（構成の詳細と設計上の制約は
+[ecauth-infrastructure の CLAUDE.md](https://github.com/EcAuth/ecauth-infrastructure/blob/main/CLAUDE.md)
+「E2E 用メールボックス」を参照）。
+
+| 項目 | 値 |
+|------|-----|
+| ベース URL | `https://e2e-mail.ec-auth.io` |
+| 宛先 | `e2e-{RUN_ID}@e2e.ec-auth.io` |
+| 読み出しトークン | `op://EcAuth/ecauth-e2e-mailbox/api_token`（`Authorization: Bearer`） |
+| API | `GET` / `DELETE /messages?to=<address>` |
+| レスポンス | `{"messages":[{to, from, subject, text, html, received_at}, ...]}` |
+
+呼び出し側の注意:
+
+- **Workers KV は結果整合**で、書き込みが読み出しに反映されるまで最大 1 分程度かかりうる。
+  mailpit 相当の短いポーリング間隔だと取りこぼすので、タイムアウトは余裕を持たせる。
+- メッセージは 1 時間で自動失効するため、後始末の `DELETE` は必須ではない。
+- 本文のフィールド名が mailpit（`Text` / `HTML` / `Subject` / `ID`）と異なる。
+  spec からは直接触らず、`waitForMessage` / `extractToken` と同じインターフェースの
+  吸収層を挟むこと。
+
 ### マイグレーション設計ルール
 
 - `migrationBuilder.Sql()` でカラムを参照する UPDATE/INSERT 文を書く場合、`EXEC()` 動的 SQL でラップすること
