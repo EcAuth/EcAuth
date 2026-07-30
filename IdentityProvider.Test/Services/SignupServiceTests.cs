@@ -526,6 +526,187 @@ namespace IdentityProvider.Test.Services
             Assert.False(customerOrgs[0].IsSandbox);
         }
 
+        // ---- ConfirmAsync: Client の初期値（redirect_uri / allowed_rp_ids）----
+
+        /// <summary>
+        /// Request → Confirm を通し、指定した組織コードの Org に作られた Client を返す。
+        /// </summary>
+        private async Task<Client> ConfirmAndGetClientAsync(
+            SignupService service,
+            Mock<IEmailService> emailMock,
+            EcAuthDbContext context,
+            SignupInput input,
+            string organizationCode)
+        {
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
+            await service.ConfirmAsync(token);
+
+            var org = await context.Organizations
+                .IgnoreQueryFilters()
+                .FirstAsync(o => o.Code == organizationCode);
+            return await context.Clients
+                .IgnoreQueryFilters()
+                .Include(c => c.RedirectUris)
+                .FirstAsync(c => c.OrganizationId == org.Id);
+        }
+
+        [Theory]
+        // EC-CUBE 4 系プラグインのコールバックは Route "/ecauth/callback"。
+        [InlineData("4", "https://shop.example.jp/ecauth/callback")]
+        // EC-CUBE 2 系プラグインは HTTPS_URL . 'ecauth/callback.php'。
+        [InlineData("2", "https://shop.example.jp/ecauth/callback.php")]
+        // EC-CUBE 以外は 4 系と同じパスを初期値にする。
+        [InlineData("other", "https://shop.example.jp/ecauth/callback")]
+        public async Task ConfirmAsync_RegistersPluginCallbackAsRedirectUri(string version, string expectedUri)
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with { EcCubeVersion = version };
+            var client = await ConfirmAndGetClientAsync(service, emailMock, context, input, "shop-example-jp");
+
+            // サイトのトップ URL は実際のコールバックにならないため登録しない。
+            var uris = client.RedirectUris!.Select(r => r.Uri).ToList();
+            Assert.Equal(new[] { expectedUri }, uris);
+        }
+
+        [Fact]
+        public async Task ConfirmAsync_SiteUrlWithSubdirectory_KeepsBasePathInRedirectUri()
+        {
+            // EC-CUBE 2 系・4 系ともサブディレクトリインストールがあり得る。
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with
+            {
+                ProductionSiteUrl = "https://shop.example.jp/store/",
+                EcCubeVersion = "2"
+            };
+            var client = await ConfirmAndGetClientAsync(service, emailMock, context, input, "shop-example-jp");
+
+            Assert.Equal(
+                "https://shop.example.jp/store/ecauth/callback.php",
+                client.RedirectUris!.Single().Uri);
+        }
+
+        [Fact]
+        public async Task ConfirmAsync_SiteUrlEndsWithFileName_DropsFileNameFromBasePath()
+        {
+            // トップページとして "https://shop.example.jp/store/index.php" を貼られるケース。
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with { ProductionSiteUrl = "https://shop.example.jp/store/index.php" };
+            var client = await ConfirmAndGetClientAsync(service, emailMock, context, input, "shop-example-jp");
+
+            Assert.Equal(
+                "https://shop.example.jp/store/ecauth/callback",
+                client.RedirectUris!.Single().Uri);
+        }
+
+        [Fact]
+        public async Task ConfirmAsync_SiteUrlWithNonDefaultPort_KeepsPortInRedirectUriButNotInRpId()
+        {
+            // redirect_uri は完全一致検証のためポートが必要。RP ID はポートを含まないドメイン名。
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with { ProductionSiteUrl = "https://shop.example.jp:8443/" };
+            var client = await ConfirmAndGetClientAsync(service, emailMock, context, input, "shop-example-jp");
+
+            Assert.Equal(
+                "https://shop.example.jp:8443/ecauth/callback",
+                client.RedirectUris!.Single().Uri);
+            Assert.Equal(new[] { "shop.example.jp" }, client.AllowedRpIds);
+        }
+
+        [Fact]
+        public async Task ConfirmAsync_WwwHost_AllowsBothWwwAndApexRpIds()
+        {
+            // www 付きで申込んでも apex ドメインの管理画面からパスキーを登録できるようにする。
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with { ProductionSiteUrl = "https://www.example.jp" };
+            var client = await ConfirmAndGetClientAsync(service, emailMock, context, input, "example-jp");
+
+            Assert.Equal(new[] { "www.example.jp", "example.jp" }, client.AllowedRpIds);
+            Assert.Equal("https://www.example.jp/ecauth/callback", client.RedirectUris!.Single().Uri);
+        }
+
+        [Fact]
+        public async Task ConfirmAsync_SubdomainHost_AllowsSingleRpId()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var client = await ConfirmAndGetClientAsync(
+                service, emailMock, context, ValidInput(), "shop-example-jp");
+
+            Assert.Equal(new[] { "shop.example.jp" }, client.AllowedRpIds);
+        }
+
+        [Fact]
+        public async Task ConfirmAsync_IdnHost_UsesPunycodeInRedirectUriAndRpId()
+        {
+            // ブラウザが送る Host ヘッダは Punycode なので、プラグインが組み立てる
+            // redirect_uri / rp_id と一致させるには初期値も Punycode である必要がある。
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var punycodeHost = new Uri("https://日本.jp").IdnHost;
+            var input = ValidInput() with { ProductionSiteUrl = "https://日本.jp" };
+
+            var customerCode = await RequestAndCaptureTokenAsync(service, emailMock, input);
+            await service.ConfirmAsync(customerCode);
+
+            var org = await context.Organizations
+                .IgnoreQueryFilters()
+                .FirstAsync(o => o.Code != Tenant);
+            var client = await context.Clients
+                .IgnoreQueryFilters()
+                .Include(c => c.RedirectUris)
+                .FirstAsync(c => c.OrganizationId == org.Id);
+
+            Assert.Equal($"https://{punycodeHost}/ecauth/callback", client.RedirectUris!.Single().Uri);
+            Assert.Equal(new[] { punycodeHost }, client.AllowedRpIds);
+        }
+
+        [Fact]
+        public async Task ConfirmAsync_ProductionAndTest_EachClientGetsOwnCallback()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with
+            {
+                ProductionSiteUrl = "https://shop.example.jp",
+                TestSiteUrl = "https://test.example.jp/store/",
+                EcCubeVersion = "2"
+            };
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
+            await service.ConfirmAsync(token);
+
+            var clients = await context.Clients
+                .IgnoreQueryFilters()
+                .Include(c => c.Organization)
+                .Include(c => c.RedirectUris)
+                .ToListAsync();
+
+            var production = clients.Single(c => c.Organization!.Code == "shop-example-jp");
+            var sandbox = clients.Single(c => c.Organization!.Code == "test-example-jp");
+            Assert.Equal("https://shop.example.jp/ecauth/callback.php", production.RedirectUris!.Single().Uri);
+            Assert.Equal("https://test.example.jp/store/ecauth/callback.php", sandbox.RedirectUris!.Single().Uri);
+        }
+
         // ---- ConfirmAsync 異常系 ----
 
         [Fact]
