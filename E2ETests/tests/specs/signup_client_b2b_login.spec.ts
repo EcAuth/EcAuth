@@ -1,6 +1,6 @@
 import { test, expect, APIRequestContext, BrowserContext, Page, request } from '@playwright/test';
 import { randomUUID } from 'crypto';
-import { signupAndGetAccountToken } from '../helpers/accounts';
+import { signupAndGetAccountToken, fetchSignupClient } from '../helpers/accounts';
 import { registerB2BPasskey, authenticateB2BPasskey } from '../helpers/b2b-passkey';
 import { deleteMessages } from '../helpers/mailpit';
 import { generatePkcePair } from '../helpers/pkce';
@@ -119,40 +119,21 @@ test.describe.serial('申込で作られた Client での B2B パスキーログ
   });
 
   test('マイページと同じ経路で client_id / client_secret を取得する', async () => {
-    const listResponse = await apiAccounts.get(`${baseUrl}/v1/account/clients`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    expect(listResponse.status()).toBe(200);
+    const client = await fetchSignupClient(apiAccounts, baseUrl, accessToken, expectedOrgCode);
 
-    const clients = (await listResponse.json()).clients as Array<{
-      id: number;
-      client_id: string;
-      organization_code: string;
-      redirect_uris: string[];
-    }>;
-
-    const client = clients.find((c) => c.organization_code === expectedOrgCode);
-    expect(client, `organization_code=${expectedOrgCode} の Client が見つかりません`).toBeTruthy();
-
-    clientId = client!.client_id;
+    clientId = client.clientId;
+    clientSecret = client.clientSecret;
+    expect(clientSecret).toBeTruthy();
 
     // ---- ここが EcAuth#481 の核心 ----
     // 申込時に登録される redirect_uri は、EC-CUBE 4 系プラグインが送るコールバック URL
     // （{サイトのベース URL}/ecauth/callback）と一致していなければならない。
     // authenticate/verify は完全一致で検証するため、ズレていると確定的に 400 になる。
-    expect(client!.redirect_uris).toContain(`https://${siteHost}:8081/ecauth/callback`);
+    expect(client.redirectUris).toContain(`https://${siteHost}:8081/ecauth/callback`);
     // 暫定のトップ URL は登録しない（余分な許可を残さない）。
-    expect(client!.redirect_uris).not.toContain(`https://${siteHost}:8081/`);
+    expect(client.redirectUris).not.toContain(`https://${siteHost}:8081/`);
 
-    registeredRedirectUri = client!.redirect_uris.find((u) => u.endsWith('/ecauth/callback'))!;
-
-    const revealResponse = await apiAccounts.post(
-      `${baseUrl}/v1/account/clients/${client!.id}/secret/reveal`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    expect(revealResponse.status()).toBe(200);
-    clientSecret = (await revealResponse.json()).client_secret;
-    expect(clientSecret).toBeTruthy();
+    registeredRedirectUri = client.redirectUris.find((u) => u.endsWith('/ecauth/callback'))!;
   });
 
   test('サイトのオリジンでパスキーを登録する', async () => {
