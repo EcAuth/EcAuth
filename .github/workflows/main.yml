@@ -36,7 +36,13 @@ jobs:
   # 申込が登録する初期値とプラグインが送る値のズレ（EcAuth#481）は、この経路でしか出ない。
   # EC-CUBE のイメージビルドと初回インストールで他スイートより時間がかかるが、
   # 本番に出てから気付く類の不具合なので PR 時に回す。
+  # secrets: inherit ではなく、呼び出し先が実際に使う 3 つだけを明示的に渡す
+  # （呼び出し先の workflow_call.secrets に契約として宣言してある）。
+  # 他の 3 スイートは既存のまま inherit なので、揃えるのは別途行う。
   eccube-plugin-e2e:
     needs: dotnet-tests
     uses: ./.github/workflows/eccube_plugin_e2e.yml
-    secrets: inherit
+    secrets:
+      ORG_PAT: ${{ secrets.ORG_PAT }}
+      PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+      OP_SERVICE_ACCOUNT_TOKEN_NONPROD: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_NONPROD }}

@@ -108,7 +108,6 @@ for (const variant of VARIANTS) {
     let accessToken: string;
     let clientId: string;
     let clientSecret: string;
-    let registeredRedirectUri: string;
 
     test.beforeAll(async ({ browser }) => {
       // compose が採番したテナントホストと、申込から導出される組織コードがズレていると
@@ -179,9 +178,10 @@ for (const variant of VARIANTS) {
 
       // 申込が登録する redirect_uri は、この系のプラグインが送るコールバック URL と
       // 一致していなければならない（authenticate/verify は完全一致で検証する）。
-      const expectedRedirectUri = `${shopBaseUrl}${variant.callbackPath}`;
-      expect(client.redirectUris).toContain(expectedRedirectUri);
-      registeredRedirectUri = expectedRedirectUri;
+      // ここでは登録値の突き合わせだけを行い、値をテストの後段へは持ち回さない。
+      // プラグインは redirect_uri を自分で組み立てて送るため、テスト側が値を渡す余地が無く、
+      // 一致しているかどうかは後段のパスキーログインが通るかどうかで現れる。
+      expect(client.redirectUris).toContain(`${shopBaseUrl}${variant.callbackPath}`);
     });
 
     test('プラグイン設定に client_id / client_secret だけを入力して保存する', async () => {
@@ -211,11 +211,10 @@ for (const variant of VARIANTS) {
     test('パスキーでログインし管理画面ホームに到達する', async () => {
       test.setTimeout(90000);
 
-      // ここが通れば、申込が登録した redirect_uri（= registeredRedirectUri）と
-      // プラグインが送る値が一致していることになる。ズレていれば
-      // authenticate/verify が 400 を返し、コールバックまで到達しない。
+      // ここが通ること自体が、申込が登録した redirect_uri とプラグインが送る値の
+      // 一致を意味する。ズレていれば authenticate/verify が 400 を返し、
+      // コールバックにも管理画面ホームにも到達しない（EcAuth#481 の再現条件）。
       await variant.admin.passkeyLogin(page, shopBaseUrl);
-      expect(registeredRedirectUri).toBe(`${shopBaseUrl}${variant.callbackPath}`);
     });
   });
 }

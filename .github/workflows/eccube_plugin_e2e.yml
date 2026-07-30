@@ -34,6 +34,20 @@ on:
         type: string
         required: false
         default: ''
+    # 呼び出し元から secrets: inherit で全部渡させず、このワークフローが実際に
+    # 使うものだけを契約として宣言する。すべて required: false なのは、fork や
+    # シークレット未設定のリポジトリでも（プラグインを public として取得できる範囲で）
+    # 起動自体は成立させるため。未設定なら空文字になり、各所のフォールバックが効く。
+    secrets:
+      ORG_PAT:
+        description: 'プラグインリポジトリの checkout と GitHub Packages の NuGet 認証に使う Organization トークン'
+        required: false
+      PACKAGES_READ_TOKEN:
+        description: 'ORG_PAT が無い場合のフォールバック（後方互換）'
+        required: false
+      OP_SERVICE_ACCOUNT_TOKEN_NONPROD:
+        description: 'install_source=package-api のときだけ使う 1Password Service Account トークン'
+        required: false
   workflow_dispatch:
     inputs:
       plugin4_ref:
@@ -63,8 +77,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # checkout 後に git 操作をするステップは無い（イメージビルドの NuGet 認証は
+      # ビルド引数、プラグインの composer install はコンテナ内で完結する）。
+      # 認証情報を runner に残す必要が無いので 3 つとも persist-credentials: false にする。
       - name: Checkout EcAuth
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       # プラグインは docker build のコンテキストとして使う。ref を切り替えると
       # Dockerfile の FROM ごと変わるため、EC-CUBE 本体のバージョンもこれで決まる。
@@ -75,6 +94,7 @@ jobs:
           ref: ${{ inputs.plugin4_ref }}
           path: plugins/ec-cube4-ecauth
           token: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN || github.token }}
+          persist-credentials: false
 
       - name: Checkout ec-cube2-ecauth
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -83,6 +103,7 @@ jobs:
           ref: ${{ inputs.plugin2_ref }}
           path: plugins/ec-cube2-ecauth
           token: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN || github.token }}
+          persist-credentials: false
 
       - name: Load base environment variables
         # compose.yaml が補間する非機密のローカル/ダミー値。playwright.yml の同名 step と

@@ -44,6 +44,15 @@ cmd_up() {
     # e2e-{RUN_ID}-shop4-test のようにホストから導出される（DeriveOrganizationCode）。
     local run_id="${E2E_RUN_ID:-$(date +%s)-$RANDOM}"
 
+    # ボリューム名（eccube4-pg / eccube2-pg / eccube2-vendor / caddy-data）は RUN_ID に
+    # 紐付かない固定名なので、down を挟まずに up を再実行すると、新しいホスト名に対して
+    # 前回の EC-CUBE DB（プラグイン設定を含む）が残ったまま起動してしまう。
+    # 「無設定から始める」ことがこのテストの前提なので、残骸を検知したら作り直す。
+    if [ -f "${STATE_FILE}" ]; then
+        echo "[eccube-e2e] 前回の環境が残っています。EcAuth の DB を含むボリュームごと down してから起動し直します。" >&2
+        cmd_down
+    fi
+
     # 秘密は入らない（ホスト名とディレクトリのみ）。再実行のたびに作り直すのが正しいので
     # 追記ではなく生成する。プロジェクトの .env とは別ファイル。
     cat > "${STATE_FILE}" <<EOF

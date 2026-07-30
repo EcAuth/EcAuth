@@ -220,6 +220,25 @@ cd E2ETests && pnpm exec playwright test tests/specs/signup_client_b2b_login.spe
 CI は `.github/workflows/eccube_plugin_e2e.yml`（`main.yml` から呼ばれる）。プラグインの ref と
 package-api 経由インストールを `workflow_dispatch` の入力で切り替えられる。
 
+#### package-api（検証キー）経由でローカル実行する
+
+オーナーズストアのリリース申請で発行される検証キー（`X-ECCUBE-KEY`）を渡すと、4 系プラグインを
+実際の package-api から入れて検証できる。`op run` は env-file に無い変数をシェルからそのまま通すので、
+インラインで渡せばよい。
+
+```bash
+ECCUBE_AUTHENTICATION_KEY=$(op read 'op://EcAuth/eccube4-ecauth-plugin/eccube_authentication_key') \
+  ./E2ETests/scripts/eccube-e2e.sh up
+# バージョンを固定する場合は ECAUTH_PLUGIN_VERSION=1.0.1 も併せて渡す（非秘密）
+```
+
+> ⚠️ **`ECCUBE_AUTHENTICATION_KEY` を `.env.dev.tpl` に入れてはいけない**（レビュー bot が
+> 「配線が漏れている」と指摘しがちだが、意図的に入れていない）。4 系プラグインの
+> `docker-entrypoint.sh` は**キーが非空ならインストール元を package-api に切り替える**。
+> `.env.dev.tpl` に入れると、この E2E と無関係な通常のローカル起動まで既定のインストール元が
+> ワーキングツリーから package-api に変わり、開発中のプラグインを検証できなくなる。
+> ec-cube4-ecauth 側でも同じ理由で `.env.tpl` とは別の `.env.verify.tpl` に分離してある。
+
 #### 構成上の決めごと（変更するとき用）
 
 | 事項 | 決め |
