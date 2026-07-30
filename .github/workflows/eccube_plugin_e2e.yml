@@ -1,0 +1,192 @@
+name: EC-CUBE Plugin E2E
+
+# 申込 → プラグイン設定 → パスキー登録 → 管理画面ログイン を、EC-CUBE 4 系 / 2 系の
+# プラグインを実際に動かして通す結合 E2E。
+#
+# playwright.yml（EcAuth 単体の E2E）と分けている理由:
+#   - EC-CUBE のイメージビルドと初回インストールに数分かかり、EcAuth 単体の
+#     fail-fast を鈍らせる
+#   - プラグインの ref を差し替えて回したいケースがあり、入力を持つ必要がある
+#
+# EC-CUBE 本体のバージョンはプラグインリポジトリの Dockerfile の FROM が決める。
+# 本体版を変えたいときは plugin4_ref / plugin2_ref にその本体版を指すブランチ/タグを渡す。
+
+on:
+  workflow_call:
+    inputs:
+      plugin4_ref:
+        description: 'ec-cube4-ecauth の ref（空ならデフォルトブランチ）'
+        type: string
+        required: false
+        default: ''
+      plugin2_ref:
+        description: 'ec-cube2-ecauth の ref（空ならデフォルトブランチ）'
+        type: string
+        required: false
+        default: ''
+      install_source:
+        description: '4 系プラグインのインストール元（local / package-api）'
+        type: string
+        required: false
+        default: 'local'
+      plugin_version:
+        description: 'package-api から入れる 4 系プラグインのバージョン（空なら最新）'
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      plugin4_ref:
+        description: 'ec-cube4-ecauth の ref（空ならデフォルトブランチ）'
+        type: string
+        required: false
+        default: ''
+      plugin2_ref:
+        description: 'ec-cube2-ecauth の ref（空ならデフォルトブランチ）'
+        type: string
+        required: false
+        default: ''
+      install_source:
+        description: '4 系プラグインのインストール元'
+        type: choice
+        options: [local, package-api]
+        default: local
+      plugin_version:
+        description: 'package-api から入れる 4 系プラグインのバージョン（空なら最新）'
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  eccube-plugin-e2e:
+    name: EC-CUBE 4系 / 2系 プラグイン結合 E2E
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout EcAuth
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # プラグインは docker build のコンテキストとして使う。ref を切り替えると
+      # Dockerfile の FROM ごと変わるため、EC-CUBE 本体のバージョンもこれで決まる。
+      - name: Checkout ec-cube4-ecauth
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: EcAuth/ec-cube4-ecauth
+          ref: ${{ inputs.plugin4_ref }}
+          path: plugins/ec-cube4-ecauth
+          token: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN || github.token }}
+
+      - name: Checkout ec-cube2-ecauth
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: EcAuth/ec-cube2-ecauth
+          ref: ${{ inputs.plugin2_ref }}
+          path: plugins/ec-cube2-ecauth
+          token: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN || github.token }}
+
+      - name: Load base environment variables
+        # compose.yaml が補間する非機密のローカル/ダミー値。playwright.yml の同名 step と
+        # 同じ性格の値で、クレデンシャルは含まない。EC-CUBE 結合 E2E は外部 IdP を使わない
+        # ため FEDERATE_* もダミーで足りる（Seeder が値の存在だけを要求する）。
+        # 注意: heredoc は $GITHUB_ENV に追記されるため KEY=value 行のみ許容。
+        run: |
+          cat <<'EOF' >> $GITHUB_ENV
+          DB_HOST=db
+          DB_NAME=EcAuthDb
+          DB_USER=SA
+          DB_PASSWORD=<YourStrong@Passw0rd>
+          STATE_PASSWORD=<strong_password_string_of_at_least_32_characters>
+          DEFAULT_ORGANIZATION_CODE=example
+          DEFAULT_ORGANIZATION_NAME=example
+          DEFAULT_ORGANIZATION_TENANT_NAME=example
+          DEFAULT_ORGANIZATION_REDIRECT_URI=https://localhost:8081/v1/auth/callback
+          DEFAULT_CLIENT_ID=client_id
+          DEFAULT_CLIENT_SECRET=client_secret
+          DEFAULT_APP_NAME=app_name
+          FEDERATE_OAUTH2_APP_NAME=federate-oauth2
+          FEDERATE_OAUTH2_CLIENT_ID=federateclientid
+          FEDERATE_OAUTH2_CLIENT_SECRET=federate-client-secret
+          FEDERATE_OAUTH2_AUTHORIZATION_ENDPOINT=https://localhost:9091/authorization?org=dev
+          FEDERATE_OAUTH2_TOKEN_ENDPOINT=https://localhost:9091/token?org=dev
+          FEDERATE_OAUTH2_USERINFO_ENDPOINT=https://localhost:9091/userinfo?org=dev
+          DEV_B2B_USER_SUBJECT=3f7c0ab4-b004-4102-b6ed-a730369dd237
+          DEV_B2B_USER_EXTERNAL_ID=test-admin
+          DEV_B2B_REDIRECT_URI=https://localhost:8081/admin/ecauth/callback
+          DEV_B2B_ALLOWED_RP_IDS=localhost
+          ACCOUNTS_CLIENT_ID=ecauth-admin-console
+          ACCOUNTS_CLIENT_PUBLIC=true
+          ACCOUNTS_CLIENT_SECRET=accounts_client_secret
+          ACCOUNTS_ALLOWED_RP_IDS=accounts.ec-auth.io,localhost
+          ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
+          Signup__ConfirmBaseUrl__accounts=https://localhost:8081
+          MagicLink__BaseUrl__accounts=https://localhost:8081
+          E2E_ECCUBE4_PLUGIN_DIR=./plugins/ec-cube4-ecauth
+          E2E_ECCUBE2_PLUGIN_DIR=./plugins/ec-cube2-ecauth
+          E2E_SKIP_OP=1
+          EOF
+
+      # オーナーズストアの検証キー（X-ECCUBE-KEY）。package-api から「申請中のパッケージ」を
+      # 入れる場合だけ必要。既定（local）ではこの step が動かず、プラグインの
+      # docker-entrypoint.sh は /plugin のワーキングツリーから入れる。
+      - name: Load EC-CUBE verification key from 1Password
+        if: ${{ inputs.install_source == 'package-api' }}
+        uses: 1password/load-secrets-action@eb2efd0703da22a93c467f2d1ffbb6826c11e19c # v4.1.1
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_NONPROD }}
+          ECCUBE_AUTHENTICATION_KEY: op://EcAuth/eccube4-ecauth-plugin/eccube_authentication_key
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          package_json_file: E2ETests/package.json
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Install Playwright
+        working-directory: E2ETests
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Start the stack
+        # ECCUBE_AUTHENTICATION_KEY は直前の 1Password step が export-env で job env に載せる
+        # （動かなければ未設定のまま = ローカルソースからのインストール）。
+        #
+        # GITHUB_USERNAME / GITHUB_TOKEN は identityprovider イメージのビルド引数
+        # （GitHub Packages の NuGet 認証）。GITHUB_ 接頭辞は $GITHUB_ENV では扱えないため
+        # step の env で渡す。
+        run: ./E2ETests/scripts/eccube-e2e.sh up
+        env:
+          ECAUTH_PLUGIN_VERSION: ${{ inputs.plugin_version }}
+          GITHUB_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }}
+
+      - name: Run EC-CUBE plugin E2E
+        run: ./E2ETests/scripts/eccube-e2e.sh test tests/specs/eccube_plugin_signup_login.spec.ts --reporter=list
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p e2e-logs
+          for svc in identityprovider caddy ec-cube4 ec-cube2; do
+            ./E2ETests/scripts/eccube-e2e.sh logs --tail 300 "$svc" > "e2e-logs/${svc}.log" 2>&1 || true
+          done
+
+      - name: Upload evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: eccube-plugin-e2e
+          path: |
+            E2ETests/test-results/
+            e2e-logs/
+          retention-days: 7
+
+      - name: Stop the stack
+        if: always()
+        run: ./E2ETests/scripts/eccube-e2e.sh down

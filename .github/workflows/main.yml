@@ -32,3 +32,11 @@ jobs:
     needs: dotnet-tests
     uses: ./.github/workflows/selenium.yml
     secrets: inherit
+  # EC-CUBE 4系 / 2系のプラグインを実際に動かす結合 E2E。
+  # 申込が登録する初期値とプラグインが送る値のズレ（EcAuth#481）は、この経路でしか出ない。
+  # EC-CUBE のイメージビルドと初回インストールで他スイートより時間がかかるが、
+  # 本番に出てから気付く類の不具合なので PR 時に回す。
+  eccube-plugin-e2e:
+    needs: dotnet-tests
+    uses: ./.github/workflows/eccube_plugin_e2e.yml
+    secrets: inherit

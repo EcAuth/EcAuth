@@ -41,6 +41,16 @@ export interface SignupResult {
   messageId: string;
 }
 
+/** 申込で払い出された Client。値はすべて API から取得したもので、テスト側では組み立てない。 */
+export interface SignupClient {
+  id: number;
+  clientId: string;
+  clientSecret: string;
+  organizationCode: string;
+  /** 申込時に登録された redirect_uri。プラグインが送る値と完全一致する必要がある */
+  redirectUris: string[];
+}
+
 /**
  * 申込 → 確認メール → confirm → パスキー登録 → パスキー認証 → トークン交換 を通し、
  * Account のアクセストークンを返す。
@@ -143,6 +153,59 @@ export async function signupAndGetAccountToken(
   } finally {
     await page.close();
   }
+}
+
+/**
+ * マイページと同じ経路（Account トークン → 一覧 → secret の reveal）で、申込が払い出した
+ * Client を取得する。DB を直接読まないのは、顧客が実際に client_id / client_secret を
+ * 手に入れる経路そのものを検証するため。
+ */
+export async function fetchSignupClient(
+  api: APIRequestContext,
+  baseUrl: string,
+  accessToken: string,
+  organizationCode: string
+): Promise<SignupClient> {
+  const headers = { Authorization: `Bearer ${accessToken}` };
+
+  const listResponse = await api.get(`${baseUrl}/v1/account/clients`, { headers });
+  if (listResponse.status() !== 200) {
+    throw new Error(
+      `Client 一覧の取得に失敗しました (${listResponse.status()}): ${await listResponse.text()}`
+    );
+  }
+
+  const clients = (await listResponse.json()).clients as Array<{
+    id: number;
+    client_id: string;
+    organization_code: string;
+    redirect_uris: string[];
+  }>;
+
+  const client = clients.find((c) => c.organization_code === organizationCode);
+  if (!client) {
+    throw new Error(
+      `organization_code=${organizationCode} の Client が見つかりません` +
+        `（取得できたのは ${clients.map((c) => c.organization_code).join(', ') || '(なし)'}）`
+    );
+  }
+
+  const revealResponse = await api.post(`${baseUrl}/v1/account/clients/${client.id}/secret/reveal`, {
+    headers,
+  });
+  if (revealResponse.status() !== 200) {
+    throw new Error(
+      `client_secret の取得に失敗しました (${revealResponse.status()}): ${await revealResponse.text()}`
+    );
+  }
+
+  return {
+    id: client.id,
+    clientId: client.client_id,
+    clientSecret: (await revealResponse.json()).client_secret as string,
+    organizationCode: client.organization_code,
+    redirectUris: client.redirect_uris,
+  };
 }
 
 /**
