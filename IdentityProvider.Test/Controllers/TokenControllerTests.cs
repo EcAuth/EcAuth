@@ -22,7 +22,9 @@ namespace IdentityProvider.Test.Controllers
         private readonly Mock<IB2BUserService> _mockB2BUserService;
         private readonly Mock<IAccountService> _mockAccountService;
         private readonly Mock<ILogger<TokenController>> _mockLogger;
-        private readonly Mock<IConfiguration> _mockConfiguration;
+        // Mock<IConfiguration> は使わない。GetValue<T> は拡張メソッドで GetSection を呼ぶため、
+        // loose Mock だと null が返り NullReferenceException になる（PkcePolicy.IsRequired が該当）。
+        private readonly IConfiguration _configuration;
         private readonly TokenController _controller;
 
         public TokenControllerTests()
@@ -34,7 +36,7 @@ namespace IdentityProvider.Test.Controllers
             _mockB2BUserService = new Mock<IB2BUserService>();
             _mockAccountService = new Mock<IAccountService>();
             _mockLogger = new Mock<ILogger<TokenController>>();
-            _mockConfiguration = new Mock<IConfiguration>();
+            _configuration = new ConfigurationBuilder().Build();
 
             _controller = new TokenController(
                 _context,
@@ -44,7 +46,7 @@ namespace IdentityProvider.Test.Controllers
                 _mockB2BUserService.Object,
                 _mockAccountService.Object,
                 _mockLogger.Object,
-                _mockConfiguration.Object,
+                _configuration,
                 new PlaintextSecretProtector());
         }
 
@@ -88,6 +90,9 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 Scope = "openid profile",
+                // PKCE 必須化（PkcePolicy）により confidential client でも束縛が必要
+                CodeChallenge = PkceChallenge,
+                CodeChallengeMethod = "S256",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
                 IsUsed = false
             };
@@ -115,7 +120,8 @@ namespace IdentityProvider.Test.Controllers
                 "test-code",
                 "https://example.com/callback",
                 "1",
-                "test-secret");
+                "test-secret",
+                code_verifier: PkceVerifier);
 
             // Assert
             var okResult = Assert.IsType<OkObjectResult>(result);
@@ -163,6 +169,9 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = 1,
                 RedirectUri = "https://accounts.ec-auth.io/callback",
                 Scope = "openid b2b",
+                // PKCE 必須化（PkcePolicy）により束縛が必要
+                CodeChallenge = PkceChallenge,
+                CodeChallengeMethod = "S256",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
                 IsUsed = false
             };
@@ -203,7 +212,8 @@ namespace IdentityProvider.Test.Controllers
                 "account-code",
                 "https://accounts.ec-auth.io/callback",
                 "ecauth-admin-console",
-                "account-secret");
+                "account-secret",
+                code_verifier: PkceVerifier);
 
             // Assert
             Assert.IsType<OkObjectResult>(result);
@@ -251,6 +261,10 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = 1,
                 RedirectUri = "https://accounts.ec-auth.io/callback",
                 Scope = "openid b2b",
+                // PKCE を束縛しておく。省くと PKCE 必須化の分岐で BadRequest になり、
+                // 本来検証したい「アカウント不在」に到達しないまま緑になってしまう。
+                CodeChallenge = PkceChallenge,
+                CodeChallengeMethod = "S256",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
                 IsUsed = false
             };
@@ -266,7 +280,8 @@ namespace IdentityProvider.Test.Controllers
                 "account-code",
                 "https://accounts.ec-auth.io/callback",
                 "ecauth-admin-console",
-                "account-secret");
+                "account-secret",
+                code_verifier: PkceVerifier);
 
             // Assert
             Assert.IsType<BadRequestObjectResult>(result);
@@ -669,6 +684,10 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = 1,
                 RedirectUri = "https://example.com/callback",
                 Scope = "openid profile",
+                // PKCE を束縛しておく。省くと PKCE 必須化の分岐で BadRequest になり、
+                // 本来検証したい「ユーザー不在」に到達しないまま緑になってしまう。
+                CodeChallenge = PkceChallenge,
+                CodeChallengeMethod = "S256",
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
                 IsUsed = false
             };
@@ -684,12 +703,158 @@ namespace IdentityProvider.Test.Controllers
                 "test-code",
                 "https://example.com/callback",
                 "1",
-                "test-secret");
+                "test-secret",
+                code_verifier: PkceVerifier);
 
             // Assert
             var badRequestResult = Assert.IsType<BadRequestObjectResult>(result);
             var response = badRequestResult.Value;
             Assert.NotNull(response);
+        }
+
+        // PKCE (RFC 7636) Appendix B の公式テストベクタ
+        private const string PkceVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        private const string PkceChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+
+        private async Task SeedPublicClientWithAuthCode(string? codeChallenge)
+        {
+            _context.Organizations.Add(new Organization
+            {
+                Id = 1,
+                Code = "accounts",
+                Name = "EcAuth Accounts",
+                // テスト harness の ambient テナント（MockTenantService.TenantName）に一致させる。
+                // 一致しないとクエリフィルタで除外され client/認可コードが見つからない。
+                TenantName = "test-tenant",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            });
+            // public client: client_secret は空
+            _context.Clients.Add(new Client
+            {
+                Id = 1,
+                ClientId = "ecauth-admin-console",
+                ClientSecret = string.Empty,
+                AppName = "EcAuth Admin Console",
+                OrganizationId = 1
+            });
+            _context.EcAuthUsers.Add(new EcAuthUser
+            {
+                Subject = "test-subject",
+                EmailHash = "test-email-hash",
+                OrganizationId = 1
+            });
+            _context.AuthorizationCodes.Add(new AuthorizationCode
+            {
+                Code = "test-code",
+                Subject = "test-subject",
+                ClientId = 1,
+                RedirectUri = "https://ec-auth.io/auth/callback",
+                Scope = "openid profile",
+                CodeChallenge = codeChallenge,
+                CodeChallengeMethod = codeChallenge == null ? null : "S256",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+                IsUsed = false
+            });
+            await _context.SaveChangesAsync();
+        }
+
+        [Fact]
+        public async Task Token_PublicClientWithValidPkce_ReturnsTokens()
+        {
+            // Arrange: public client ＋ code_challenge を束縛した認可コード
+            await SeedPublicClientWithAuthCode(PkceChallenge);
+
+            _mockUserService.Setup(x => x.GetUserBySubjectAsync("test-subject"))
+                .ReturnsAsync(new EcAuthUser { Subject = "test-subject", EmailHash = "h", OrganizationId = 1 });
+            _mockTokenService.Setup(x => x.GenerateTokensAsync(It.IsAny<ITokenService.TokenRequest>()))
+                .ReturnsAsync(new ITokenService.TokenResponse
+                {
+                    AccessToken = "access-token",
+                    IdToken = "id-token",
+                    ExpiresIn = 3600,
+                    TokenType = "Bearer",
+                    RefreshToken = "refresh-token"
+                });
+
+            // Act: 正しい code_verifier を提示
+            var result = await _controller.Token(
+                "authorization_code",
+                "test-code",
+                "https://ec-auth.io/auth/callback",
+                "ecauth-admin-console",
+                null,
+                PkceVerifier);
+
+            // Assert
+            Assert.IsType<OkObjectResult>(result);
+            var updated = await _context.AuthorizationCodes.FirstAsync(ac => ac.Code == "test-code");
+            Assert.True(updated.IsUsed);
+        }
+
+        [Fact]
+        public async Task Token_PublicClientWithoutPkce_ReturnsInvalidGrant()
+        {
+            // Arrange: public client だが認可コードに code_challenge が無い（PKCE 未使用）
+            await SeedPublicClientWithAuthCode(null);
+
+            // Act: public client は PKCE 必須のため拒否されるべき
+            var result = await _controller.Token(
+                "authorization_code",
+                "test-code",
+                "https://ec-auth.io/auth/callback",
+                "ecauth-admin-console",
+                null,
+                null);
+
+            // Assert
+            var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+            Assert.NotNull(badRequest.Value);
+            // 認可コードは消費されない（マーク前に拒否）
+            var authCode = await _context.AuthorizationCodes.FirstAsync(ac => ac.Code == "test-code");
+            Assert.False(authCode.IsUsed);
+        }
+
+        [Fact]
+        public async Task Token_PkceCodeVerifierMismatch_ReturnsInvalidGrant()
+        {
+            // Arrange
+            await SeedPublicClientWithAuthCode(PkceChallenge);
+
+            // Act: 誤った code_verifier
+            var result = await _controller.Token(
+                "authorization_code",
+                "test-code",
+                "https://ec-auth.io/auth/callback",
+                "ecauth-admin-console",
+                null,
+                "wrong-verifier-value-0000000000000000000000");
+
+            // Assert
+            Assert.IsType<BadRequestObjectResult>(result);
+            var authCode = await _context.AuthorizationCodes.FirstAsync(ac => ac.Code == "test-code");
+            Assert.False(authCode.IsUsed);
+        }
+
+        [Fact]
+        public async Task Token_PkceMissingCodeVerifier_ReturnsInvalidGrant()
+        {
+            // Arrange: 認可コードに code_challenge があるのに code_verifier 未提示
+            await SeedPublicClientWithAuthCode(PkceChallenge);
+
+            // Act
+            var result = await _controller.Token(
+                "authorization_code",
+                "test-code",
+                "https://ec-auth.io/auth/callback",
+                "ecauth-admin-console",
+                null,
+                null);
+
+            // Assert
+            Assert.IsType<BadRequestObjectResult>(result);
+            var authCode = await _context.AuthorizationCodes.FirstAsync(ac => ac.Code == "test-code");
+            Assert.False(authCode.IsUsed);
         }
 
         public void Dispose()

@@ -84,7 +84,9 @@ namespace IdentityProvider.Test.Controllers
         {
             _mockSignupService
                 .Setup(x => x.ConfirmAsync("valid-token", It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new SignupRequest { ConfirmTokenHash = "hash", Email = "owner@example.com" });
+                .ReturnsAsync(new ISignupService.ConfirmResult(
+                    new SignupRequest { ConfirmTokenHash = "hash", Email = "owner@example.com" },
+                    "reg-token-abc"));
 
             var body = new SignupController.SignupConfirmDto { Token = "valid-token" };
 

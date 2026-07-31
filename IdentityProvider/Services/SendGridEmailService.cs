@@ -42,10 +42,10 @@ namespace IdentityProvider.Services
             // 送信元アドレス・表示名も同様に IConfiguration → 環境変数の順で解決する。
             var fromEmail = _configuration["SendGrid:FromEmail"]
                 ?? _configuration["SENDGRID_FROM_EMAIL"]
-                ?? "noreply@ecauth.jp";
+                ?? EmailTemplates.DefaultFromEmail;
             var fromName = _configuration["SendGrid:FromName"]
                 ?? _configuration["SENDGRID_FROM_NAME"]
-                ?? "EcAuth";
+                ?? EmailTemplates.DefaultFromName;
 
             var content = EmailTemplates.BuildSignupConfirmation(organizationName, confirmUrl);
             var displayOrganization = string.IsNullOrWhiteSpace(organizationName)
@@ -100,10 +100,10 @@ namespace IdentityProvider.Services
 
             var fromEmail = _configuration["SendGrid:FromEmail"]
                 ?? _configuration["SENDGRID_FROM_EMAIL"]
-                ?? "noreply@ecauth.jp";
+                ?? EmailTemplates.DefaultFromEmail;
             var fromName = _configuration["SendGrid:FromName"]
                 ?? _configuration["SENDGRID_FROM_NAME"]
-                ?? "EcAuth";
+                ?? EmailTemplates.DefaultFromName;
 
             var content = EmailTemplates.BuildMagicLoginLink(magicLinkUrl);
 

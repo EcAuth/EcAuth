@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using IdentityProvider.Exceptions;
+using IdentityProvider.Filters;
 using IdentityProvider.Services;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
@@ -13,6 +14,8 @@ namespace IdentityProvider.Controllers
     [Route("api/signup")]
     [ApiController]
     [EnableCors(SignupController.CorsPolicy)]
+    // confirm は登録トークンを返すため、レスポンスをキャッシュさせない。
+    [NoStore]
     public class SignupController : ControllerBase
     {
         /// <summary>申込 API（accounts サイト）向けの CORS ポリシー名。</summary>
@@ -89,12 +92,14 @@ namespace IdentityProvider.Controllers
         {
             try
             {
-                var signupRequest = await _signupService.ConfirmAsync(body?.Token ?? string.Empty, ct);
+                var result = await _signupService.ConfirmAsync(body?.Token ?? string.Empty, ct);
 
                 return Ok(new
                 {
                     message = "申込が完了しました。",
-                    email = signupRequest.Email
+                    email = result.Request.Email,
+                    // 初回パスキー登録ページ（accounts）へ引き渡す一回限りトークン。
+                    registration_token = result.RegistrationToken
                 });
             }
             catch (SignupValidationException ex)

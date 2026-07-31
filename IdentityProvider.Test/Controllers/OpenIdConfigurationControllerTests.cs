@@ -103,14 +103,16 @@ namespace IdentityProvider.Test.Controllers
         }
 
         [Fact]
-        public void Get_DoesNotExposeCodeChallengeMethodsSupported()
+        public void Get_ExposesCodeChallengeMethodsSupported_S256Only()
         {
             // Act
             var metadata = GetMetadata(_controller.Get());
 
-            // Assert - PKCE 未実装のため code_challenge_methods_supported も省略される。
-            Assert.False(metadata.ContainsKey("code_challenge_methods_supported"),
-                "code_challenge_methods_supported は意図的に省略されるべき（PKCE 未実装のため）");
+            // Assert - PKCE (RFC 7636) 実装済み。S256 のみサポートする。
+            Assert.True(metadata.ContainsKey("code_challenge_methods_supported"),
+                "code_challenge_methods_supported を公開する（PKCE 実装済み）");
+            var methods = Assert.IsAssignableFrom<IEnumerable<string>>(metadata["code_challenge_methods_supported"]);
+            Assert.Equal(new[] { "S256" }, methods.ToArray());
         }
     }
 }

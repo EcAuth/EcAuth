@@ -14,6 +14,18 @@ namespace IdentityProvider.Services
         public readonly record struct EmailContent(string Subject, string PlainText, string Html);
 
         /// <summary>
+        /// 送信元アドレスの既定値。SendGrid 側の送信ドメイン認証（SPF / DKIM）は
+        /// <c>ec-auth.io</c> で設定されているため、認証済みドメインと一致させる。
+        /// 全環境で同一の非秘密の定数なので、Terraform / CI / .env には配線しない
+        /// （設定で上書きしたい場合のみ <c>SendGrid:FromEmail</c> / <c>SENDGRID_FROM_EMAIL</c> を使う）。
+        /// 本文と同様、プロバイダ間のドリフトを防ぐためここに集約する。
+        /// </summary>
+        public const string DefaultFromEmail = "noreply@ec-auth.io";
+
+        /// <summary>送信元表示名の既定値。<see cref="DefaultFromEmail"/> と同じ理由でここに集約する。</summary>
+        public const string DefaultFromName = "EcAuth";
+
+        /// <summary>
         /// Account 申込確認メールの本文を生成する。
         /// </summary>
         /// <param name="organizationName">申込対象の Organization 名（空の場合は既定表記に置換）</param>

@@ -1,0 +1,189 @@
+# EC-CUBE 4 系 / 2 系のプラグインを実際に動かす結合 E2E 用のオーバーレイ。
+#
+#   ./E2ETests/scripts/eccube-e2e.sh up      # ホスト名を採番して compose を起動
+#   ./E2ETests/scripts/eccube-e2e.sh test    # Playwright を実行
+#   ./E2ETests/scripts/eccube-e2e.sh down
+#
+# compose.yaml（identityprovider / db / mailpit）に重ねて使う。
+#
+# ■ なぜ Caddy を挟むのか
+#   プラグインの実運用では 1 フローに 2 種類のホストが登場し、どちらも 443 の
+#   HTTPS でなければ成立しない（WebAuthn は secure context 必須、プラグインの
+#   サーバー間通信は証明書検証あり）。それぞれ別ポートで公開すると rp_id や
+#   redirect_uri にポートが混ざり、本番と違う経路を検証することになる。
+#   Caddy 1 台で 443 に集約し、ローカル CA で発行した証明書を EC-CUBE の信頼
+#   ストアへ入れることで、本番と同じ「ポート無しの https ホスト」を再現する。
+#
+# ■ ホスト名を compose 起動時に確定させる理由
+#   Caddy のサイトアドレスと docker network alias の両方に同じ名前を配る必要が
+#   あるため。テスト実行時に採番すると alias を後から足せない。
+#   E2E_RUN_ID は eccube-e2e.sh が採番し、.e2e-eccube.env に書き出す。
+#
+# ■ EC-CUBE 本体のバージョン
+#   プラグインリポジトリの Dockerfile の FROM が決める（4 系 ec-cube-php:*-apache-4.3、
+#   2 系 ec-cube2-php:*-apache-eccube-2.25.0）。したがって本体版を指定したい場合は
+#   プラグインの ref（E2E_ECCUBE4_PLUGIN_DIR が指すワーキングツリーの checkout）を
+#   切り替える。compose 側には本体版のノブを置かない。
+
+volumes:
+  caddy-data:
+    driver: local
+  eccube4-pg:
+    driver: local
+  eccube2-pg:
+    driver: local
+  eccube2-vendor:
+    driver: local
+
+services:
+  # compose.yaml の identityprovider への上書き。
+  #
+  # client-resolve が返す base_url は {tenant_name}.{PlatformApi:BaseDomain} で組み立てられる。
+  # appsettings.Development.json の既定は localhost:8081 だが、それだと
+  # {tenant}.localhost という 2 セグメントのホストになり、TenantMiddleware が
+  # サブドメインからテナントを取り出せない（3 セグメント以上が条件）。
+  # この E2E は本番と同じ形（{tenant}.ec-auth.io）で検証したいので明示的に上書きする。
+  identityprovider:
+    environment:
+      PlatformApi__BaseDomain: ec-auth.io
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - identityprovider
+    environment:
+      E2E_ECCUBE4_SHOP_HOST: ${E2E_ECCUBE4_SHOP_HOST:?E2E_ECCUBE4_SHOP_HOST が未設定です（eccube-e2e.sh up 経由で起動してください）}
+      E2E_ECCUBE2_SHOP_HOST: ${E2E_ECCUBE2_SHOP_HOST:?E2E_ECCUBE2_SHOP_HOST が未設定です}
+      E2E_ECCUBE4_TENANT_HOST: ${E2E_ECCUBE4_TENANT_HOST:?E2E_ECCUBE4_TENANT_HOST が未設定です}
+      E2E_ECCUBE2_TENANT_HOST: ${E2E_ECCUBE2_TENANT_HOST:?E2E_ECCUBE2_TENANT_HOST が未設定です}
+    ports:
+      - "443:443"
+    volumes:
+      - ./docker/e2e/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    networks:
+      backend:
+        # EC-CUBE コンテナからの名前解決を Caddy に向ける。docker の埋め込み DNS が
+        # alias を引くので、コンテナ内では公開 DNS より先にここへ解決される。
+        #
+        # api.ec-auth.io は両プラグインが持つ discovery の既定値（4 系 services.yaml の
+        # ecauth_default_discovery_url、2 系 DEFAULT_DISCOVERY_URL）。ECAUTH_CLIENT_RESOLVE_URL
+        # で上書きするのではなく alias で引き込むことで、顧客が通るのと同じ「既定のまま」の
+        # 経路を検証する。プラグイン側で既定値を変えたらここも合わせる必要がある。
+        aliases:
+          - api.ec-auth.io
+          - ${E2E_ECCUBE4_TENANT_HOST}
+          - ${E2E_ECCUBE2_TENANT_HOST}
+    healthcheck:
+      # 自分自身のローカル CA を信頼していないので -k で足りる。
+      # ここでは「443 で TLS 終端して応答できる」ことだけ確認する。
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "-", "https://${E2E_ECCUBE4_TENANT_HOST}/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  # --- EC-CUBE 4 系 ----------------------------------------------------------
+  ec-cube4:
+    build:
+      context: ${E2E_ECCUBE4_PLUGIN_DIR:-../ec-cube4-ecauth}
+    entrypoint: ["/bin/bash", "/e2e/eccube-entrypoint.sh", "/docker-entrypoint-plugin.sh"]
+    command: ["apache2-foreground"]
+    depends_on:
+      caddy:
+        condition: service_started
+      eccube4-db:
+        condition: service_healthy
+    environment:
+      APP_ENV: dev
+      DATABASE_URL: "postgresql://eccube:password@eccube4-db:5432/eccube_db"
+      DATABASE_SERVER_VERSION: 15
+      # オーナーズストアのリリース申請で発行される検証キー（X-ECCUBE-KEY）。
+      # 設定するとプラグインの entrypoint が package-api から申請中のパッケージを
+      # 入れる。未設定なら /plugin のワーキングツリーから入れる。
+      ECCUBE_AUTHENTICATION_KEY: ${ECCUBE_AUTHENTICATION_KEY:-}
+      ECAUTH_PLUGIN_VERSION: ${ECAUTH_PLUGIN_VERSION:-}
+    volumes:
+      - ${E2E_ECCUBE4_PLUGIN_DIR:-../ec-cube4-ecauth}:/plugin:cached
+      - ./docker/e2e:/e2e:ro
+      - caddy-data:/caddy-data:ro
+    networks:
+      - backend
+
+  eccube4-db:
+    image: postgres:15-alpine
+    environment:
+      TZ: Asia/Tokyo
+      POSTGRES_DB: eccube_db
+      POSTGRES_USER: eccube
+      POSTGRES_PASSWORD: password
+    volumes:
+      - eccube4-pg:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: pg_isready -U eccube -d eccube_db
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # --- EC-CUBE 2 系 ----------------------------------------------------------
+  ec-cube2:
+    build:
+      context: ${E2E_ECCUBE2_PLUGIN_DIR:-../ec-cube2-ecauth}
+    entrypoint: ["/bin/bash", "/e2e/eccube-entrypoint.sh", "/usr/local/bin/ecauth-docker-entrypoint.sh"]
+    command: ["apache2-foreground"]
+    depends_on:
+      caddy:
+        condition: service_started
+      eccube2-db:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Tokyo
+      PHP_LOG_ERRORS: "On"
+      PHP_ERROR_REPORTING: "E_ALL"
+      PHP_ERROR_LOG: "/proc/self/fd/2"
+      # 2 系は URL を定数で持つ。ポートを含めないことで rp_id / redirect_uri が
+      # 本番と同じ形（https://{host}/ecauth/callback.php）になる。
+      HTTP_URL: https://${E2E_ECCUBE2_SHOP_HOST}/
+      HTTPS_URL: https://${E2E_ECCUBE2_SHOP_HOST}/
+      ROOT_URLPATH: /
+      DOMAIN_NAME: ~
+      DB_TYPE: pgsql
+      DB_USER: eccube_db_user
+      DB_PASSWORD: password
+      DB_SERVER: eccube2-db
+      DB_NAME: eccube_db
+      DB_PORT: 5432
+      ADMIN_DIR: ${E2E_ECCUBE2_ADMIN_DIR:-admin/}
+      ADMIN_FORCE_SSL: 'false'
+      ADMIN_ALLOW_HOSTS: 'a:0:{}'
+      AUTH_MAGIC: ~
+      PASSWORD_HASH_ALGOS: sha256
+      # 接続情報は E2E の中で管理画面から設定する（申込で払い出された値を使う）。
+      # install-plugin.php が ECAUTH_BASE_URL を見て初期値を書き込むため、
+      # 空のままにして「無設定から始まる」状態を再現する。
+      ECAUTH_BASE_URL: ""
+    volumes:
+      - eccube2-vendor:/var/www/app/data/vendor
+      - ./docker/e2e:/e2e:ro
+      - caddy-data:/caddy-data:ro
+    networks:
+      - backend
+
+  eccube2-db:
+    image: postgres:15-alpine
+    environment:
+      TZ: Asia/Tokyo
+      POSTGRES_DB: eccube_db
+      POSTGRES_USER: eccube_db_user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - eccube2-pg:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: pg_isready -U eccube_db_user -d eccube_db
+      interval: 3s
+      timeout: 3s
+      retries: 20

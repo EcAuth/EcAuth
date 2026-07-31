@@ -120,6 +120,14 @@ namespace IdentityProvider.Services
             /// デバイス名（"MacBook Pro", "iPhone" 等）
             /// </summary>
             public string? DeviceName { get; set; }
+
+            /// <summary>
+            /// 登録が許可されている Subject（登録トークン経路でのみ指定）。
+            /// 指定された場合、チャレンジセッションの Subject と一致しなければ検証を失敗させる。
+            /// session_id は推測困難だが、認可の根拠（トークン）と実際に登録先となる
+            /// Subject（セッション）が別々に解決されるため、両者の一致を明示的に確認する。
+            /// </summary>
+            public string? ExpectedSubject { get; set; }
         }
 
         /// <summary>

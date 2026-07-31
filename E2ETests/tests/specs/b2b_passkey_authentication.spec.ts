@@ -24,6 +24,8 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
   // テスト間で共有するデータ
   let authorizationCode: string;
   let accessToken: string;
+  // PKCE (RFC 7636) の code_verifier。テストページが認証時に生成したものを読み取る。
+  let codeVerifier: string;
   let credentialId: string;
 
   let apiContext: APIRequestContext;
@@ -137,6 +139,11 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
     const responseData = JSON.parse(preContent!);
     expect(responseData.redirect_url).toBeTruthy();
 
+    // PKCE 必須化（PkcePolicy）: テストページが生成した code_verifier を
+    // トークン交換で使う。challenge は authenticate/verify 時に束縛済み。
+    codeVerifier = await page.inputValue('#codeVerifier');
+    expect(codeVerifier).toBeTruthy();
+
     const redirectUrl = new URL(responseData.redirect_url);
     authorizationCode = redirectUrl.searchParams.get('code')!;
     expect(authorizationCode).toBeTruthy();
@@ -154,6 +161,7 @@ test.describe.serial('B2Bパスキー認証フローのE2Eテスト', () => {
         redirect_uri: redirectUri,
         grant_type: 'authorization_code',
         scope: 'openid b2b',
+        code_verifier: codeVerifier,
       },
     });
 

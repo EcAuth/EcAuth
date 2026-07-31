@@ -1,0 +1,55 @@
+# EC-CUBE プラグイン結合 E2E 用のリバースプロキシ。
+#
+# 目的は「本番と同じホスト名構成を 1 台の 443 に収める」こと。プラグインの実運用では
+# 1 つのフローに 2 種類のホストが登場する（EcAuth CLAUDE.md「E2E テストの実装上の要点」）。
+#
+#   ブラウザ  → https://{店舗ホスト}          … WebAuthn の rp_id と一致させる必要がある
+#   EC-CUBE   → https://{tenant}.ec-auth.io  … /platform/v1/client-resolve が返す base_url
+#
+# 後者は EC-CUBE コンテナからの **サーバー間** 通信で、2 系は CURLOPT_SSL_VERIFYPEER => true、
+# 4 系は Symfony HttpClient（既定で検証あり）のため、証明書が信頼できないと即座に落ちる。
+# そこで Caddy のローカル CA（local_certs）で発行し、そのルート証明書を EC-CUBE コンテナの
+# 信頼ストアへ流し込む（docker/e2e/eccube-entrypoint.sh）。
+#
+# ホスト名は compose 起動時に E2E_RUN_ID から確定させる。Caddy のサイトアドレスと
+# docker network alias の両方へ同じ名前を配る必要があり、テスト実行時には決められないため。
+
+{
+	# ローカル CA で発行する。*.test / *.ec-auth.io はここでは公開解決できないので
+	# 公開 ACME（Let's Encrypt / ZeroSSL）に出しても必ず失敗する。
+	local_certs
+	# 443 しか publish しないため、80 番での HTTPS リダイレクトは不要。
+	auto_https disable_redirects
+	admin off
+}
+
+# --- EcAuth（IdP）------------------------------------------------------------
+# api.ec-auth.io は「まだ base_url を知らない段階」でプラグインが叩く discovery の宛先。
+# 両プラグインがこのホストを既定値として持つ（4 系 services.yaml の
+# ecauth_default_discovery_url、2 系 SC_Helper_EcAuthLogin2::DEFAULT_DISCOVERY_URL）。
+# 環境変数 ECAUTH_CLIENT_RESOLVE_URL で上書きせず、docker network alias でここに
+# 引き込むことで、顧客が実際に通る **既定のまま** の経路を検証する。
+# /platform/ 配下は TenantMiddleware がテナント解決をスキップするため、
+# api という実在しないテナント名でも client-resolve は正しく動く。
+#
+# 残り 2 つは EC-CUBE が ecauth_base_url として叩くテナントのホスト。
+# client-resolve が返す https://{tenant_name}.ec-auth.io と完全に一致させること。
+#
+# identityprovider は HTTP:8080 で待ち受け、Program.cs が KnownProxies を空にして
+# 全フォワーダを信頼する設定なので、X-Forwarded-Proto はそのまま効く。
+https://api.ec-auth.io, https://{$E2E_ECCUBE4_TENANT_HOST}, https://{$E2E_ECCUBE2_TENANT_HOST} {
+	reverse_proxy identityprovider:8080
+}
+
+# --- EC-CUBE 4 系の店舗 ------------------------------------------------------
+# ブラウザはこのホストで開く。プラグインは rp_id 未設定時に Request::getHost() を
+# 使う（PasskeyAuthService::getRpId）ため、このホスト名がそのまま rp_id になる。
+https://{$E2E_ECCUBE4_SHOP_HOST} {
+	reverse_proxy ec-cube4:80
+}
+
+# --- EC-CUBE 2 系の店舗 ------------------------------------------------------
+# 2 系は HTTP_HOST からポートを除いたものを rp_id にする（SC_Helper_EcAuthLogin2::getRpId）。
+https://{$E2E_ECCUBE2_SHOP_HOST} {
+	reverse_proxy ec-cube2:80
+}

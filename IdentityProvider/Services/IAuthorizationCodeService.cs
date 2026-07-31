@@ -21,6 +21,18 @@ namespace IdentityProvider.Services
             /// 指定しない場合は B2C（外部 IdP フェデレーション）として扱う。
             /// </summary>
             public SubjectType SubjectType { get; set; } = SubjectType.B2C;
+
+            /// <summary>
+            /// PKCE (RFC 7636) の code_challenge（オプション）。public client の
+            /// 認可リクエストで指定される。null の場合は PKCE なし。
+            /// </summary>
+            public string? CodeChallenge { get; set; }
+
+            /// <summary>
+            /// PKCE の code_challenge_method（"S256" のみサポート）。
+            /// CodeChallenge を指定する場合は必須。
+            /// </summary>
+            public string? CodeChallengeMethod { get; set; }
         }
 
         /// <summary>

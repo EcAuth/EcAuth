@@ -65,13 +65,26 @@ services:
       # AccountsOrganizationSeeder が accounts / stg-accounts Org と管理コンソール Client を
       # 投入するために ACCOUNTS_* / STG_ACCOUNTS_* を container に渡す。
       ACCOUNTS_CLIENT_ID: ${ACCOUNTS_CLIENT_ID}
+      # public client（PKCE）フラグ。マイページは ec-auth.io から PKCE でトークン交換するため
+      # true。Seeder が client_secret 無しの client を投入し、/v1/token が PKCE を必須にする。
+      ACCOUNTS_CLIENT_PUBLIC: ${ACCOUNTS_CLIENT_PUBLIC}
       ACCOUNTS_CLIENT_SECRET: ${ACCOUNTS_CLIENT_SECRET}
       ACCOUNTS_ALLOWED_RP_IDS: ${ACCOUNTS_ALLOWED_RP_IDS}
       ACCOUNTS_REDIRECT_URI: ${ACCOUNTS_REDIRECT_URI}
       STG_ACCOUNTS_CLIENT_ID: ${STG_ACCOUNTS_CLIENT_ID}
+      STG_ACCOUNTS_CLIENT_PUBLIC: ${STG_ACCOUNTS_CLIENT_PUBLIC}
       STG_ACCOUNTS_CLIENT_SECRET: ${STG_ACCOUNTS_CLIENT_SECRET}
       STG_ACCOUNTS_ALLOWED_RP_IDS: ${STG_ACCOUNTS_ALLOWED_RP_IDS}
       STG_ACCOUNTS_REDIRECT_URI: ${STG_ACCOUNTS_REDIRECT_URI}
+      # フロント（ecauth-website / ec-auth.io）の配信元。PasskeyPageController が
+      # パスキー登録・認証後のマイページ遷移先に使う。既定は本番 URL。
+      # website 結合 E2E ではフロントの実配信元（例 https://ec-auth.io:1313）に差し替える。
+      Frontend__BaseUrl: ${Frontend__BaseUrl:-https://ec-auth.io}
+      # 申込 / マジックリンク / Account / token API の CORS 許可オリジン。
+      # WithOrigins は scheme+host+port の完全一致で比較するため、ポート付きでフロントを
+      # 配信する結合 E2E ではそのポートまで含めて指定する必要がある（未設定なら
+      # Program.cs のフォールバック https://ec-auth.io / https://www.ec-auth.io が使われる）。
+      Signup__AllowedOrigins__0: ${Signup__AllowedOrigins__0:-}
       # 確認 URL / マジックリンク URL の基底（テナント別・リクエスト処理時に必須参照）。
       Signup__ConfirmBaseUrl__accounts: ${Signup__ConfirmBaseUrl__accounts:-https://localhost:8081}
       Signup__ConfirmBaseUrl__stg_accounts: ${Signup__ConfirmBaseUrl__stg_accounts:-https://localhost:8081}

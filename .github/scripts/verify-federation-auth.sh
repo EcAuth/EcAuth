@@ -128,9 +128,16 @@ main() {
   log_info "JWKS OK ($JWKS_KEY_COUNT key(s))"
   write_summary "| JWKS | ✅ |"
 
+  # PKCE (S256) パラメータ生成
+  # PkcePolicy（コード既定 true）により全 client で code_challenge が必須のため、
+  # 認可リクエストに code_challenge を、トークン交換に code_verifier を付与する。
+  # 生成方式は E2ETests の federate spec（generatePkcePair）と同じ base64url(no-pad)。
+  CODE_VERIFIER=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+  CODE_CHALLENGE=$(printf '%s' "$CODE_VERIFIER" | openssl dgst -sha256 -binary | openssl base64 | tr '+/' '-_' | tr -d '=')
+
   # Step 1: EcAuth 認可エンドポイント
   log_step "Step 1: EcAuth 認可エンドポイント"
-  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/v1/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fv1%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=${MOCK_IDP_PROVIDER_NAME}&state=test123" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/v1/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fv1%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=${MOCK_IDP_PROVIDER_NAME}&state=test123&code_challenge=${CODE_CHALLENGE}&code_challenge_method=S256" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
 
   if [ -z "$MOCKIDP_URL" ]; then
     log_error "Failed to get MockIdP redirect URL"
@@ -197,7 +204,8 @@ main() {
     -d "code=${ECAUTH_CODE}" \
     -d "redirect_uri=https://localhost:8081/v1/auth/callback" \
     -d "client_id=${CLIENT_ID}" \
-    -d "client_secret=${CLIENT_SECRET}")
+    -d "client_secret=${CLIENT_SECRET}" \
+    -d "code_verifier=${CODE_VERIFIER}")
 
   ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
   TOKEN_TYPE=$(echo "$TOKEN_RESPONSE" | jq -r '.token_type')

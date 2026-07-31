@@ -1,9 +1,11 @@
+using IdentityProvider.Filters;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using IdentityProvider.Telemetry;
 using IdpUtilities;
 using IdpUtilities.Security;
 using Asp.Versioning;
+using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
@@ -11,9 +13,14 @@ using System.ComponentModel.DataAnnotations;
 
 namespace IdentityProvider.Controllers
 {
+    // マイページ（ec-auth.io）が public client（PKCE）としてトークン交換するため、
+    // 申込 API と同じ SignupApiCors（ec-auth.io / www）を許可する。
     [Route("v{version:apiVersion}/token")]
     [ApiController]
     [ApiVersion("1.0")]
+    [EnableCors(SignupController.CorsPolicy)]
+    // RFC 6749 §5.1: token endpoint のレスポンスはキャッシュさせない。
+    [NoStore]
     public class TokenController : ControllerBase
     {
         private readonly EcAuthDbContext _context;
@@ -60,7 +67,8 @@ namespace IdentityProvider.Controllers
         [Route("exchange")]
         public async Task<IActionResult> Exchange([FromForm] string code, [FromForm] string state, [FromForm] string scope)
         {
-            var password = Environment.GetEnvironmentVariable("STATE_PASSWORD");
+            // seal 側（AuthorizationController）と解決経路を揃える。
+            var password = _configuration["STATE_PASSWORD"];
             var options = new Iron.Options();
             var State = await Iron.Unseal<State>(state, password, options);
             var IdentityProviderId = State.OpenIdProviderId;
@@ -114,7 +122,8 @@ namespace IdentityProvider.Controllers
             [FromForm, Required] string code,
             [FromForm, Required] string redirect_uri,
             [FromForm, Required] string client_id,
-            [FromForm] string? client_secret)
+            [FromForm] string? client_secret,
+            [FromForm] string? code_verifier = null)
         {
             try
             {
@@ -232,6 +241,50 @@ namespace IdentityProvider.Controllers
                     {
                         error = "invalid_grant",
                         error_description = "client_idが一致しません。"
+                    });
+                }
+
+                // 9.5. PKCE (RFC 7636) 検証
+                // 認可コードに code_challenge が束縛されている場合は code_verifier 必須。
+                // PkcePolicy 有効時は全 client、無効時でも public client（client_secret 未設定）は、
+                // code_challenge を持たない認可コードでのトークン交換を拒否する
+                // （認可コード横取り攻撃対策 / OAuth 2.1 準拠）。
+                var isPublicClient = string.IsNullOrEmpty(client.ClientSecret);
+                var pkceRequired = Security.PkcePolicy.IsRequired(_configuration);
+                if (!string.IsNullOrEmpty(authorizationCode.CodeChallenge))
+                {
+                    if (string.IsNullOrEmpty(code_verifier))
+                    {
+                        _logger.LogWarning("PKCE code_verifier missing for client: {ClientId}", client_id);
+                        return BadRequest(new
+                        {
+                            error = "invalid_grant",
+                            error_description = "code_verifier が必要です。"
+                        });
+                    }
+
+                    if (!Security.PkceValidator.Verify(code_verifier, authorizationCode.CodeChallenge, authorizationCode.CodeChallengeMethod))
+                    {
+                        _logger.LogWarning("PKCE verification failed for client: {ClientId}", client_id);
+                        return BadRequest(new
+                        {
+                            error = "invalid_grant",
+                            error_description = "code_verifier が一致しません。"
+                        });
+                    }
+                }
+                else if (pkceRequired || isPublicClient)
+                {
+                    // 発行段階でも弾いているため通常は到達しない。到達するのは必須化デプロイの
+                    // 直前に発行された認可コード（有効期限 10 分）が交換された場合で、
+                    // ユーザーの再ログインで解消する。
+                    _logger.LogWarning(
+                        "Authorization code without PKCE rejected: {ClientId} (pkceRequired={PkceRequired}, isPublicClient={IsPublicClient})",
+                        client_id, pkceRequired, isPublicClient);
+                    return BadRequest(new
+                    {
+                        error = "invalid_grant",
+                        error_description = "PKCE (code_challenge) が必須です。"
                     });
                 }
 

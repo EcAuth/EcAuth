@@ -30,6 +30,7 @@ namespace IdentityProvider.Models
         public DbSet<WebAuthnChallenge> WebAuthnChallenges { get; set; }
         public DbSet<AccountOrganization> AccountOrganizations { get; set; }
         public DbSet<MagicLoginToken> MagicLoginTokens { get; set; }
+        public DbSet<PasskeyRegistrationToken> PasskeyRegistrationTokens { get; set; }
         public DbSet<SignupRequest> SignupRequests { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -256,6 +257,14 @@ namespace IdentityProvider.Models
 
             modelBuilder.Entity<MagicLoginToken>()
                 .HasIndex(t => new { t.RequestedIp, t.CreatedAt });
+
+            // PasskeyRegistrationToken: token_hash で検索するため一意インデックス。
+            // テナント横断で検証するため QueryFilter は設定しない。
+            modelBuilder.Entity<PasskeyRegistrationToken>()
+                .HasIndex(t => t.TokenHash)
+                .IsUnique();
+            modelBuilder.Entity<PasskeyRegistrationToken>()
+                .HasIndex(t => t.ExpiresAt);
 
             // SignupRequest: 申込段階では Organization 未作成のため、Organization 経由ではなく
             // TenantName カラムで直接テナントフィルターを適用する (Organization エンティティと同じ直接フィルター方式)。

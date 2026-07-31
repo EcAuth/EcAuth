@@ -24,7 +24,7 @@ namespace IdentityProvider.Services
         private readonly EcAuthDbContext _context;
         private readonly ITenantService _tenantService;
         private readonly IAccountService _accountService;
-        private readonly IAuthorizationCodeService _authorizationCodeService;
+        private readonly ITokenService _tokenService;
         private readonly IEmailService _emailService;
         private readonly IConfiguration _configuration;
         private readonly MagicLinkOptions _options;
@@ -34,7 +34,7 @@ namespace IdentityProvider.Services
             EcAuthDbContext context,
             ITenantService tenantService,
             IAccountService accountService,
-            IAuthorizationCodeService authorizationCodeService,
+            ITokenService tokenService,
             IEmailService emailService,
             IConfiguration configuration,
             IOptions<MagicLinkOptions> options,
@@ -43,7 +43,7 @@ namespace IdentityProvider.Services
             _context = context;
             _tenantService = tenantService;
             _accountService = accountService;
-            _authorizationCodeService = authorizationCodeService;
+            _tokenService = tokenService;
             _emailService = emailService;
             _configuration = configuration;
             _options = options.Value;
@@ -185,9 +185,9 @@ namespace IdentityProvider.Services
                 throw InvalidToken();
             }
 
-            // ログイン先（管理コンソール）の Client と登録済みリダイレクト URI を解決する。
+            // ログイン先（管理コンソール）の Client を解決する。発行するトークンの audience になる。
             // ここまでを消費の前に行うため、解決失敗時にトークンは焼けない。
-            var (client, redirectUri) = await ResolveAccountClientAsync(account.OrganizationId, ct);
+            var client = await ResolveAccountClientAsync(account.OrganizationId, ct);
 
             // 単発使用は Compare-And-Set で保証する。未使用かつ未期限切れの行のみを対象とする
             // アトミックな UPDATE を実行し、影響行数 1 を成功とする（並行リクエストはここで 1 件だけ通る）。
@@ -206,21 +206,29 @@ namespace IdentityProvider.Services
                 throw InvalidToken();
             }
 
-            var authCode = await _authorizationCodeService.GenerateAuthorizationCodeAsync(
-                new IAuthorizationCodeService.AuthorizationCodeRequest
+            // 認可コードを介さず、この場でトークンを発行する（IMagicLinkService.VerifyAsync の
+            // ドキュメント参照。public client の PKCE 必須と両立させるための設計）。
+            // managed_orgs はマイページが Client 一覧を引くために必須。
+            var managedOrgs = await _accountService.GetManagedOrganizationsAsync(account.Subject);
+
+            ITokenService.TokenResponse tokens;
+            using (TimingScope.Begin("token_generate"))
+            {
+                tokens = await _tokenService.GenerateTokensAsync(new ITokenService.TokenRequest
                 {
-                    Subject = account.Subject,
-                    ClientId = client.Id,
-                    RedirectUri = redirectUri,
+                    User = account,
+                    Client = client,
                     SubjectType = SubjectType.Account,
-                    ExpirationMinutes = 10
+                    ManagedOrgs = managedOrgs
                 });
+            }
 
             _logger.LogInformation(
-                "マジックリンクログインを検証し認可コードを発行しました: Tenant={Tenant}, Subject={Subject}, ClientId={ClientId}",
-                _tenantService.TenantName, account.Subject, client.ClientId);
+                "マジックリンクログインを検証しトークンを発行しました: Tenant={Tenant}, Subject={Subject}, ClientId={ClientId}, ManagedOrgs={Count}",
+                _tenantService.TenantName, account.Subject, client.ClientId, managedOrgs.Count);
 
-            return new MagicLinkVerifyResult(AppendAuthorizationCode(redirectUri, authCode.Code));
+            return new MagicLinkVerifyResult(
+                tokens.AccessToken, tokens.IdToken, tokens.ExpiresIn, tokens.TokenType);
         }
 
         /// <summary>
@@ -269,29 +277,26 @@ namespace IdentityProvider.Services
             }
         }
 
-        // ---- Client / リダイレクト URI 解決 ----
+        // ---- Client 解決 ----
 
         /// <summary>
-        /// 受付テナント（accounts / stg-accounts）の管理コンソール Client（<see cref="SubjectType.Account"/>）と、
-        /// その登録済みリダイレクト URI を解決する。<see cref="Data.Seeders.AccountsOrganizationSeeder"/> が
-        /// 投入する Client / RedirectUri に対応する。
+        /// 受付テナント（accounts / stg-accounts）の管理コンソール Client（<see cref="SubjectType.Account"/>）を
+        /// 解決する。<see cref="Data.Seeders.AccountsOrganizationSeeder"/> が投入する Client に対応する。
+        /// 認可コードを発行しなくなったため、リダイレクト URI の登録有無は問わない
+        /// （発行するトークンの audience として Client のみを必要とする）。
         /// </summary>
-        private async Task<(Client client, string redirectUri)> ResolveAccountClientAsync(
-            int organizationId, CancellationToken ct)
+        private async Task<Client> ResolveAccountClientAsync(int organizationId, CancellationToken ct)
         {
             // account は GetBySubjectAsync でテナント分離済み。その OrganizationId で Client を絞るため、
             // テナントクエリフィルター（将来 Client に追加された場合も含む）はそのまま尊重する。
             var client = await _context.Clients
-                .Include(c => c.RedirectUris)
                 .FirstOrDefaultAsync(
                     c => c.OrganizationId == organizationId && c.SubjectType == SubjectType.Account, ct);
 
-            var redirectUri = client?.RedirectUris?.FirstOrDefault()?.Uri;
-
-            if (client == null || string.IsNullOrWhiteSpace(redirectUri))
+            if (client == null)
             {
                 _logger.LogError(
-                    "管理コンソール Client またはリダイレクト URI が見つかりません: Tenant={Tenant}, OrganizationId={OrganizationId}",
+                    "管理コンソール Client が見つかりません: Tenant={Tenant}, OrganizationId={OrganizationId}",
                     _tenantService.TenantName, organizationId);
                 throw new MagicLinkException(
                     "login_not_configured",
@@ -299,17 +304,7 @@ namespace IdentityProvider.Services
                     statusCode: 500);
             }
 
-            return (client, redirectUri);
-        }
-
-        /// <summary>
-        /// リダイレクト URI に認可コードをクエリ <c>code</c> として付与する。
-        /// 既にクエリを持つ URI でも壊さないよう区切り文字を判定する。
-        /// </summary>
-        private static string AppendAuthorizationCode(string redirectUri, string code)
-        {
-            var separator = redirectUri.Contains('?') ? '&' : '?';
-            return $"{redirectUri}{separator}code={Uri.EscapeDataString(code)}";
+            return client;
         }
 
         // ---- URL 構築 ----

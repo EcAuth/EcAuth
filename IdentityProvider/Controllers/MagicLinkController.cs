@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using IdentityProvider.Exceptions;
+using IdentityProvider.Filters;
 using IdentityProvider.Services;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
@@ -19,6 +20,8 @@ namespace IdentityProvider.Controllers
     [Route("api/account/magic-link")]
     [ApiController]
     [EnableCors(SignupController.CorsPolicy)]
+    // verify がアクセストークンを直接返すため、レスポンスをキャッシュさせない。
+    [NoStore]
     public class MagicLinkController : ControllerBase
     {
         private readonly IMagicLinkService _magicLinkService;
@@ -64,8 +67,14 @@ namespace IdentityProvider.Controllers
         }
 
         /// <summary>
-        /// マジックリンクのトークンを検証して単発消費し、認可コードを付与したリダイレクト先を返す。
-        /// フロントエンドはレスポンスの <c>location</c> へブラウザ遷移する。
+        /// マジックリンクのトークンを検証して単発消費し、アクセストークン／ID トークンを直接返す。
+        /// フロントエンド（マイページ）はこのトークンを保持してそのままマイページを表示する
+        /// （認可コード交換の <c>/auth/callback</c> は経由しない）。
+        /// <para>
+        /// レスポンス形は <c>/v1/token</c> と同じ snake_case（<c>access_token</c> 等）に揃える。
+        /// 認可コードを介さない理由は <see cref="IMagicLinkService.VerifyAsync"/> のドキュメントを参照
+        /// （public client の PKCE 必須と、メール往復で verifier を保持できない制約の両立）。
+        /// </para>
         /// </summary>
         [HttpPost]
         [Route("verify")]
@@ -76,7 +85,10 @@ namespace IdentityProvider.Controllers
                 var result = await _magicLinkService.VerifyAsync(body?.Token ?? string.Empty, ct);
                 return Ok(new
                 {
-                    location = result.RedirectUri
+                    access_token = result.AccessToken,
+                    id_token = result.IdToken,
+                    token_type = result.TokenType,
+                    expires_in = result.ExpiresIn
                 });
             }
             catch (MagicLinkException ex)

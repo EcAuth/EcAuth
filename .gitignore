@@ -6,6 +6,12 @@
 # dotenv files
 .env
 
+# eccube-e2e.sh が採番するホスト名（秘密は含まないが実行ごとに変わる）
+.e2e-eccube.env
+
+# EC-CUBE プラグイン結合 E2E が checkout するプラグインリポジトリ（CI の既定パス）
+/plugins/
+
 # HTTPS certificates for Linux environment
 certs/
 *.pfx

@@ -219,6 +219,16 @@
         <button onclick="generateState()">Generate Random State</button>
         <br><br>
 
+        <!--
+          PKCE (RFC 7636) の code_verifier。認証時に自動生成し、S256 変換した
+          code_challenge を authenticate/verify へ送る。PKCE は必須（PkcePolicy）。
+          トークン交換で使えるよう、生成した verifier をここに表示する。
+        -->
+        <div class="form-group">
+            <label for="codeVerifier">PKCE Code Verifier (auto-generated)</label>
+            <input type="text" id="codeVerifier" value="" readonly>
+        </div>
+
         <button onclick="authenticatePasskey()">Authenticate with Passkey</button>
 
         <div id="authenticateResult" class="result" style="display: none;"></div>
@@ -283,6 +293,20 @@
             const state = crypto.randomUUID();
             document.getElementById('state').value = state;
             log('Generated new State: ' + state);
+        }
+
+        // PKCE (RFC 7636) utilities
+        // code_verifier は 43〜128 文字の unreserved。32 バイト乱数の base64url は 43 文字。
+        function generateCodeVerifier() {
+            const bytes = new Uint8Array(32);
+            crypto.getRandomValues(bytes);
+            return base64UrlEncode(bytes.buffer);
+        }
+
+        // code_challenge = BASE64URL-ENCODE(SHA256(ASCII(code_verifier)))
+        async function generateCodeChallenge(codeVerifier) {
+            const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(codeVerifier));
+            return base64UrlEncode(digest);
         }
 
         // Base64URL encoding/decoding utilities
@@ -441,6 +465,12 @@
             const redirectUri = document.getElementById('redirectUri').value;
             const state = document.getElementById('state').value;
 
+            // PKCE (RFC 7636): code_verifier を生成し、S256 の code_challenge を送る。
+            // verifier はトークン交換で必要になるため画面に残す。
+            const codeVerifier = generateCodeVerifier();
+            document.getElementById('codeVerifier').value = codeVerifier;
+            const codeChallenge = await generateCodeChallenge(codeVerifier);
+
             try {
                 log('Starting passkey authentication...');
 
@@ -502,6 +532,8 @@
                         session_id: sessionId,
                         redirect_uri: redirectUri,
                         state: state || undefined,
+                        code_challenge: codeChallenge,
+                        code_challenge_method: 'S256',
                         response: {
                             id: credential.id,
                             rawId: base64UrlEncode(credential.rawId),

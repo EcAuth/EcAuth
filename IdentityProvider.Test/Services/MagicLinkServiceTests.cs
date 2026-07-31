@@ -20,7 +20,7 @@ namespace IdentityProvider.Test.Services
     /// 担保する。<c>ExecuteUpdate</c> は InMemory プロバイダー非対応のため、ここでは
     /// <see cref="TestableMagicLinkService"/> で消費シーム（<c>TryConsumeTokenAsync</c>）を逐次の
     /// read-check-update に差し替え、逐次の単発契約・期限切れ拒否・レート制限境界・Email enumeration 対策・
-    /// 認可コード発行の配線を InMemory で検証する。
+    /// トークン発行の配線を InMemory で検証する。
     /// </para>
     /// </summary>
     public class MagicLinkServiceTests
@@ -48,12 +48,12 @@ namespace IdentityProvider.Test.Services
                 EcAuthDbContext ctx,
                 ITenantService tenantService,
                 IAccountService accountService,
-                IAuthorizationCodeService authorizationCodeService,
+                ITokenService tokenService,
                 IEmailService emailService,
                 IConfiguration configuration,
                 IOptions<MagicLinkOptions> options,
                 ILogger<MagicLinkService> logger)
-                : base(ctx, tenantService, accountService, authorizationCodeService, emailService, configuration, options, logger)
+                : base(ctx, tenantService, accountService, tokenService, emailService, configuration, options, logger)
             {
                 _ctx = ctx;
             }
@@ -143,17 +143,33 @@ namespace IdentityProvider.Test.Services
             ITenantService tenantService,
             out Mock<IEmailService> emailMock,
             out Mock<IAccountService> accountMock,
-            out Mock<IAuthorizationCodeService> authCodeMock)
+            out Mock<ITokenService> tokenMock)
         {
             emailMock = new Mock<IEmailService>();
             accountMock = new Mock<IAccountService>();
-            authCodeMock = new Mock<IAuthorizationCodeService>();
+            tokenMock = new Mock<ITokenService>();
+
+            // managed_orgs はトークン発行の必須入力。個別テストで上書きしない限り空一覧を返す。
+            accountMock
+                .Setup(a => a.GetManagedOrganizationsAsync(It.IsAny<string>()))
+                .ReturnsAsync(new List<IAccountService.ManagedOrganization>());
+
+            // トークン発行の既定応答（発行内容を検証するテストは個別に上書きする）。
+            tokenMock
+                .Setup(t => t.GenerateTokensAsync(It.IsAny<ITokenService.TokenRequest>()))
+                .ReturnsAsync(new ITokenService.TokenResponse
+                {
+                    AccessToken = "access-token-xyz",
+                    IdToken = "id-token-xyz",
+                    ExpiresIn = 3600,
+                    TokenType = "Bearer"
+                });
 
             return new TestableMagicLinkService(
                 context,
                 tenantService,
                 accountMock.Object,
-                authCodeMock.Object,
+                tokenMock.Object,
                 emailMock.Object,
                 CreateConfiguration(),
                 Options.Create(new MagicLinkOptions()),
@@ -316,7 +332,7 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
-        public async Task VerifyAsync_ValidToken_ConsumesAndReturnsRedirectWithCode()
+        public async Task VerifyAsync_ValidToken_ConsumesAndReturnsTokensDirectly()
         {
             var tenant = CreateTenantService();
             using var context = TestDbContextHelper.CreateInMemoryContext(tenantService: tenant);
@@ -326,31 +342,48 @@ namespace IdentityProvider.Test.Services
 
             var rawToken = await InsertMagicTokenAsync(context, DateTimeOffset.UtcNow.AddMinutes(10));
 
-            var service = CreateService(context, tenant, out _, out var accountMock, out var authCodeMock);
-            accountMock.Setup(a => a.GetBySubjectAsync(AccountSubject)).ReturnsAsync(account);
+            var managedOrgs = new List<IAccountService.ManagedOrganization>
+            {
+                new(42, "shop-a", "owner")
+            };
 
-            IAuthorizationCodeService.AuthorizationCodeRequest? captured = null;
-            authCodeMock
-                .Setup(a => a.GenerateAuthorizationCodeAsync(It.IsAny<IAuthorizationCodeService.AuthorizationCodeRequest>()))
-                .Callback<IAuthorizationCodeService.AuthorizationCodeRequest>(r => captured = r)
-                .ReturnsAsync(new AuthorizationCode { Code = "authcode-xyz" });
+            var service = CreateService(context, tenant, out _, out var accountMock, out var tokenMock);
+            accountMock.Setup(a => a.GetBySubjectAsync(AccountSubject)).ReturnsAsync(account);
+            accountMock.Setup(a => a.GetManagedOrganizationsAsync(AccountSubject)).ReturnsAsync(managedOrgs);
+
+            ITokenService.TokenRequest? captured = null;
+            tokenMock
+                .Setup(t => t.GenerateTokensAsync(It.IsAny<ITokenService.TokenRequest>()))
+                .Callback<ITokenService.TokenRequest>(r => captured = r)
+                .ReturnsAsync(new ITokenService.TokenResponse
+                {
+                    AccessToken = "access-token-xyz",
+                    IdToken = "id-token-xyz",
+                    ExpiresIn = 3600,
+                    TokenType = "Bearer"
+                });
 
             var result = await service.VerifyAsync(rawToken);
 
-            Assert.Equal($"{AdminRedirectUri}?code=authcode-xyz", result.RedirectUri);
+            // 認可コードを介さず、トークンをそのまま返す（public client の PKCE 必須と両立させるため）。
+            Assert.Equal("access-token-xyz", result.AccessToken);
+            Assert.Equal("id-token-xyz", result.IdToken);
+            Assert.Equal(3600, result.ExpiresIn);
+            Assert.Equal("Bearer", result.TokenType);
 
             Assert.NotNull(captured);
-            Assert.Equal(AccountSubject, captured!.Subject);
-            Assert.Equal(SubjectType.Account, captured.SubjectType);
-            Assert.Equal(client.Id, captured.ClientId);
-            Assert.Equal(AdminRedirectUri, captured.RedirectUri);
+            Assert.Equal(SubjectType.Account, captured!.SubjectType);
+            Assert.Equal(AccountSubject, captured.User.Subject);
+            Assert.Equal(client.Id, captured.Client.Id);
+            // マイページが Client 一覧を引くため managed_orgs の伝播は必須。
+            Assert.Equal(managedOrgs, captured.ManagedOrgs);
 
             var token = await context.MagicLoginTokens.AsNoTracking().SingleAsync();
             Assert.NotNull(token.UsedAt);
         }
 
         [Fact]
-        public async Task VerifyAsync_SecondUse_ThrowsInvalidAndIssuesCodeOnlyOnce()
+        public async Task VerifyAsync_SecondUse_ThrowsInvalidAndIssuesTokensOnlyOnce()
         {
             var tenant = CreateTenantService();
             using var context = TestDbContextHelper.CreateInMemoryContext(tenantService: tenant);
@@ -360,12 +393,8 @@ namespace IdentityProvider.Test.Services
 
             var rawToken = await InsertMagicTokenAsync(context, DateTimeOffset.UtcNow.AddMinutes(10));
 
-            var service = CreateService(context, tenant, out _, out var accountMock, out var authCodeMock);
+            var service = CreateService(context, tenant, out _, out var accountMock, out var tokenMock);
             accountMock.Setup(a => a.GetBySubjectAsync(AccountSubject)).ReturnsAsync(account);
-            authCodeMock
-                .Setup(a => a.GenerateAuthorizationCodeAsync(It.IsAny<IAuthorizationCodeService.AuthorizationCodeRequest>()))
-                .ReturnsAsync(new AuthorizationCode { Code = "authcode-xyz" });
-
             await service.VerifyAsync(rawToken);
 
             // 2 回目は消費できず invalid（逐次の単発契約）。
@@ -373,8 +402,8 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(400, ex.StatusCode);
             Assert.Equal("invalid_token", ex.Error);
 
-            authCodeMock.Verify(
-                a => a.GenerateAuthorizationCodeAsync(It.IsAny<IAuthorizationCodeService.AuthorizationCodeRequest>()),
+            tokenMock.Verify(
+                t => t.GenerateTokensAsync(It.IsAny<ITokenService.TokenRequest>()),
                 Times.Once);
         }
 
@@ -389,12 +418,12 @@ namespace IdentityProvider.Test.Services
 
             var rawToken = await InsertMagicTokenAsync(context, DateTimeOffset.UtcNow.AddMinutes(-1));
 
-            var service = CreateService(context, tenant, out _, out _, out var authCodeMock);
+            var service = CreateService(context, tenant, out _, out _, out var tokenMock);
 
             var ex = await Assert.ThrowsAsync<MagicLinkException>(() => service.VerifyAsync(rawToken));
             Assert.Equal(400, ex.StatusCode);
-            authCodeMock.Verify(
-                a => a.GenerateAuthorizationCodeAsync(It.IsAny<IAuthorizationCodeService.AuthorizationCodeRequest>()),
+            tokenMock.Verify(
+                t => t.GenerateTokensAsync(It.IsAny<ITokenService.TokenRequest>()),
                 Times.Never);
         }
 
@@ -436,13 +465,13 @@ namespace IdentityProvider.Test.Services
             // null を返すケースを再現する（テナントクエリフィルターによる拒否）。
             var rawToken = await InsertMagicTokenAsync(context, DateTimeOffset.UtcNow.AddMinutes(10));
 
-            var service = CreateService(context, tenant, out _, out var accountMock, out var authCodeMock);
+            var service = CreateService(context, tenant, out _, out var accountMock, out var tokenMock);
             accountMock.Setup(a => a.GetBySubjectAsync(It.IsAny<string>())).ReturnsAsync((Account?)null);
 
             var ex = await Assert.ThrowsAsync<MagicLinkException>(() => service.VerifyAsync(rawToken));
             Assert.Equal(400, ex.StatusCode);
-            authCodeMock.Verify(
-                a => a.GenerateAuthorizationCodeAsync(It.IsAny<IAuthorizationCodeService.AuthorizationCodeRequest>()),
+            tokenMock.Verify(
+                t => t.GenerateTokensAsync(It.IsAny<ITokenService.TokenRequest>()),
                 Times.Never);
         }
 
@@ -457,7 +486,7 @@ namespace IdentityProvider.Test.Services
 
             var rawToken = await InsertMagicTokenAsync(context, DateTimeOffset.UtcNow.AddMinutes(10));
 
-            var service = CreateService(context, tenant, out _, out var accountMock, out var authCodeMock);
+            var service = CreateService(context, tenant, out _, out var accountMock, out var tokenMock);
             accountMock.Setup(a => a.GetBySubjectAsync(AccountSubject)).ReturnsAsync(account);
 
             var ex = await Assert.ThrowsAsync<MagicLinkException>(() => service.VerifyAsync(rawToken));
@@ -468,9 +497,9 @@ namespace IdentityProvider.Test.Services
             var token = await context.MagicLoginTokens.AsNoTracking().SingleAsync();
             Assert.Null(token.UsedAt);
 
-            // 認可コードも発行されていない。
-            authCodeMock.Verify(
-                a => a.GenerateAuthorizationCodeAsync(It.IsAny<IAuthorizationCodeService.AuthorizationCodeRequest>()),
+            // トークンも発行されていない。
+            tokenMock.Verify(
+                t => t.GenerateTokensAsync(It.IsAny<ITokenService.TokenRequest>()),
                 Times.Never);
         }
     }

@@ -152,6 +152,143 @@ AppServiceConsoleLogs
   リクエスト処理時（host start 後）の診断は **`traces` / `AppTraces`**。「App Insights に出ない」と感じたら、
   まず参照テーブルの取り違えを疑う（起動前ログを App Insights に押し込む `ForceFlush` 等の小細工は不要・無効）。
 
+### E2E テストの実装上の要点
+
+`E2ETests/` で B2B パスキーや申込フローを扱うときに、毎回ソースから再導出する羽目になる事実をまとめる。
+
+#### プラグインが呼ぶのは `https://{tenant_name}.ec-auth.io`（店舗のホストではない）
+
+EC-CUBE プラグインは、まず `/platform/v1/client-resolve` に `client_id` を投げ、返ってきた
+`base_url`（= `https://{tenant_name}.{PlatformApi:BaseDomain}`、`Controllers/Platform/ClientResolveController.cs:60-61`）を
+設定値 `ecauth_base_url` として保存し、**以降の API 呼び出しをすべてそこへ送る**
+（4 系 `Controller/Admin/ConfigController.php` の `clientResolveService->resolve()`、
+2 系 `SC_Helper_EcAuthLogin2.php` の `CLIENT_RESOLVE_PATH`）。
+
+つまり実運用では **1 リクエストに 2 種類のホストが登場する**:
+
+| 役割 | ホスト | 理由 |
+|---|---|---|
+| ブラウザ（`navigator.credentials.create` / `get`） | 店舗のホスト（= `rp_id`） | WebAuthn が origin と `rp_id` の一致を要求する |
+| サーバー（`*/options`・`*/verify` の HTTP 呼び出し） | `{tenant_name}.ec-auth.io` | プラグインが保存した `ecauth_base_url` |
+
+E2E でこれを一体にして「ブラウザから直接 API を叩く」と、`Host` が店舗のホストになって
+`TenantMiddleware` が既定テナントに解決してしまい、`WebAuthnChallenge` のグローバルクエリフィルタ
+（`Models/EcAuthDbContext.cs`）が顧客 Organization の行に一致せず **`Session not found or expired` (400)** になる。
+これは **テストの誤りであってプロダクトの不具合ではない**。`tests/helpers/b2b-passkey.ts` の `B2BContext` が
+`api`（テナントの `Host` を付けた `APIRequestContext`）と `page`（`rp_id` と一致する origin）を分けているのはこのため。
+
+#### `redirect_uri` / `rp_id` をテスト側で組み立てない
+
+`authenticate/verify` の `redirect_uri` は登録値と**完全一致**で検証される（`Controllers/B2BPasskeyController.cs`）。
+テストで期待値を組み立てると「申込が登録した初期値」と「プラグインが送る値」のズレ（EcAuth#481 の本体）が
+検出できない。`GET /v1/account/clients` で取得した登録済みの値をそのまま使うこと。
+
+#### 疑似店舗ホストに `.test` を使う
+
+`.test` は RFC 6761 の予約 TLD で公開解決されず、実在ドメインと衝突しない。本番 DB に残っても
+テストデータであることが明確になる。`Middlewares/TenantMiddleware.cs` の `ExtractTenantNameFromHost` が先頭セグメントを
+テナント名として扱うのは **3 セグメント以上**のときだけなので、`e2e-{RUN}.test` の 2 セグメントに
+保てば既定テナントに解決される。Playwright 側は `playwright.config.ts` の
+`--host-resolver-rules` に `MAP *.test 127.0.0.1` を入れて解決させる。
+
+#### `wwwroot/b2b-passkey-test.html` の配信条件
+
+静的ファイル配信は **`app.Environment.IsProduction()` のときだけ**テナント限定になる
+（`Program.cs` の `UseWhen` — ホストが 3 セグメント以上かつ先頭が `DEFAULT_ORGANIZATION_TENANT_NAME`）。
+本番では `production.ec-auth.io` からしか見えず、顧客テナントのサブドメインでは 404 になる。
+Development / Staging では `app.UseStaticFiles()` が無条件に効く。
+
+#### ローカルでの再実行
+
+```bash
+op run --env-file=.env.dev.tpl -- docker compose -p ec-auth up -d --build identityprovider
+cd E2ETests && pnpm exec playwright test tests/specs/signup_client_b2b_login.spec.ts --reporter=list
+```
+
+### EC-CUBE プラグイン結合 E2E
+
+`eccube_plugin_signup_login.spec.ts` は EC-CUBE 4 系 / 2 系を実際に起動し、
+**申込 → プラグイン設定 → パスキー登録 → 管理画面ログイン**を通す。API だけで検証する
+`signup_client_b2b_login.spec.ts` では守れない「プラグインが実際に送る値」まで突き合わせる。
+
+```bash
+./E2ETests/scripts/eccube-e2e.sh up      # ホスト名を採番して compose を起動（op run 経由）
+./E2ETests/scripts/eccube-e2e.sh test tests/specs/eccube_plugin_signup_login.spec.ts --reporter=list
+./E2ETests/scripts/eccube-e2e.sh down    # ボリュームごと破棄
+```
+
+CI は `.github/workflows/eccube_plugin_e2e.yml`（`main.yml` から呼ばれる）。プラグインの ref と
+package-api 経由インストールを `workflow_dispatch` の入力で切り替えられる。
+
+#### package-api（検証キー）経由でローカル実行する
+
+オーナーズストアのリリース申請で発行される検証キー（`X-ECCUBE-KEY`）を渡すと、4 系プラグインを
+実際の package-api から入れて検証できる。`op run` は env-file に無い変数をシェルからそのまま通すので、
+インラインで渡せばよい。
+
+```bash
+ECCUBE_AUTHENTICATION_KEY=$(op read 'op://EcAuth/eccube4-ecauth-plugin/eccube_authentication_key') \
+  ./E2ETests/scripts/eccube-e2e.sh up
+# バージョンを固定する場合は ECAUTH_PLUGIN_VERSION=1.0.1 も併せて渡す（非秘密）
+```
+
+> ⚠️ **`ECCUBE_AUTHENTICATION_KEY` を `.env.dev.tpl` に入れてはいけない**（レビュー bot が
+> 「配線が漏れている」と指摘しがちだが、意図的に入れていない）。4 系プラグインの
+> `docker-entrypoint.sh` は**キーが非空ならインストール元を package-api に切り替える**。
+> `.env.dev.tpl` に入れると、この E2E と無関係な通常のローカル起動まで既定のインストール元が
+> ワーキングツリーから package-api に変わり、開発中のプラグインを検証できなくなる。
+> ec-cube4-ecauth 側でも同じ理由で `.env.tpl` とは別の `.env.verify.tpl` に分離してある。
+
+#### 構成上の決めごと（変更するとき用）
+
+| 事項 | 決め |
+|---|---|
+| リバースプロキシ | Caddy 1 台で 443 に集約（`docker/e2e/Caddyfile`）。ポート付き URL だと rp_id / redirect_uri が本番と変わるため |
+| 証明書 | Caddy の `local_certs`。ルート CA を EC-CUBE の信頼ストアへ注入する（`docker/e2e/eccube-entrypoint.sh`）。2 系は `CURLOPT_SSL_VERIFYPEER => true` なので検証を切らずに通す |
+| ホスト名 | `up` の時点で採番。Caddy のサイトアドレスと docker network alias の両方に同じ名前が要るため、テスト実行時には決められない |
+| discovery の宛先 | `api.ec-auth.io`（両プラグインの既定値）を network alias で Caddy に引き込む。`ECAUTH_CLIENT_RESOLVE_URL` では上書きしない — 顧客が通る既定のままの経路を検証したいため |
+| `PlatformApi:BaseDomain` | この E2E だけ `ec-auth.io` に上書きする（`compose.e2e-eccube.yaml`）。Development の既定 `localhost:8081` だと `{tenant}.localhost` が 2 セグメントになり、`TenantMiddleware` がテナントを取り出せない |
+| EC-CUBE 本体のバージョン | プラグインリポジトリの `Dockerfile` の `FROM` が決める。compose 側にノブは置かない |
+
+#### 再実行時の注意
+
+申込は組織コードの重複を弾く（`organization_already_exists`）。組織コードはサイトホストから
+導出されるため、**同じホストで二度申し込めない**。`up` は毎回新しい RUN_ID を振り、`down` は
+ボリュームごと破棄する。`E2E_RUN_ID` を環境変数で固定すると同じホストで再実行してしまうので、
+意図的に再現したいとき以外は設定しない。
+
+### 確認メールの受信口（mailpit と E2E メールボックスの使い分け）
+
+申込フローの E2E は確認メールの本文からトークンを取り出す必要がある（トークンは本文にしか
+存在せず、DB には SHA-256 ハッシュしか残らない）。受信口は環境で変わる。
+
+| 環境 | 受信口 | 参照方法 |
+|---|---|---|
+| ローカル / CI | mailpit | `tests/helpers/mailpit.ts`（`MAILPIT_BASE_URL`、既定 `http://localhost:8025`） |
+| staging / production | Cloudflare Worker の E2E メールボックス | 下記（**未実装**。デプロイ後 E2E を組むときに吸収層を作る） |
+
+デプロイ済み環境は SendGrid 送信なので mailpit が使えない。代わりに
+`ecauth-infrastructure` が用意した受信口を使う（構成の詳細と設計上の制約は
+[ecauth-infrastructure の CLAUDE.md](https://github.com/EcAuth/ecauth-infrastructure/blob/main/CLAUDE.md)
+「E2E 用メールボックス」を参照）。
+
+| 項目 | 値 |
+|------|-----|
+| ベース URL | `https://e2e-mail.ec-auth.io` |
+| 宛先 | `e2e-{RUN_ID}@e2e.ec-auth.io` |
+| 読み出しトークン | `op://EcAuth/ecauth-e2e-mailbox/api_token`（`Authorization: Bearer`） |
+| API | `GET` / `DELETE /messages?to=<address>` |
+| レスポンス | `{"messages":[{to, from, subject, text, html, received_at}, ...]}` |
+
+呼び出し側の注意:
+
+- **Workers KV は結果整合**で、書き込みが読み出しに反映されるまで最大 1 分程度かかりうる。
+  mailpit 相当の短いポーリング間隔だと取りこぼすので、タイムアウトは余裕を持たせる。
+- メッセージは 1 時間で自動失効するため、後始末の `DELETE` は必須ではない。
+- 本文のフィールド名が mailpit（`Text` / `HTML` / `Subject` / `ID`）と異なる。
+  spec からは直接触らず、`waitForMessage` / `extractToken` と同じインターフェースの
+  吸収層を挟むこと。
+
 ### マイグレーション設計ルール
 
 - `migrationBuilder.Sql()` でカラムを参照する UPDATE/INSERT 文を書く場合、`EXEC()` 動的 SQL でラップすること

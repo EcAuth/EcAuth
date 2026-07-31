@@ -1,4 +1,5 @@
-import { test, expect, request } from '@playwright/test';
+import { test, expect, request, Browser } from '@playwright/test';
+import { generateCodeVerifier, generatePkcePair } from '../helpers/pkce';
 
 test.describe.serial('認可コードフローフェデレーションのテストをします', () => {
 
@@ -21,6 +22,10 @@ test.describe.serial('認可コードフローフェデレーションのテス�
   };
 
   test('フェデレーションをテストをします', async ({ browser }) => {
+    // PKCE 必須化（PkcePolicy）により、認可リクエストには code_challenge が必須。
+    // このテストは UserInfo 等も含めたフルフローの検証が目的のため、
+    // PKCE を付けたうえで存続させる（必須化の拒否そのものは別テストで検証）。
+    const { codeVerifier, codeChallenge } = generatePkcePair();
     // MockIdPドメインへの認証情報を含むコンテキストを作成
     const mockIdpBaseUrl = process.env.MOCK_IDP_BASE_URL || 'https://mock-openid-provider.mangoplant-f8a75293.japaneast.azurecontainerapps.io';
     const mockIdpOrigin = new URL(mockIdpBaseUrl).origin;
@@ -34,7 +39,7 @@ test.describe.serial('認可コードフローフェデレーションのテス�
     });
     const page = await context.newPage();
     const tokenRequest = await request.newContext();
-    const authUrl = `${authorizationEndpoint}?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&provider_name=${providerName}&state=${state}`;
+    const authUrl = `${authorizationEndpoint}?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&provider_name=${providerName}&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
 
     console.log('========================================');
     console.log('🔵 E2E Test Configuration:');
@@ -130,7 +135,8 @@ test.describe.serial('認可コードフローフェデレーションのテス�
       scope: scopes,
       redirect_uri: redirectUri,
       grant_type: 'authorization_code',
-      state: (url.searchParams.get('state') ?? '')
+      state: (url.searchParams.get('state') ?? ''),
+      code_verifier: codeVerifier
     };
 
     console.log('📤 Sending token request to:', tokenEndpoint);
@@ -235,5 +241,183 @@ test.describe.serial('認可コードフローフェデレーションのテス�
 
     // コンテキストをクローズ
     await context.close();
+  });
+
+  /**
+   * 認可フローをブラウザで通し、認可コードを取得する。
+   * extraParams で PKCE パラメータ等を追加できる。
+   *
+   * 上の既存テストが検証している UserInfo 等は対象外で、
+   * PKCE の検証に必要な「認可コードの取得」だけを行う。
+   */
+  async function obtainAuthorizationCode(
+    browser: Browser,
+    extraParams: Record<string, string> = {}
+  ): Promise<string> {
+    const mockIdpBaseUrl = process.env.MOCK_IDP_BASE_URL || 'https://mock-openid-provider.mangoplant-f8a75293.japaneast.azurecontainerapps.io';
+    const mockIdpOrigin = new URL(mockIdpBaseUrl).origin;
+
+    const context = await browser.newContext({
+      ignoreHTTPSErrors: true,
+      httpCredentials: { ...mockIdpCredentials, origin: mockIdpOrigin },
+    });
+    const page = await context.newPage();
+
+    try {
+      const params = new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        response_type: 'code',
+        scope: scopes,
+        provider_name: providerName,
+        state,
+        ...extraParams,
+      });
+
+      await page.goto(`${authorizationEndpoint}?${params.toString()}`);
+      await page.waitForURL(/\/auth\/callback/, { timeout: 15000 });
+
+      // 認可画面で「承認」ボタンをクリック（sealed state は hidden field で POST される）
+      await page.click('button[value="authorize"]');
+
+      const escapedRedirectUri = redirectUri.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      await page.waitForURL(new RegExp(escapedRedirectUri + '\\?code='), { timeout: 15000 });
+
+      const code = new URL(page.url()).searchParams.get('code');
+      expect(code).toBeTruthy();
+      return code!;
+    } finally {
+      await context.close();
+    }
+  }
+
+  test('PKCE なしの認可リクエストは invalid_request で拒否されます', async () => {
+    // PKCE 必須化（PkcePolicy、コード既定 true）の回帰テスト。
+    // 認可の入口で弾くことを検証する。外部 IdP での認証まで進めてから
+    // トークン交換で失敗させると、原因の特定が難しくなるため。
+    // このテストが落ちたら、キルスイッチ Pkce__Required=false が
+    // 意図せず残っていないかを疑うこと。
+    const apiRequest = await request.newContext({ ignoreHTTPSErrors: true });
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: scopes,
+      provider_name: providerName,
+      state,
+    });
+
+    const response = await apiRequest.get(`${authorizationEndpoint}?${params.toString()}`, {
+      maxRedirects: 0,
+    });
+
+    expect(response.status()).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('invalid_request');
+
+    await apiRequest.dispose();
+  });
+
+  test('PKCE (S256) ありでフェデレーションし code_verifier でトークン交換できます', async ({ browser }) => {
+    const { codeVerifier, codeChallenge } = generatePkcePair();
+
+    const code = await obtainAuthorizationCode(browser, {
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+    });
+
+    const tokenRequest = await request.newContext({ ignoreHTTPSErrors: true });
+    const response = await tokenRequest.post(tokenEndpoint, {
+      form: {
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        scope: scopes,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+        code_verifier: codeVerifier,
+      },
+    });
+
+    const body = await response.json();
+    if (response.status() !== 200) {
+      console.log('Token body:', JSON.stringify(body));
+    }
+    expect(response.status()).toBe(200);
+    expect(body.access_token).toBeTruthy();
+    expect(body.token_type).toBe('Bearer');
+  });
+
+  test('PKCE ありで code_verifier が一致しない場合は invalid_grant を返します', async ({ browser }) => {
+    const { codeChallenge } = generatePkcePair();
+
+    const code = await obtainAuthorizationCode(browser, {
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+    });
+
+    // 認可コードに束縛された challenge と対応しない verifier を送る（認可コード横取りの模擬）
+    const wrongVerifier = generateCodeVerifier();
+
+    const tokenRequest = await request.newContext({ ignoreHTTPSErrors: true });
+    const response = await tokenRequest.post(tokenEndpoint, {
+      form: {
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        scope: scopes,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+        code_verifier: wrongVerifier,
+      },
+    });
+
+    expect(response.status()).toBe(400);
+    expect((await response.json()).error).toBe('invalid_grant');
+  });
+
+  test('PKCE ありで code_verifier が無い場合は invalid_grant を返します', async ({ browser }) => {
+    const { codeChallenge } = generatePkcePair();
+
+    const code = await obtainAuthorizationCode(browser, {
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+    });
+
+    const tokenRequest = await request.newContext({ ignoreHTTPSErrors: true });
+    const response = await tokenRequest.post(tokenEndpoint, {
+      form: {
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        scope: scopes,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      },
+    });
+
+    expect(response.status()).toBe(400);
+    expect((await response.json()).error).toBe('invalid_grant');
+  });
+
+  test('code_challenge_method が S256 以外なら invalid_request を返します', async () => {
+    // 本 IdP は S256 のみサポートする（plain は許容しない）
+    const { codeChallenge } = generatePkcePair();
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: scopes,
+      provider_name: providerName,
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'plain',
+    });
+
+    const api = await request.newContext({ ignoreHTTPSErrors: true });
+    const response = await api.get(`${authorizationEndpoint}?${params.toString()}`);
+
+    expect(response.status()).toBe(400);
+    expect((await response.json()).error).toBe('invalid_request');
   });
 });

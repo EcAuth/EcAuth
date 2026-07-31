@@ -108,6 +108,51 @@ namespace IdentityProvider.Test.Data.Seeders
         }
 
         [Fact]
+        public async Task SeedAsync_WithPublicClientFlag_ShouldCreatePublicClientWithEmptySecret()
+        {
+            // Arrange - CLIENT_PUBLIC=true。secret は指定しても無視され、空 secret の public client になる
+            var configuration = CreateConfiguration(new Dictionary<string, string?>
+            {
+                ["ACCOUNTS_CLIENT_ID"] = AccountsClientId,
+                ["ACCOUNTS_CLIENT_PUBLIC"] = "true",
+                ["ACCOUNTS_CLIENT_SECRET"] = AccountsClientSecret,
+                ["ACCOUNTS_REDIRECT_URI"] = AccountsRedirectUri
+            });
+
+            // Act
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert - Client は作成され、client_secret は空（PKCE 必須の public client）
+            var client = await _context.Clients
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.ClientId == AccountsClientId);
+            Assert.NotNull(client);
+            Assert.Equal(SubjectType.Account, client.SubjectType);
+            Assert.Equal(string.Empty, client.ClientSecret);
+        }
+
+        [Fact]
+        public async Task SeedAsync_WithPublicClientFlagAndNoSecret_ShouldStillCreateClient()
+        {
+            // Arrange - public client は secret 未設定でも投入される（confidential のみ skip する）
+            var configuration = CreateConfiguration(new Dictionary<string, string?>
+            {
+                ["ACCOUNTS_CLIENT_ID"] = AccountsClientId,
+                ["ACCOUNTS_CLIENT_PUBLIC"] = "true"
+            });
+
+            // Act
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert
+            var client = await _context.Clients
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.ClientId == AccountsClientId);
+            Assert.NotNull(client);
+            Assert.Equal(string.Empty, client.ClientSecret);
+        }
+
+        [Fact]
         public async Task SeedAsync_WithoutClientSecret_ShouldCreateOrganizationButSkipClient()
         {
             // Arrange - accounts のみ、CLIENT_SECRET 未設定

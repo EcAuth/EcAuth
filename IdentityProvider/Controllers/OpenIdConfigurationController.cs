@@ -39,8 +39,6 @@ namespace IdentityProvider.Controllers
             //     これに伴い response_types_supported も省略する。
             // - response_types_supported:
             //     上記 authorization_endpoint 非公開に伴い省略。
-            // - code_challenge_methods_supported:
-            //     PKCE 未実装のため省略。
             var metadata = new Dictionary<string, object>
             {
                 ["issuer"] = issuer,
@@ -49,6 +47,8 @@ namespace IdentityProvider.Controllers
                 ["jwks_uri"] = $"{issuer}/.well-known/jwks.json",
                 ["grant_types_supported"] = new[] { "authorization_code" },
                 ["token_endpoint_auth_methods_supported"] = new[] { "client_secret_post", "none" },
+                // PKCE (RFC 7636)。public client（token_endpoint_auth_method=none）は PKCE 必須。
+                ["code_challenge_methods_supported"] = new[] { "S256" },
                 ["id_token_signing_alg_values_supported"] = new[] { "RS256" },
                 ["subject_types_supported"] = new[] { "public" },
                 ["scopes_supported"] = new[] { "openid", "email", "profile" },
