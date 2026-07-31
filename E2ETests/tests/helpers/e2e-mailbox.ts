@@ -49,13 +49,20 @@ export async function createE2EMailbox(): Promise<Mailbox> {
     extraHTTPHeaders: { Authorization: `Bearer ${token}` },
   });
 
+  /** 回復の見込みが無い失敗。ポーリングで粘らず即座に落とす。 */
+  class FatalMailboxError extends Error {}
+
   async function fetchMessages(toEmail: string): Promise<WorkerMessage[]> {
     const response = await ctx.get(`${baseUrl}/messages`, { params: { to: toEmail } });
     if (!response.ok()) {
-      // 401 はトークン不一致。本文にトークンは含まれないのでそのまま出してよい。
-      throw new Error(
-        `E2E メールボックスの取得に失敗しました (${response.status()}): ${await response.text()}`
-      );
+      const detail = `(${response.status()}): ${await response.text()}`;
+      // 401/403 はトークン不一致・設定ミスで、待っても直らない。
+      // 180 秒粘ってから同じ理由で落ちるより、即座に理由を出す方が早く直せる。
+      // 本文に読み出しトークンは含まれない。
+      if (response.status() === 401 || response.status() === 403) {
+        throw new FatalMailboxError(`E2E メールボックスの認証に失敗しました ${detail}`);
+      }
+      throw new Error(`E2E メールボックスの取得に失敗しました ${detail}`);
     }
     const body = await response.json();
     return Array.isArray(body.messages) ? (body.messages as WorkerMessage[]) : [];
@@ -70,10 +77,26 @@ export async function createE2EMailbox(): Promise<Mailbox> {
       const deadline = Date.now() + timeoutMs;
 
       let lastSubjects: string[] = [];
+      let lastTransientError: string | undefined;
 
       while (Date.now() < deadline) {
-        // Worker は受信順（古い順）で返す。mailpit と揃えて新しい順で扱う。
-        const messages = (await fetchMessages(toEmail)).reverse();
+        let messages: WorkerMessage[];
+        try {
+          // Worker は受信順（古い順）で返す。mailpit と揃えて新しい順で扱う。
+          messages = (await fetchMessages(toEmail)).reverse();
+        } catch (e) {
+          if (e instanceof FatalMailboxError) {
+            throw e;
+          }
+          // ネットワーク瞬断や Worker の一時的な 5xx で待機を打ち切らない。
+          // 既定タイムアウトが 180 秒なのは KV の結果整合を待つためで、
+          // その途中の 1 回の失敗で落ちると本番スモークが偽陰性になる
+          // （本番スモークは retries: 0 で回るため取り返しがきかない）。
+          lastTransientError = (e as Error).message;
+          await new Promise((resolve) => setTimeout(resolve, intervalMs));
+          continue;
+        }
+
         lastSubjects = messages.map((m) => m.subject ?? '');
 
         const found = opts.subjectIncludes
@@ -96,8 +119,10 @@ export async function createE2EMailbox(): Promise<Mailbox> {
         lastSubjects.length === 0
           ? '受信 0 件'
           : `受信済みの件名: ${lastSubjects.join(' / ')}`;
+      // 取得自体が失敗し続けていた場合は、それが本当の原因なので添える。
+      const transient = lastTransientError ? `。直近の取得エラー: ${lastTransientError}` : '';
       throw new Error(
-        `E2E メールボックス: ${toEmail} 宛のメール${suffix}が ${timeoutMs}ms 以内に受信されませんでした（${received}）。`
+        `E2E メールボックス: ${toEmail} 宛のメール${suffix}が ${timeoutMs}ms 以内に受信されませんでした（${received}）${transient}。`
       );
     },
 

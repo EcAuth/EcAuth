@@ -1,12 +1,11 @@
 import { test, expect, APIRequestContext, request } from '@playwright/test';
-import { waitForMessage, deleteMessages } from '../helpers/mailpit';
-import { extractToken } from '../helpers/mailbox';
+import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
 
 /**
- * マジックリンクログインの E2E テスト（mailpit ベース）。
+ * マジックリンクログインの E2E テスト。
  *
  * 事前に申込 → confirm で Account を作成し、
- * request → メール（mailpit）→ リンク抽出 → verify → トークン + managed_orgs を検証。
+ * request → メール（受信口は Mailbox 抽象）→ リンク抽出 → verify → トークン + managed_orgs を検証。
  * さらに異常系（second-use / レート制限）も検証する。
  *
  * verify は認可コードではなくトークンを直接返す（管理コンソールは public client で
@@ -30,10 +29,8 @@ test.describe.serial('マジックリンクログインの E2E テスト', () =>
   const magicLinkSubject = 'ログインリンク';
 
   let apiAccounts: APIRequestContext;
-  let mailpitCtx: APIRequestContext;
+  let mailbox: Mailbox;
 
-  // 後始末で削除するメッセージ ID（他 spec のメールを消さないよう ID 指定で削除）。
-  const messageIds: string[] = [];
   // 消費テスト用に保持するログイントークン。
   let magicToken: string;
 
@@ -42,7 +39,7 @@ test.describe.serial('マジックリンクログインの E2E テスト', () =>
       ignoreHTTPSErrors: true,
       extraHTTPHeaders: { Host: accountsHost },
     });
-    mailpitCtx = await request.newContext();
+    mailbox = await createMailbox();
 
     // 前提: マジックリンク対象の Account を申込フローで作成する。
     const signupRes = await apiAccounts.post(`${baseUrl}/api/signup/request`, {
@@ -56,9 +53,8 @@ test.describe.serial('マジックリンクログインの E2E テスト', () =>
     });
     expect(signupRes.status()).toBe(202);
 
-    const confirmMail = await waitForMessage(mailpitCtx, email, { subjectIncludes: signupSubject });
-    messageIds.push(confirmMail.ID);
-    const confirmToken = extractToken(confirmMail.Text || confirmMail.HTML);
+    const confirmMail = await mailbox.waitForMessage(email, { subjectIncludes: signupSubject });
+    const confirmToken = extractToken(confirmMail.text || confirmMail.html);
 
     const confirmRes = await apiAccounts.post(`${baseUrl}/api/signup/confirm`, {
       data: { token: confirmToken },
@@ -67,9 +63,9 @@ test.describe.serial('マジックリンクログインの E2E テスト', () =>
   });
 
   test.afterAll(async () => {
-    await deleteMessages(mailpitCtx, messageIds);
-    await apiAccounts?.dispose();
-    await mailpitCtx?.dispose();
+    // 後始末は互いに独立させる（cleanup の失敗で dispose を落とさない）。
+    await Promise.allSettled([mailbox?.cleanup(email), apiAccounts?.dispose()]);
+    await mailbox?.dispose();
   });
 
   test('マジックリンク要求 → メール → verify → トークン + managed_orgs', async () => {
@@ -81,9 +77,8 @@ test.describe.serial('マジックリンクログインの E2E テスト', () =>
     // Email enumeration 対策により、常に 200 を返す。
     expect(reqRes.status()).toBe(200);
 
-    const mail = await waitForMessage(mailpitCtx, email, { subjectIncludes: magicLinkSubject });
-    messageIds.push(mail.ID);
-    magicToken = extractToken(mail.Text || mail.HTML);
+    const mail = await mailbox.waitForMessage(email, { subjectIncludes: magicLinkSubject });
+    magicToken = extractToken(mail.text || mail.html);
     expect(magicToken.length).toBeGreaterThan(10);
 
     const verifyRes = await apiAccounts.post(`${baseUrl}/api/account/magic-link/verify`, {

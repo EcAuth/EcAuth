@@ -2,7 +2,10 @@ import { APIRequestContext, request } from '@playwright/test';
 import type { Mailbox, MailboxMessage, WaitForMessageOptions } from './mailbox';
 
 /**
- * mailpit REST API のラッパ。
+ * mailpit REST API のラッパ（{@link Mailbox} の mailpit 実装）。
+ *
+ * 公開するのは createMailpitMailbox だけ。spec からは helpers/mailbox.ts の
+ * createMailbox() 越しに使い、受信口の違いを spec に持ち込まない。
  *
  * Account 申込・マジックリンクの確認/ログイントークンは「メール本文にしか存在しない」
  * （DB には SHA-256 ハッシュのみ保存）。E2E でフローを完走するため、mailpit が受信した
@@ -16,7 +19,7 @@ import type { Mailbox, MailboxMessage, WaitForMessageOptions } from './mailbox';
  */
 const MAILPIT_BASE = process.env.MAILPIT_BASE_URL || 'http://localhost:8025';
 
-export interface MailpitMessage {
+interface MailpitMessage {
   ID: string;
   /** プレーンテキスト本文 */
   Text: string;
@@ -35,7 +38,7 @@ export interface MailpitMessage {
  * @param opts.timeoutMs 最大待機時間（既定 20000ms）
  * @param opts.intervalMs ポーリング間隔（既定 500ms）
  */
-export async function waitForMessage(
+async function waitForMessage(
   request: APIRequestContext,
   toEmail: string,
   opts: { subjectIncludes?: string; timeoutMs?: number; intervalMs?: number } = {}
@@ -75,7 +78,7 @@ export async function waitForMessage(
  * 指定した ID のメッセージを削除する（テスト後の後始末）。
  * 他 spec のメールを消さないよう、必ず処理済みの ID のみを渡すこと。
  */
-export async function deleteMessages(request: APIRequestContext, ids: string[]): Promise<void> {
+async function deleteMessages(request: APIRequestContext, ids: string[]): Promise<void> {
   if (ids.length === 0) {
     return;
   }

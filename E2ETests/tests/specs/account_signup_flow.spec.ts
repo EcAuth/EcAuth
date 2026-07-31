@@ -1,12 +1,11 @@
 import { test, expect, BrowserContext, Page, APIRequestContext, request } from '@playwright/test';
-import { waitForMessage, deleteMessages } from '../helpers/mailpit';
-import { extractToken } from '../helpers/mailbox';
+import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
 import { generatePkcePair } from '../helpers/pkce';
 
 /**
- * Account 申込フローの E2E テスト（mailpit ベース）。
+ * Account 申込フローの E2E テスト。
  *
- * 申込 → 確認メール（mailpit）→ トークン抽出 → /api/signup/confirm → Account 作成 ＋ 登録トークン発行 →
+ * 申込 → 確認メール（受信口は Mailbox 抽象）→ トークン抽出 → /api/signup/confirm → Account 作成 ＋ 登録トークン発行 →
  * パスキー登録（/passkey/register）→ パスキー認証（/passkey/authenticate）→ 認可コード →
  * /token（PKCE）→ managed_orgs 検証。
  *
@@ -51,14 +50,13 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
   const expectedOrgCode = productionSiteHost.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
   let apiAccounts: APIRequestContext; // Host=accounts を付与した API コンテキスト
-  let mailpitCtx: APIRequestContext; // mailpit REST 用（http）
+  let mailbox: Mailbox; // 確認メールの受信口（既定は mailpit）
   let context: BrowserContext;
   let page: Page;
 
   let confirmToken: string;
   let registrationToken: string;
   let authorizationCode: string;
-  const messageIds: string[] = [];
 
   // PKCE。authenticate/verify で認可コードに challenge を束縛し、/token で verifier を提示する。
   const { codeVerifier, codeChallenge } = generatePkcePair();
@@ -68,7 +66,7 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
       ignoreHTTPSErrors: true,
       extraHTTPHeaders: { Host: accountsHost },
     });
-    mailpitCtx = await request.newContext();
+    mailbox = await createMailbox();
 
     context = await browser.newContext({ ignoreHTTPSErrors: true });
     await context.credentials.install();
@@ -101,10 +99,14 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
   });
 
   test.afterAll(async () => {
-    await deleteMessages(mailpitCtx, messageIds);
-    await apiAccounts?.dispose();
-    await mailpitCtx?.dispose();
-    await context?.close();
+    // 後始末は互いに独立させる。cleanup はネットワーク越しになりうるので、
+    // ここが投げると以降の dispose / close が丸ごとスキップされ、リソースが残る。
+    await Promise.allSettled([
+      mailbox?.cleanup(email),
+      apiAccounts?.dispose(),
+      context?.close(),
+    ]);
+    await mailbox?.dispose();
   });
 
   test('申込リクエスト（202 Accepted）', async () => {
@@ -128,11 +130,10 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
   test('確認メール受信 → トークン抽出 → confirm（200・登録トークン発行）', async () => {
     test.setTimeout(30000);
 
-    const message = await waitForMessage(mailpitCtx, email, { subjectIncludes: 'お申し込み確認' });
-    messageIds.push(message.ID);
-    expect(message.Subject).toContain('お申し込み確認');
+    const message = await mailbox.waitForMessage(email, { subjectIncludes: 'お申し込み確認' });
+    expect(message.subject).toContain('お申し込み確認');
 
-    confirmToken = extractToken(message.Text || message.HTML);
+    confirmToken = extractToken(message.text || message.html);
     expect(confirmToken.length).toBeGreaterThan(10);
 
     const response = await apiAccounts.post(`${baseUrl}/api/signup/confirm`, {

@@ -129,11 +129,16 @@ test.describe.serial('申込で作られた Client での B2B パスキーログ
   });
 
   test.afterAll(async () => {
-    await mailbox?.cleanup(email);
+    // 後始末は互いに独立させる。cleanup はデプロイ済み環境ではネットワーク越し
+    // （Cloudflare Worker）になるため、ここが投げると以降の dispose / close が
+    // 丸ごとスキップされ、CI ワーカーにリソースが残る。
+    await Promise.allSettled([
+      mailbox?.cleanup(email),
+      apiAccounts?.dispose(),
+      apiTenant?.dispose(),
+      context?.close(),
+    ]);
     await mailbox?.dispose();
-    await apiAccounts?.dispose();
-    await apiTenant?.dispose();
-    await context?.close();
   });
 
   test('申込 → 確認 → Account トークン取得', async () => {

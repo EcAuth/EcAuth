@@ -141,10 +141,9 @@ for (const variant of VARIANTS) {
     });
 
     test.afterAll(async () => {
-      await mailbox?.cleanup(email);
+      // 後始末は互いに独立させる（cleanup の失敗で dispose / close を落とさない）。
+      await Promise.allSettled([mailbox?.cleanup(email), apiAccounts?.dispose(), context?.close()]);
       await mailbox?.dispose();
-      await apiAccounts?.dispose();
-      await context?.close();
     });
 
     test('申込 → 確認 → Account トークン取得', async () => {

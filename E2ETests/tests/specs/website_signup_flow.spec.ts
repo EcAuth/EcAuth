@@ -1,6 +1,5 @@
-import { test, expect, BrowserContext, Page, APIRequestContext, request } from '@playwright/test';
-import { waitForMessage, deleteMessages } from '../helpers/mailpit';
-import { extractToken } from '../helpers/mailbox';
+import { test, expect, BrowserContext, Page } from '@playwright/test';
+import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
 
 /**
  * ecauth-website（ec-auth.io）のフロントを実バックエンドに通すフル結合 E2E。
@@ -49,17 +48,16 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
   const productionSiteHost = `web-${runSuffix}.example.com`;
   const expectedOrgCode = productionSiteHost.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
-  let mailpitCtx: APIRequestContext;
+  let mailbox: Mailbox;
   let context: BrowserContext;
   let page: Page;
 
   let confirmToken: string;
-  const messageIds: string[] = [];
 
   test.beforeAll(async ({ browser }) => {
     // 本 spec は全経路をブラウザ（フロント）から通すため、API 直叩き用のコンテキストは持たない。
-    // mailpit だけは REST でメール本文を読む必要がある。
-    mailpitCtx = await request.newContext();
+    // 確認メールの本文だけは受信口から読む必要がある。
+    mailbox = await createMailbox();
 
     context = await browser.newContext({ ignoreHTTPSErrors: true });
     await context.credentials.install();
@@ -94,9 +92,9 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
   });
 
   test.afterAll(async () => {
-    await deleteMessages(mailpitCtx, messageIds);
-    await mailpitCtx?.dispose();
-    await context?.close();
+    // 後始末は互いに独立させる（cleanup の失敗で dispose / close を落とさない）。
+    await Promise.allSettled([mailbox?.cleanup(email), context?.close()]);
+    await mailbox?.dispose();
   });
 
   test('申込フォーム（/signup/）から実 API に申し込め、確認メールの URL がフロントを指す', async () => {
@@ -115,11 +113,10 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     await expect(status).toHaveClass(/ok/, { timeout: 15000 });
     await expect(status).toContainText('確認メールを送信しました');
 
-    const message = await waitForMessage(mailpitCtx, email, { subjectIncludes: 'お申し込み確認' });
-    messageIds.push(message.ID);
+    const message = await mailbox.waitForMessage(email, { subjectIncludes: 'お申し込み確認' });
 
     // Signup:ConfirmBaseUrl がフロントに向いていること（バックエンド→フロントの URL 契約）。
-    const body = message.Text || message.HTML;
+    const body = message.text || message.html;
     expect(body).toContain(`${websiteBase}/signup/confirm?token=`);
 
     confirmToken = extractToken(body);
@@ -250,11 +247,10 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     await page.click('#submit-btn');
     await expect(page.locator('#status')).toHaveClass(/ok/, { timeout: 15000 });
 
-    const mail = await waitForMessage(mailpitCtx, email, { subjectIncludes: 'ログインリンク' });
-    messageIds.push(mail.ID);
+    const mail = await mailbox.waitForMessage(email, { subjectIncludes: 'ログインリンク' });
 
     // MagicLink:BaseUrl がフロントに向いていること。
-    const body = mail.Text || mail.HTML;
+    const body = mail.text || mail.html;
     expect(body).toContain(`${websiteBase}/signin/magic-link?token=`);
     const magicToken = extractToken(body);
 
