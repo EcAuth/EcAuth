@@ -187,6 +187,22 @@ jobs:
           GITHUB_USERNAME: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }}
 
+      # 入ったプラグインの出どころとバージョンを **成功時にも** 残す。
+      # install_source=package-api で回す目的は「オーナーズストアが実際に配布する版が
+      # 動くか」を確かめることなので、その版が何だったかが記録に残らないと目的を果たせない。
+      # 失敗時のログ回収（Collect logs on failure）だけでは、成功した run で捨ててしまう。
+      - name: Record installed plugin version
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### インストールされたプラグイン"
+            echo '```'
+            ./E2ETests/scripts/eccube-e2e.sh logs --no-log-prefix ec-cube4 2>/dev/null \
+              | grep -iE 'Installing EcAuthLogin43|already installed|ecauthlogin43 \(' \
+              || echo '(該当ログなし)'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Run EC-CUBE plugin E2E
         run: ./E2ETests/scripts/eccube-e2e.sh test tests/specs/eccube_plugin_signup_login.spec.ts --reporter=list
 
