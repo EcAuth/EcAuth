@@ -56,6 +56,7 @@ namespace IdentityProvider.Services
             var from = new EmailAddress(fromEmail, fromName);
             var to = new EmailAddress(toEmail);
             var message = MailHelper.CreateSingleEmail(from, to, content.Subject, content.PlainText, content.Html);
+            DisableTracking(message);
 
             var response = await client.SendEmailAsync(message, ct);
 
@@ -111,6 +112,7 @@ namespace IdentityProvider.Services
             var from = new EmailAddress(fromEmail, fromName);
             var to = new EmailAddress(toEmail);
             var message = MailHelper.CreateSingleEmail(from, to, content.Subject, content.PlainText, content.Html);
+            DisableTracking(message);
 
             var response = await client.SendEmailAsync(message, ct);
 
@@ -132,6 +134,33 @@ namespace IdentityProvider.Services
         /// ログ出力用にメールアドレスをマスクする。ローカル部の先頭 1 文字のみ残し、
         /// 残りを伏字にしたうえでドメインを保持する（例: <c>owner@example.com</c> → <c>o****@example.com</c>）。
         /// </summary>
+        /// <summary>
+        /// クリック / 開封トラッキングを明示的に無効化する。
+        /// <para>
+        /// このサービスが送るのは申込確認とマジックリンク、すなわち **認証トークンを含むメール**
+        /// だけである。SendGrid はアカウント既定でクリックトラッキングが有効なことが多く、
+        /// 有効だと本文中の URL が <c>https://&lt;id&gt;.ct.sendgrid.net/ls/click?upn=...</c> に
+        /// 書き換えられる。結果として:
+        /// </para>
+        /// <list type="bullet">
+        ///   <item>認証トークンが SendGrid のリダイレクタを経由し、クリックログに記録される</item>
+        ///   <item>受信者に見えるドメインが ec-auth.io ではなくなり、フィッシングと見分けにくくなる</item>
+        ///   <item>メールセキュリティ製品のリンク先読みがトークンを消費しうる</item>
+        /// </list>
+        /// <para>
+        /// トラッキングの利得（開封率・クリック率）はこの用途では不要なので、送信ごとに切る。
+        /// アカウント側の既定に依存しないよう、コードで明示する。
+        /// </para>
+        /// </summary>
+        private static void DisableTracking(SendGridMessage message)
+        {
+            message.TrackingSettings = new TrackingSettings
+            {
+                ClickTracking = new ClickTracking { Enable = false, EnableText = false },
+                OpenTracking = new OpenTracking { Enable = false },
+            };
+        }
+
         private static string MaskEmail(string? email)
         {
             if (string.IsNullOrWhiteSpace(email))
