@@ -1,5 +1,6 @@
 import { test, expect, BrowserContext, Page, APIRequestContext, request } from '@playwright/test';
-import { waitForMessage, extractToken, deleteMessages } from '../helpers/mailpit';
+import { waitForMessage, deleteMessages } from '../helpers/mailpit';
+import { extractToken } from '../helpers/mailbox';
 import { generatePkcePair } from '../helpers/pkce';
 
 /**

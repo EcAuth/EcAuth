@@ -1,6 +1,6 @@
 import { test, expect, APIRequestContext, BrowserContext, Page, request } from '@playwright/test';
 import { signupAndGetAccountToken, fetchSignupClient } from '../helpers/accounts';
-import { deleteMessages } from '../helpers/mailpit';
+import { createMailbox, Mailbox } from '../helpers/mailbox';
 import {
   EcCubeAdmin,
   eccube4Admin,
@@ -99,11 +99,9 @@ for (const variant of VARIANTS) {
     const email = `${expectedOrgCode}@e2e.ec-auth.io`;
 
     let apiAccounts: APIRequestContext;
-    let mailpitCtx: APIRequestContext;
+    let mailbox: Mailbox;
     let context: BrowserContext;
     let page: Page;
-
-    const messageIds: string[] = [];
 
     let accessToken: string;
     let clientId: string;
@@ -122,7 +120,7 @@ for (const variant of VARIANTS) {
         ignoreHTTPSErrors: true,
         extraHTTPHeaders: { Host: accountsHost },
       });
-      mailpitCtx = await request.newContext();
+      mailbox = await createMailbox();
 
       context = await browser.newContext({ ignoreHTTPSErrors: true });
       await context.credentials.install();
@@ -143,16 +141,16 @@ for (const variant of VARIANTS) {
     });
 
     test.afterAll(async () => {
-      await deleteMessages(mailpitCtx, messageIds);
+      await mailbox?.cleanup(email);
+      await mailbox?.dispose();
       await apiAccounts?.dispose();
-      await mailpitCtx?.dispose();
       await context?.close();
     });
 
     test('申込 → 確認 → Account トークン取得', async () => {
       test.setTimeout(120000);
 
-      const result = await signupAndGetAccountToken(apiAccounts, mailpitCtx, context, {
+      const result = await signupAndGetAccountToken(apiAccounts, mailbox, context, {
         baseUrl,
         accountsHost,
         accountsPageBaseUrl,
@@ -165,7 +163,6 @@ for (const variant of VARIANTS) {
       });
 
       accessToken = result.accessToken;
-      messageIds.push(result.messageId);
       expect(accessToken).toBeTruthy();
     });
 

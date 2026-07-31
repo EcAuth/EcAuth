@@ -1,5 +1,6 @@
 import { test, expect, APIRequestContext, request } from '@playwright/test';
-import { waitForMessage, deleteMessages, extractToken } from '../helpers/mailpit';
+import { waitForMessage, deleteMessages } from '../helpers/mailpit';
+import { extractToken } from '../helpers/mailbox';
 
 /**
  * マジックリンクログインの E2E テスト（mailpit ベース）。

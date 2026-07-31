@@ -262,10 +262,17 @@ ECCUBE_AUTHENTICATION_KEY=$(op read 'op://EcAuth/eccube4-ecauth-plugin/eccube_au
 申込フローの E2E は確認メールの本文からトークンを取り出す必要がある（トークンは本文にしか
 存在せず、DB には SHA-256 ハッシュしか残らない）。受信口は環境で変わる。
 
-| 環境 | 受信口 | 参照方法 |
+spec は受信口を直接触らず、`tests/helpers/mailbox.ts` の `Mailbox` 越しに読む。
+実装の選択は `E2E_MAILBOX_KIND`（既定 `mailpit`）。
+
+| 環境 | `E2E_MAILBOX_KIND` | 実装 |
 |---|---|---|
-| ローカル / CI | mailpit | `tests/helpers/mailpit.ts`（`MAILPIT_BASE_URL`、既定 `http://localhost:8025`） |
-| staging / production | Cloudflare Worker の E2E メールボックス | 下記（**未実装**。デプロイ後 E2E を組むときに吸収層を作る） |
+| ローカル / CI | `mailpit`（既定） | `tests/helpers/mailpit.ts`（`MAILPIT_BASE_URL`、既定 `http://localhost:8025`） |
+| production | `e2e-mailbox` | `tests/helpers/e2e-mailbox.ts`（`E2E_MAILBOX_BASE_URL` / `E2E_MAILBOX_API_TOKEN`） |
+
+後始末が「ID の配列」ではなく `cleanup(宛先)` なのは、Worker 側が宛先単位でしか削除
+できないため（1 メッセージ 1 キーで保存し ID を返さない）。mailpit 実装は全 spec で
+共有される単一インスタンスを壊さないよう、**自分が読んだ ID だけ**を覚えて消す。
 
 デプロイ済み環境は SendGrid 送信なので mailpit が使えない。代わりに
 `ecauth-infrastructure` が用意した受信口を使う（構成の詳細と設計上の制約は
@@ -283,11 +290,46 @@ ECCUBE_AUTHENTICATION_KEY=$(op read 'op://EcAuth/eccube4-ecauth-plugin/eccube_au
 呼び出し側の注意:
 
 - **Workers KV は結果整合**で、書き込みが読み出しに反映されるまで最大 1 分程度かかりうる。
-  mailpit 相当の短いポーリング間隔だと取りこぼすので、タイムアウトは余裕を持たせる。
+  そのため `e2e-mailbox` 実装の既定タイムアウトは 180 秒（mailpit は 20 秒）。
 - メッセージは 1 時間で自動失効するため、後始末の `DELETE` は必須ではない。
-- 本文のフィールド名が mailpit（`Text` / `HTML` / `Subject` / `ID`）と異なる。
-  spec からは直接触らず、`waitForMessage` / `extractToken` と同じインターフェースの
-  吸収層を挟むこと。
+- 本文のフィールド名が mailpit（`Text` / `HTML` / `Subject` / `ID`）と異なるが、
+  `Mailbox` が `{subject, text, html}` に正規化するので spec 側は意識しなくてよい。
+
+### 本番デプロイ後の申込スモーク
+
+`production.yml` の `verify` ジョブは、シード済み Client を使う
+`b2b_passkey_authentication.spec.ts` に加えて `signup_client_b2b_login.spec.ts` を
+**実本番に対して**回す。CI（`main.yml`）が守るのはコードの整合性だけで、
+「デプロイ済み環境の設定が実際の認証フローと噛み合っているか」は別物のため。
+
+| 項目 | 決め |
+|---|---|
+| 申込先テナント | `stg-accounts`。本物の顧客が入る `accounts` は汚さない |
+| `client_secret` | **必要**。`STG_ACCOUNTS_CLIENT_PUBLIC` が設定されていないので stg-accounts の管理コンソール Client は confidential。無いと「client_secretが正しくありません。」で落ちる |
+| テナント解決 | Host ヘッダの差し替えではなく実ホスト名（`E2E_TENANT_BASE_DOMAIN=ec-auth.io`）。Cloudflare 配下では SNI と Host の不一致を避ける必要があり、オリジンへの直アクセスも許可 IP で塞がれている（`environments/production/main.tf` の `cloudflare_ip_restrictions`） |
+| 疑似サイトのオリジン | `context.route` で stub。`.test` は公開解決されないため実体を持たせない |
+| EC-CUBE 実物版 | 入れない。イメージビルドで 10 分前後かかり、本番 DB に残る Organization も run あたり 2 倍になる。プラグインの実コードは CI 側で担保する |
+
+**staging には入れられない。** `AccountsOrganizationSeeder` は `ACCOUNTS_*` /
+`STG_ACCOUNTS_*` が未設定の環境では Organization を投入せず（Account 機能は本番のみ）、
+`environments/staging/main.tf` の `app_settings` にこれらは存在しない。
+つまり staging には申込 API 自体が無い。
+
+#### 残留データ
+
+このスモークは本番 DB に Organization / Client / B2BUser / パスキーを **1 run あたり 1 組**
+残す。クリーンアップコマンドは [EcAuth#487](https://github.com/EcAuth/EcAuth/issues/487) で未着手。
+それまでは run ごとの識別子（`e2e-{timestamp}-{rand}-test`）を手掛かりに手で消す。
+識別子は Playwright 出力の先頭 `[signup-smoke]` 行と、`verify` ジョブの Step Summary に出る。
+
+#### インフラ変更後の再検証
+
+`ecauth-infrastructure` の apply はアプリを再デプロイしないため、`app_settings` や DNS を
+変えても EcAuth 側では誰も検証しない。この空白を埋めるため、`terraform.yml` の
+`verify-staging` / `verify-production` ジョブが apply 成功後に
+`gh workflow run <staging|production>.yml -f action=verify-only -f dry_run=false` を撃つ。
+`verify-only` は migrate / build / deploy を skip して `verify` だけを回す入口。
+`production.yml` の `dry_run` は既定 `true` なので、明示的に `false` を渡さないと verify も skip される。
 
 ### マイグレーション設計ルール
 
