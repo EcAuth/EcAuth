@@ -58,6 +58,8 @@ export interface SignupClient {
   organizationCode: string;
   /** 申込時に登録された redirect_uri。プラグインが送る値と完全一致する必要がある */
   redirectUris: string[];
+  /** 申込時に登録された allowed_rp_ids。ブラウザの origin と一致していなければ登録・認証が通らない */
+  allowedRpIds: string[];
 }
 
 /**
@@ -202,6 +204,7 @@ export async function fetchSignupClient(
     client_id: string;
     organization_code: string;
     redirect_uris: string[];
+    allowed_rp_ids: string[];
   }>;
 
   const client = clients.find((c) => c.organization_code === organizationCode);
@@ -227,6 +230,7 @@ export async function fetchSignupClient(
     clientSecret: (await revealResponse.json()).client_secret as string,
     organizationCode: client.organization_code,
     redirectUris: client.redirect_uris,
+    allowedRpIds: client.allowed_rp_ids ?? [],
   };
 }
 
