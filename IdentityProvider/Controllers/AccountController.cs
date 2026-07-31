@@ -305,9 +305,13 @@ namespace IdentityProvider.Controllers
             }
 
             var result = new List<string>();
-            foreach (var raw in input)
+            for (var i = 0; i < input.Count; i++)
             {
-                var trimmed = raw?.Trim();
+                // 入力値そのものはエラーに載せない。redirect_uri は user:pass@ を含みうるので、
+                // 反映するとブラウザのエラーレポートやプロキシのログにパスワードが残る。
+                // 代わりに入力配列での位置（1 始まり）を返し、どの欄かは呼び出し側で分かるようにする。
+                var position = i + 1;
+                var trimmed = input[i]?.Trim();
                 if (string.IsNullOrEmpty(trimmed))
                 {
                     continue;
@@ -317,7 +321,7 @@ namespace IdentityProvider.Controllers
                 {
                     return (null, InvalidInput(
                         "invalid_redirect_uri",
-                        $"redirect_uri が長すぎます（{MaxRedirectUriLength} 文字以内）。",
+                        $"{position} 件目の redirect_uri が長すぎます（{MaxRedirectUriLength} 文字以内）。",
                         "redirect_uris"));
                 }
 
@@ -327,7 +331,7 @@ namespace IdentityProvider.Controllers
                 {
                     return (null, InvalidInput(
                         "invalid_redirect_uri",
-                        $"redirect_uri は https:// で始まる正しい URL を指定してください: {trimmed}",
+                        $"{position} 件目の redirect_uri は https:// で始まる正しい URL を指定してください。",
                         "redirect_uris"));
                 }
 
@@ -336,7 +340,7 @@ namespace IdentityProvider.Controllers
                 {
                     return (null, InvalidInput(
                         "invalid_redirect_uri",
-                        $"redirect_uri にフラグメント（#）は指定できません: {trimmed}",
+                        $"{position} 件目の redirect_uri にフラグメント（#）は指定できません。",
                         "redirect_uris"));
                 }
 
@@ -345,7 +349,7 @@ namespace IdentityProvider.Controllers
                 {
                     return (null, InvalidInput(
                         "invalid_redirect_uri",
-                        $"redirect_uri にユーザー情報（user:pass@）は指定できません: {trimmed}",
+                        $"{position} 件目の redirect_uri にユーザー情報（user:pass@）は指定できません。",
                         "redirect_uris"));
                 }
 
@@ -353,6 +357,16 @@ namespace IdentityProvider.Controllers
                     ? uri.IdnHost.ToLowerInvariant()
                     : $"{uri.IdnHost.ToLowerInvariant()}:{uri.Port}";
                 var normalized = $"https://{authority}{uri.PathAndQuery}";
+
+                // 保存されるのは正規化後の値。IDN の Punycode 化やパスのパーセントエンコードで
+                // 入力より伸びうるため、上限は正規化後にも当てる。
+                if (normalized.Length > MaxRedirectUriLength)
+                {
+                    return (null, InvalidInput(
+                        "invalid_redirect_uri",
+                        $"{position} 件目の redirect_uri が長すぎます（正規化後 {MaxRedirectUriLength} 文字以内）。",
+                        "redirect_uris"));
+                }
 
                 if (!result.Contains(normalized, StringComparer.Ordinal))
                 {
@@ -394,9 +408,12 @@ namespace IdentityProvider.Controllers
             }
 
             var result = new List<string>();
-            foreach (var raw in input)
+            for (var i = 0; i < input.Count; i++)
             {
-                var trimmed = raw?.Trim();
+                // redirect_uri 側と同じ理由で入力値は載せない（"user:pass@host" のような
+                // 資格情報を含む文字列もここに到達しうる）。位置だけを返す。
+                var position = i + 1;
+                var trimmed = input[i]?.Trim();
                 if (string.IsNullOrEmpty(trimmed))
                 {
                     continue;
@@ -407,7 +424,8 @@ namespace IdentityProvider.Controllers
                 {
                     return (null, InvalidInput(
                         "invalid_rp_id",
-                        $"RP ID はドメイン名だけを指定してください（スキーム・ポート・パス・IP アドレスは不可）: {trimmed}",
+                        $"{position} 件目の RP ID はドメイン名だけを指定してください"
+                            + "（スキーム・ポート・パス・IP アドレスは不可）。",
                         "allowed_rp_ids"));
                 }
 

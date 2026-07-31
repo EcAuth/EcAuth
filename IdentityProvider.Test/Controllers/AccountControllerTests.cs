@@ -327,6 +327,52 @@ namespace IdentityProvider.Test.Controllers
             Assert.Equal(new[] { "https://shop1.example.jp/ecauth/callback" }, await StoredRedirectUris(10));
         }
 
+        [Theory]
+        // userinfo は https でも http でも弾かれるが、通る分岐が違う（前者は userinfo チェック、
+        // 後者は scheme チェック）。どちらの経路でもパスワードがレスポンスに出ないこと。
+        [InlineData("https://alice:hunter2@shop1.example.jp/cb")]
+        [InlineData("http://alice:hunter2@shop1.example.jp/cb")]
+        public async Task UpdateRedirectUris_UserInfo_DoesNotEchoCredentials(string uri)
+        {
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret");
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.UpdateRedirectUris(10, new AccountController.RedirectUrisDto
+            {
+                RedirectUris = new List<string> { uri }
+            });
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            var description = (string)GetProp(unprocessable.Value!, "error_description");
+            // レスポンスはブラウザのエラーレポートやプロキシのログに残るため、入力値は載せない。
+            Assert.DoesNotContain("hunter2", description);
+            Assert.DoesNotContain("alice", description);
+            // どの入力欄かは位置で伝える
+            Assert.Contains("1 件目", description);
+        }
+
+        [Fact]
+        public async Task UpdateRedirectUris_TooLongAfterPunycode_Returns422()
+        {
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret");
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            // IDN は Punycode 化で伸びる。入力はちょうど上限（2048）に収まるが、
+            // ホストが xn-- 形式になることで保存値は上限を超える。
+            var prefix = "https://日本語商店.example.jp/";
+            var uri = prefix + new string('a', 2048 - prefix.Length);
+            Assert.Equal(2048, uri.Length);
+
+            var result = await _controller.UpdateRedirectUris(10, new AccountController.RedirectUrisDto
+            {
+                RedirectUris = new List<string> { uri }
+            });
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Contains("正規化後", (string)GetProp(unprocessable.Value!, "error_description"));
+            Assert.Empty(await StoredRedirectUris(10));
+        }
+
         [Fact]
         public async Task UpdateRedirectUris_EmptyList_Returns422()
         {
