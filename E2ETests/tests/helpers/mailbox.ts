@@ -79,3 +79,34 @@ export function extractToken(body: string, tokenParam: string = 'token'): string
   }
   return decodeURIComponent(match[1]);
 }
+
+/**
+ * メッセージからトークンを取り出す。プレーンテキスト → HTML の順に試す。
+ *
+ * どちらか一方を決め打ちできないのは、**配送経路によって生の URL が残る本文が変わる**ため。
+ * SendGrid はクリックトラッキングが有効だと、プレーンテキスト中の裸の URL と HTML の
+ * `<a href>` を `https://<id>.ct.sendgrid.net/ls/click?upn=...` に書き換える。
+ * EcAuth の申込確認メール（EmailTemplates.BuildSignupConfirmation）では、HTML の
+ * 「ボタンが動作しない場合は」の行だけがリンクではない生テキストなので書き換えを免れ、
+ * そこにしか `token=` が残らない。ローカルの mailpit は SMTP 直結で書き換えが無いため
+ * プレーンテキストで取れる。
+ */
+export function extractTokenFromMessage(
+  message: MailboxMessage,
+  tokenParam: string = 'token'
+): string {
+  for (const body of [message.text, message.html]) {
+    if (!body) {
+      continue;
+    }
+    try {
+      return extractToken(body, tokenParam);
+    } catch {
+      // この本文には無かった。次を試す。
+    }
+  }
+  throw new Error(
+    `メール本文（text / html いずれも）から ${tokenParam} を抽出できませんでした。` +
+      `件名: ${message.subject}`
+  );
+}

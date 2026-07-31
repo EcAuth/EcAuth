@@ -1,5 +1,5 @@
 import { test, expect, APIRequestContext, request } from '@playwright/test';
-import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
+import { createMailbox, extractTokenFromMessage, Mailbox } from '../helpers/mailbox';
 
 /**
  * マジックリンクログインの E2E テスト。
@@ -54,7 +54,7 @@ test.describe.serial('マジックリンクログインの E2E テスト', () =>
     expect(signupRes.status()).toBe(202);
 
     const confirmMail = await mailbox.waitForMessage(email, { subjectIncludes: signupSubject });
-    const confirmToken = extractToken(confirmMail.text || confirmMail.html);
+    const confirmToken = extractTokenFromMessage(confirmMail);
 
     const confirmRes = await apiAccounts.post(`${baseUrl}/api/signup/confirm`, {
       data: { token: confirmToken },
@@ -78,7 +78,7 @@ test.describe.serial('マジックリンクログインの E2E テスト', () =>
     expect(reqRes.status()).toBe(200);
 
     const mail = await mailbox.waitForMessage(email, { subjectIncludes: magicLinkSubject });
-    magicToken = extractToken(mail.text || mail.html);
+    magicToken = extractTokenFromMessage(mail);
     expect(magicToken.length).toBeGreaterThan(10);
 
     const verifyRes = await apiAccounts.post(`${baseUrl}/api/account/magic-link/verify`, {

@@ -1,5 +1,5 @@
 import { expect, APIRequestContext, BrowserContext, Page } from '@playwright/test';
-import { extractToken, Mailbox } from './mailbox';
+import { extractTokenFromMessage, Mailbox } from './mailbox';
 import { generatePkcePair } from './pkce';
 
 /**
@@ -104,7 +104,7 @@ export async function signupAndGetAccountToken(
 
   // --- 確認メール → confirm ---
   const message = await mailbox.waitForMessage(options.email, { subjectIncludes: 'お申し込み確認' });
-  const confirmToken = extractToken(message.text || message.html);
+  const confirmToken = extractTokenFromMessage(message);
 
   const confirmResponse = await api.post(`${options.baseUrl}/api/signup/confirm`, {
     data: { token: confirmToken },

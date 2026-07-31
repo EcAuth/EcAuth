@@ -1,5 +1,5 @@
 import { test, expect, BrowserContext, Page, APIRequestContext, request } from '@playwright/test';
-import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
+import { createMailbox, extractTokenFromMessage, Mailbox } from '../helpers/mailbox';
 import { generatePkcePair } from '../helpers/pkce';
 
 /**
@@ -133,7 +133,7 @@ test.describe.serial('Account 申込フローの E2E テスト', () => {
     const message = await mailbox.waitForMessage(email, { subjectIncludes: 'お申し込み確認' });
     expect(message.subject).toContain('お申し込み確認');
 
-    confirmToken = extractToken(message.text || message.html);
+    confirmToken = extractTokenFromMessage(message);
     expect(confirmToken.length).toBeGreaterThan(10);
 
     const response = await apiAccounts.post(`${baseUrl}/api/signup/confirm`, {
