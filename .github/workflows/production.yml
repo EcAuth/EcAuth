@@ -11,6 +11,10 @@ on:
           - migrate-and-deploy
           - deploy-only
           - migrate-only
+          # デプロイせず verify だけを回す。ecauth-infrastructure の apply 後（アプリを
+          # 再デプロイしないが app_settings や DNS は変わる）に、外から叩くための入口。
+          # dry_run は既定 true なので、verify を動かすには dry_run=false を明示すること。
+          - verify-only
         default: 'migrate-and-deploy'
       dry_run:
         description: 'Dry run (generate migration script only, skip deploy and verify)'
@@ -307,10 +311,13 @@ jobs:
 
   verify:
     needs: deploy
+    # verify-only のときは deploy が skipped になる。デプロイ直後の検証と、
+    # インフラ変更後の検証（アプリは変わらないが設定は変わる）を同じジョブで賄う。
     if: |
       always() &&
-      needs.deploy.result == 'success' &&
-      inputs.dry_run != true
+      inputs.dry_run != true &&
+      (needs.deploy.result == 'success' ||
+       (inputs.action == 'verify-only' && needs.deploy.result == 'skipped'))
     runs-on: ubuntu-latest
     environment:
       name: production
@@ -341,6 +348,15 @@ jobs:
           B2B_USER_SUBJECT: op://EcAuth/ecauth-prod-app/b2b_user_subject
           B2B_REDIRECT_URI: op://EcAuth/ecauth-prod-app/b2b_redirect_uri
           WEB_APP_SUFFIX: op://EcAuth/ecauth-prod-app/web_app_suffix
+          # 申込スモーク（stg-accounts テナント）。本物の顧客が入る accounts テナントは使わない。
+          # stg-accounts の管理コンソール Client は confidential（STG_ACCOUNTS_CLIENT_PUBLIC が
+          # 設定されていない）ため、PKCE に加えて client_secret も要る。
+          STG_ACCOUNTS_CLIENT_ID: op://EcAuth/ecauth-prod-app/stg_accounts_client_id
+          STG_ACCOUNTS_CLIENT_SECRET: op://EcAuth/ecauth-prod-app/stg_accounts_client_secret
+          STG_ACCOUNTS_REDIRECT_URI: op://EcAuth/ecauth-prod-app/stg_accounts_redirect_uri
+          # 確認メールの受信口（SendGrid Inbound Parse → Cloudflare Worker）。
+          # 詳細は ecauth-infrastructure の CLAUDE.md「E2E 用メールボックス」。
+          E2E_MAILBOX_TOKEN: op://EcAuth/ecauth-e2e-mailbox/api_token
 
       - name: Federation authentication verification
         id: federation_verify
@@ -388,6 +404,34 @@ jobs:
           set -o pipefail
           pnpm exec playwright test tests/specs/b2b_passkey_authentication.spec.ts --reporter=list 2>&1 | tee playwright-output.txt
 
+      # 申込 → client-resolve → B2B パスキー登録/認証 → トークン交換 を、実環境の設定で通す。
+      # シード済み Client を使う b2b_passkey_authentication では守れない範囲を埋める:
+      #   - 申込が登録する redirect_uri / allowed_rp_ids の初期値（EcAuth#481 の再発防止）
+      #   - PlatformApi:BaseDomain とテナント解決が本番のホスト名で噛み合うこと
+      #   - SendGrid 送信 → Inbound Parse → Worker の受信口が生きていること
+      # EC-CUBE プラグイン実物を通す版は CI（main.yml）が担当する。イメージビルドで
+      # 10 分前後かかるうえ、本番 DB に残る Organization が run あたり 2 倍になるため。
+      #
+      # 前段が落ちても切り分けられるよう、B2B verify の結果に関わらず実行する。
+      - name: Signup smoke (申込 Client でのパスキーログイン)
+        id: signup_smoke
+        if: ${{ !cancelled() }}
+        working-directory: E2ETests
+        env:
+          # 実ホスト名でテナントを解決する（Cloudflare 配下では Host ヘッダ差し替えが使えない）。
+          E2E_TENANT_BASE_DOMAIN: ec-auth.io
+          # 申込は stg-accounts テナントで行う。本物の顧客が入る accounts は使わない。
+          E2E_ACCOUNTS_HOST: stg-accounts.ec-auth.io
+          ACCOUNTS_CLIENT_ID: ${{ env.STG_ACCOUNTS_CLIENT_ID }}
+          ACCOUNTS_CLIENT_SECRET: ${{ env.STG_ACCOUNTS_CLIENT_SECRET }}
+          ACCOUNTS_REDIRECT_URI: ${{ env.STG_ACCOUNTS_REDIRECT_URI }}
+          # 受信口を mailpit から E2E 用メールボックスへ切り替える。
+          E2E_MAILBOX_KIND: e2e-mailbox
+          E2E_MAILBOX_API_TOKEN: ${{ env.E2E_MAILBOX_TOKEN }}
+        run: |
+          set -o pipefail
+          pnpm exec playwright test tests/specs/signup_client_b2b_login.spec.ts --reporter=list 2>&1 | tee signup-smoke-output.txt
+
       - name: Upload E2E test results
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -412,4 +456,27 @@ jobs:
             echo ""
             echo "--- Playwright Output ---"
             cat E2ETests/playwright-output.txt
+          fi
+
+      - name: Signup smoke result
+        if: always()
+        env:
+          SMOKE_OUTCOME: ${{ steps.signup_smoke.outcome }}
+        run: |
+          echo "### Signup Smoke (申込 Client でのパスキーログイン)" >> $GITHUB_STEP_SUMMARY
+          case "$SMOKE_OUTCOME" in
+            success) echo "✅ Signup smoke passed" | tee -a $GITHUB_STEP_SUMMARY ;;
+            skipped) echo "⏭️ Signup smoke skipped" | tee -a $GITHUB_STEP_SUMMARY ;;
+            *)       echo "❌ Signup smoke failed" | tee -a $GITHUB_STEP_SUMMARY ;;
+          esac
+          if [ -f E2ETests/signup-smoke-output.txt ]; then
+            # 出力冒頭の [signup-smoke] 行に org_code / email が出る。
+            # 本番 DB に残った E2E データを後から特定するときの手掛かりになる。
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat E2ETests/signup-smoke-output.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "--- Signup Smoke Output ---"
+            cat E2ETests/signup-smoke-output.txt
           fi

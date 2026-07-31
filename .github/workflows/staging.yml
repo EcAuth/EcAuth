@@ -14,6 +14,9 @@ on:
           - migrate-and-deploy
           - deploy-only
           - migrate-only
+          # デプロイせず verify だけを回す。ecauth-infrastructure の apply 後（アプリを
+          # 再デプロイしないが app_settings は変わる）に、外から叩くための入口。
+          - verify-only
         default: 'migrate-and-deploy'
       dry_run:
         description: 'Dry run (generate migration script only, skip deploy and verify)'
@@ -275,11 +278,17 @@ jobs:
 
   verify:
     needs: deploy
-    # push イベント時は inputs.dry_run が undefined になるため || false でフォールバック
+    # push イベント時は inputs.dry_run が undefined になるため || false でフォールバック。
+    # verify-only のときは deploy が skipped になる（インフラ変更後の再検証用）。
+    #
+    # なお staging には申込スモークを入れていない。AccountsOrganizationSeeder が
+    # ACCOUNTS_* / STG_ACCOUNTS_* 未設定の環境では Org を投入せず（Account 機能は本番のみ）、
+    # staging の app_settings にはこれらが無いため、申込 API 自体が存在しない。
     if: |
       always() &&
-      needs.deploy.result == 'success' &&
-      (inputs.dry_run || false) != true
+      (inputs.dry_run || false) != true &&
+      (needs.deploy.result == 'success' ||
+       (inputs.action == 'verify-only' && needs.deploy.result == 'skipped'))
     runs-on: ubuntu-latest
     environment:
       name: staging

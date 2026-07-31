@@ -1,7 +1,11 @@
-import { APIRequestContext } from '@playwright/test';
+import { APIRequestContext, request } from '@playwright/test';
+import type { Mailbox, MailboxMessage, WaitForMessageOptions } from './mailbox';
 
 /**
- * mailpit REST API のラッパ。
+ * mailpit REST API のラッパ（{@link Mailbox} の mailpit 実装）。
+ *
+ * 公開するのは createMailpitMailbox だけ。spec からは helpers/mailbox.ts の
+ * createMailbox() 越しに使い、受信口の違いを spec に持ち込まない。
  *
  * Account 申込・マジックリンクの確認/ログイントークンは「メール本文にしか存在しない」
  * （DB には SHA-256 ハッシュのみ保存）。E2E でフローを完走するため、mailpit が受信した
@@ -15,7 +19,7 @@ import { APIRequestContext } from '@playwright/test';
  */
 const MAILPIT_BASE = process.env.MAILPIT_BASE_URL || 'http://localhost:8025';
 
-export interface MailpitMessage {
+interface MailpitMessage {
   ID: string;
   /** プレーンテキスト本文 */
   Text: string;
@@ -34,7 +38,7 @@ export interface MailpitMessage {
  * @param opts.timeoutMs 最大待機時間（既定 20000ms）
  * @param opts.intervalMs ポーリング間隔（既定 500ms）
  */
-export async function waitForMessage(
+async function waitForMessage(
   request: APIRequestContext,
   toEmail: string,
   opts: { subjectIncludes?: string; timeoutMs?: number; intervalMs?: number } = {}
@@ -74,7 +78,7 @@ export async function waitForMessage(
  * 指定した ID のメッセージを削除する（テスト後の後始末）。
  * 他 spec のメールを消さないよう、必ず処理済みの ID のみを渡すこと。
  */
-export async function deleteMessages(request: APIRequestContext, ids: string[]): Promise<void> {
+async function deleteMessages(request: APIRequestContext, ids: string[]): Promise<void> {
   if (ids.length === 0) {
     return;
   }
@@ -84,15 +88,37 @@ export async function deleteMessages(request: APIRequestContext, ids: string[]):
 }
 
 /**
- * メール本文（プレーンテキスト推奨）から `token=...` クエリの値を抽出して URL デコードする。
- * 確認 URL（/signup/confirm?token=...）とマジックリンク URL（/signin/magic-link?token=...）の
- * どちらにも対応する。
+ * mailpit を {@link Mailbox} として使えるようにする。
+ *
+ * cleanup が宛先単位のインターフェースなのに ID 指定で消しているのは、mailpit が
+ * 全 spec で共有される単一インスタンスだから。宛先で一括削除する API に寄せると、
+ * 並列実行中の他 spec のメールまで巻き込みかねない。**自分が読んだ ID だけ**を
+ * 覚えておいて消す（このモジュール冒頭の注意書きと同じ理由）。
  */
-export function extractToken(body: string, tokenParam: string = 'token'): string {
-  // URL-safe な base64（英数字 + - _ . ~ %）を貪欲に拾い、区切り文字（引用符・空白・タグ・& 等）で止める。
-  const match = body.match(new RegExp(`[?&]${tokenParam}=([^"'&\\s<>\\)]+)`));
-  if (!match) {
-    throw new Error(`メール本文から ${tokenParam} を抽出できませんでした。`);
-  }
-  return decodeURIComponent(match[1]);
+export async function createMailpitMailbox(): Promise<Mailbox> {
+  const ctx = await request.newContext();
+  const seenIds = new Map<string, Set<string>>();
+
+  return {
+    kind: 'mailpit',
+
+    async waitForMessage(toEmail: string, opts: WaitForMessageOptions = {}): Promise<MailboxMessage> {
+      const message = await waitForMessage(ctx, toEmail, opts);
+
+      const ids = seenIds.get(toEmail) ?? new Set<string>();
+      ids.add(message.ID);
+      seenIds.set(toEmail, ids);
+
+      return { subject: message.Subject, text: message.Text, html: message.HTML };
+    },
+
+    async cleanup(toEmail: string): Promise<void> {
+      await deleteMessages(ctx, [...(seenIds.get(toEmail) ?? [])]);
+      seenIds.delete(toEmail);
+    },
+
+    async dispose(): Promise<void> {
+      await ctx.dispose();
+    },
+  };
 }
