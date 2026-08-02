@@ -15,6 +15,7 @@ import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
  *     → /mypage/ から PKCE で認可開始 → accounts で実パスキー認証 → 認可コード
  *     → /auth/callback が /v1/token でトークン交換（public client・PKCE）
  *     → /v1/account/clients で Client 一覧、secret の reveal / 再生成
+ *     → マイページの編集 UI から redirect_uri / allowed_rp_ids を実 API で全置換
  *     → リカバリ（マジックリンク）でも同じマイページに着地する
  *
  * 前提（CI では playwright.yml が用意する）:
@@ -232,6 +233,116 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     const regenerated = (await secretRow.locator('code').textContent())?.trim() ?? '';
     expect(regenerated.length).toBeGreaterThan(10);
     expect(regenerated).not.toBe(revealed);
+  });
+
+  /**
+   * マイページの Client 設定セクション（ecauth-website の mypage.js が data-section で出す）。
+   */
+  function settingsSection(key: 'redirect_uris' | 'allowed_rp_ids') {
+    return page
+      .locator('.client-item')
+      .filter({ hasText: expectedOrgCode })
+      .locator(`.ci-settings[data-section="${key}"]`);
+  }
+
+  /**
+   * 編集 UI（EcAuth/ecauth-website#19）を含まない ref を配信している場合に、そのケースだけ
+   * 明示理由付きでスキップする。CI は既定で ecauth-website のデフォルトブランチを checkout
+   * するため、website 側が未マージの間はセクションごと存在しない。
+   */
+  async function skipUnlessSettingsUi() {
+    const present = await settingsSection('redirect_uris').count();
+    test.skip(
+      present === 0,
+      'ecauth-website の ref に Client 設定の編集 UI がありません（EcAuth/ecauth-website#19 未マージ）。'
+        + ' workflow_dispatch の website_ref に該当ブランチを指定すると検証できます。'
+    );
+  }
+
+  /** 畳まれていれば開いて返す（reload すると details は閉じた状態に戻る）。 */
+  async function openSettings(key: 'redirect_uris' | 'allowed_rp_ids') {
+    const section = settingsSection(key);
+    await expect(section).toHaveCount(1, { timeout: 15000 });
+    if (!(await section.locator('.row-list').isVisible())) {
+      await section.locator('summary').click();
+    }
+    await expect(section.locator('.row-list')).toBeVisible();
+    return section;
+  }
+
+  /** 設定セクションの入力欄の値を表示順に取り出す。 */
+  function inputValuesOf(section: ReturnType<typeof settingsSection>): Promise<string[]> {
+    return section.locator('.row-input').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value));
+  }
+
+  test('マイページの編集 UI から redirect_uri を追加でき、実 API 側に残る', async () => {
+    test.setTimeout(45000);
+    await skipUnlessSettingsUi();
+
+    const section = await openSettings('redirect_uris');
+
+    // 申込が作る初期値は EC-CUBE 4 系のコールバック URL。プラグインが authenticate/verify に
+    // 送る値と一致していることを、API 直叩きではなく画面越しに確認する。
+    expect(await inputValuesOf(section)).toEqual([`https://${productionSiteHost}/ecauth/callback`]);
+
+    const added = `https://${productionSiteHost}/shop/ecauth/callback`;
+    await section.locator('.row-add').click();
+    await section.locator('.row-input').nth(1).fill(added);
+    await section.getByRole('button', { name: '保存' }).click();
+
+    await expect(section.locator('[data-status="section"]')).toHaveClass(/ok/, { timeout: 15000 });
+    await expect(section.locator('.ci-count')).toHaveText('2 件');
+
+    // 画面の状態ではなく、取り直した一覧で永続化を確認する。
+    await page.reload();
+    const reloaded = await openSettings('redirect_uris');
+    // redirect_uri の取得に ORDER BY は無いため、順序ではなく集合で比較する。
+    expect((await inputValuesOf(reloaded)).slice().sort()).toEqual(
+      [`https://${productionSiteHost}/ecauth/callback`, added].sort()
+    );
+  });
+
+  test('RP ID の編集は確認ダイアログを経て保存され、サーバ側で正規化される', async () => {
+    test.setTimeout(45000);
+    await skipUnlessSettingsUi();
+
+    const section = await openSettings('allowed_rp_ids');
+    expect(await inputValuesOf(section)).toEqual([productionSiteHost]);
+
+    // 大文字で入れてもサーバが小文字（Punycode）に正規化して返す。
+    page.once('dialog', (dialog) => dialog.accept());
+    await section.locator('.row-input').nth(0).fill(productionSiteHost.toUpperCase());
+    await section.getByRole('button', { name: '保存' }).click();
+
+    await expect(section.locator('[data-status="section"]')).toHaveClass(/ok/, { timeout: 15000 });
+    expect(await inputValuesOf(section)).toEqual([productionSiteHost]);
+
+    await page.reload();
+    const reloaded = await openSettings('allowed_rp_ids');
+    expect(await inputValuesOf(reloaded)).toEqual([productionSiteHost]);
+  });
+
+  test('実 API の 422 が入力値を含まない理由付きでフロントに表示される', async () => {
+    test.setTimeout(45000);
+    await skipUnlessSettingsUi();
+
+    const section = await openSettings('redirect_uris');
+
+    // https 必須。サーバは入力値をエラーに載せず「N 件目」という位置だけを返す
+    // （redirect_uri は user:pass@ を含みうるため）。フロントの行番号と対応することまで見る。
+    await section.locator('.row-input').nth(0).fill(`http://${productionSiteHost}/ecauth/callback`);
+    await section.getByRole('button', { name: '保存' }).click();
+
+    const status = section.locator('[data-status="section"]');
+    await expect(status).toHaveClass(/err/, { timeout: 15000 });
+    await expect(status).toContainText('1 件目');
+    await expect(status).toContainText('https://');
+    // 入力値そのものは反映されない（ログ・エラーレポートに資格情報を残さないため）。
+    await expect(status).not.toContainText(productionSiteHost);
+
+    // 失敗しても入力は保持され、直して再送できる状態のままであること。
+    expect(await inputValuesOf(section)).toContain(`http://${productionSiteHost}/ecauth/callback`);
+    await section.getByRole('button', { name: '取り消し' }).click();
   });
 
   test('リカバリ: /signin/ からマジックリンクを要求し、マイページに着地する', async () => {
