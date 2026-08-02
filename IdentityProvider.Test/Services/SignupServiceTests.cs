@@ -341,6 +341,77 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(422, ex.StatusCode);
         }
 
+        /// <summary>
+        /// ドメインの占有判定は接尾辞を除いた導出コードで行う。site.Code をそのまま比較すると、
+        /// サンドボックス側だけコードが変わったせいで「登録済みドメインを拒否する」保証が
+        /// 失われ、他人のドメインを自分のテストサイトとして登録できてしまう。
+        /// </summary>
+        [Theory]
+        // 旧規則（接尾辞なし）で登録済みのサンドボックス Org。移行しないので必ず残る。
+        [InlineData("stg-example-jp", true)]
+        // 本番として登録済みのドメイン。別アカウントがテストサイトとして横取りできてはいけない。
+        [InlineData("stg-example-jp", false)]
+        // 新規則で登録済みのサンドボックス Org。
+        [InlineData("stg-example-jp-sandbox", true)]
+        public async Task RequestAsync_TestSiteDomainAlreadyTaken_ThrowsOrganizationAlreadyExists(
+            string existingCode, bool existingIsSandbox)
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            context.Organizations.Add(new Organization
+            {
+                Id = 2,
+                Code = existingCode,
+                Name = "Existing",
+                TenantName = existingCode,
+                IsSandbox = existingIsSandbox
+            });
+            await context.SaveChangesAsync();
+
+            var service = CreateService(context, tenantService, out _, out _);
+
+            // 別アカウントが同じドメインをテストサイトとして申し込む。
+            var input = ValidInput() with
+            {
+                Email = "another@example.com",
+                ProductionSiteUrl = null,
+                TestSiteUrl = "https://stg.example.jp"
+            };
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
+            Assert.Equal("organization_already_exists", ex.Error);
+            Assert.Equal("test_site_url", ex.Field);
+            Assert.False(await context.SignupRequests.IgnoreQueryFilters().AnyAsync());
+        }
+
+        [Fact]
+        public async Task RequestAsync_ProductionDomainAlreadyTakenBySandbox_ThrowsOrganizationAlreadyExists()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            // 逆方向: 旧規則のサンドボックス Org が居るドメインを本番として申し込む。
+            context.Organizations.Add(new Organization
+            {
+                Id = 2,
+                Code = "stg-example-jp",
+                Name = "Existing sandbox",
+                TenantName = "stg-example-jp",
+                IsSandbox = true
+            });
+            await context.SaveChangesAsync();
+
+            var service = CreateService(context, tenantService, out _, out _);
+            var input = ValidInput() with
+            {
+                Email = "another@example.com",
+                ProductionSiteUrl = "https://stg.example.jp"
+            };
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
+            Assert.Equal("organization_already_exists", ex.Error);
+            Assert.Equal("production_site_url", ex.Field);
+        }
+
         [Theory]
         // www. の有無だけが違うドメイン（導出後は同じ shop-example-jp になる）
         [InlineData("https://shop.example.jp", "https://www.shop.example.jp")]

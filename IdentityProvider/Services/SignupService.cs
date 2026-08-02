@@ -526,11 +526,23 @@ namespace IdentityProvider.Services
                 }
             }
 
+            // ドメインの占有は「接尾辞を除いた導出コード」で判定する。site.Code をそのまま
+            // 比較すると、サンドボックス側だけコードが変わったせいで
+            //   - 旧規則（接尾辞なし）で登録済みのサンドボックス Org
+            //   - 本番として登録済みのドメイン
+            // を、別アカウントがテストサイトとして再登録できてしまう。
+            //
+            // 同一申込内での本番＋サンドボックス併存はこれでも壊れない。Organization の作成は
+            // このチェックより後（トランザクション内）で行うため、ペアの相方はまだ DB に無いため。
+            // 申込内の衝突判定は上の seenCodes が接尾辞込みのコードで行っており、そちらは併存を許す。
             foreach (var site in sites.Sites)
             {
+                var baseCode = DeriveOrganizationCode(site.Host, isSandbox: false);
+                var sandboxCode = baseCode + SandboxCodeSuffix;
+
                 var exists = await _context.Organizations
                     .IgnoreQueryFilters()
-                    .AnyAsync(o => o.Code == site.Code, ct);
+                    .AnyAsync(o => o.Code == baseCode || o.Code == sandboxCode, ct);
 
                 if (exists)
                 {
