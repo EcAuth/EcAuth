@@ -178,6 +178,9 @@ for (const variant of VARIANTS) {
       // プラグインは redirect_uri を自分で組み立てて送るため、テスト側が値を渡す余地が無く、
       // 一致しているかどうかは後段のパスキーログインが通るかどうかで現れる。
       expect(client.redirectUris).toContain(`${shopBaseUrl}${variant.callbackPath}`);
+      // rp_id も同じ理由で突き合わせる。プラグインはリクエストのホストから rp_id を作るため、
+      // 申込が登録した allowed_rp_ids に店舗のホストが含まれていなければ登録・認証が弾かれる。
+      expect(client.allowedRpIds).toContain(shopHost);
     });
 
     test('プラグイン設定に client_id / client_secret だけを入力して保存する', async () => {

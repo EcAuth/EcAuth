@@ -78,7 +78,9 @@ test.describe.serial('申込で作られた Client での B2B パスキーログ
   // 申込で発行され、API 経由で取得する値。テスト側では一切組み立てない。
   let clientId: string;
   let clientSecret: string;
+  let clientDbId: number;
   let registeredRedirectUri: string;
+  let registeredRpId: string;
 
   const b2bSubject = randomUUID();
   const externalId = `e2e-admin-${runSuffix}`;
@@ -166,6 +168,7 @@ test.describe.serial('申込で作られた Client での B2B パスキーログ
   test('マイページと同じ経路で client_id / client_secret を取得する', async () => {
     const client = await fetchSignupClient(apiAccounts, accountsApiBaseUrl, accessToken, expectedOrgCode);
 
+    clientDbId = client.id;
     clientId = client.clientId;
     clientSecret = client.clientSecret;
     expect(clientSecret).toBeTruthy();
@@ -178,7 +181,13 @@ test.describe.serial('申込で作られた Client での B2B パスキーログ
     // 暫定のトップ URL は登録しない（余分な許可を残さない）。
     expect(client.redirectUris).not.toContain(`https://${siteHost}:8081/`);
 
+    // rp_id 側も同じ突き合わせを行う。ブラウザが動く origin（= siteHost）が
+    // allowed_rp_ids に無ければ、options の時点でサーバーに弾かれる。
+    // 申込 URL は www 無しなので、登録されるのはこの 1 件だけ（www 付きなら除去版も入る）。
+    expect(client.allowedRpIds).toEqual([siteHost]);
+
     registeredRedirectUri = client.redirectUris.find((u) => u.endsWith('/ecauth/callback'))!;
+    registeredRpId = client.allowedRpIds[0];
   });
 
   test('サイトのオリジンでパスキーを登録する', async () => {
@@ -192,9 +201,10 @@ test.describe.serial('申込で作られた Client での B2B パスキーログ
     const result = await registerB2BPasskey({ api: apiTenant, apiBaseUrl: tenantApiBaseUrl, page: sitePage }, {
       clientId,
       clientSecret,
-      // rp_id もテスト側で組み立てず、申込サイトのホストをそのまま使う。
-      // allowed_rp_ids に含まれていなければサーバー側で弾かれる。
-      rpId: siteHost,
+      // rp_id もテスト側で組み立てず、API から取得した登録済みの値をそのまま使う。
+      // ブラウザは https://{siteHost} で開いているので、登録値がそことズレていれば
+      // WebAuthn の origin 検証で落ちる。
+      rpId: registeredRpId,
       b2bSubject,
       externalId,
       displayName: 'E2E Admin',
@@ -211,8 +221,8 @@ test.describe.serial('申込で作られた Client での B2B パスキーログ
     const state = `e2e-b2b-${runSuffix}`;
     const result = await authenticateB2BPasskey({ api: apiTenant, apiBaseUrl: tenantApiBaseUrl, page: sitePage }, {
       clientId,
-      rpId: siteHost,
-      // API から取得した登録済みの値をそのまま使う。組み立てない。
+      // redirect_uri / rp_id とも API から取得した登録済みの値をそのまま使う。組み立てない。
+      rpId: registeredRpId,
       redirectUri: registeredRedirectUri,
       b2bSubject,
       state,
@@ -252,5 +262,52 @@ test.describe.serial('申込で作られた Client での B2B パスキーログ
 
     const idPayload = JSON.parse(Buffer.from(body.id_token.split('.')[1], 'base64url').toString());
     expect(idPayload.sub).toBe(b2bSubject);
+  });
+
+  /**
+   * 申込の初期値が実利用と合わなかった場合（EcAuth#481 が起きた状況）に、顧客がマイページから
+   * 自分で直せることを検証する。ここが無いと復旧手段がサポート経由の DB 直接操作しかない。
+   */
+  test('マイページから redirect_uri / allowed_rp_ids を更新でき、更新後の値で認証が通る', async () => {
+    test.setTimeout(60000);
+
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    // サブディレクトリへ移設した想定の新しいコールバック URL。
+    const updatedRedirectUri = `https://${siteHost}:8081/shop/ecauth/callback`;
+
+    const uriResponse = await apiAccounts.post(
+      `${accountsApiBaseUrl}/v1/account/clients/${clientDbId}/redirect-uris`,
+      { headers, data: { redirect_uris: [updatedRedirectUri] } }
+    );
+    expect(uriResponse.status(), await uriResponse.text()).toBe(200);
+    expect((await uriResponse.json()).redirect_uris).toEqual([updatedRedirectUri]);
+
+    // rp_id は登録済みパスキーが束縛されているので消さず、www 付きを足すだけにする。
+    const rpIdResponse = await apiAccounts.post(
+      `${accountsApiBaseUrl}/v1/account/clients/${clientDbId}/allowed-rp-ids`,
+      { headers, data: { allowed_rp_ids: [registeredRpId, `www.${registeredRpId}`] } }
+    );
+    expect(rpIdResponse.status(), await rpIdResponse.text()).toBe(200);
+
+    // マイページを開き直したときに見える値としても反映されていること。
+    const refreshed = await fetchSignupClient(apiAccounts, accountsApiBaseUrl, accessToken, expectedOrgCode);
+    expect(refreshed.redirectUris).toEqual([updatedRedirectUri]);
+    expect(refreshed.allowedRpIds).toEqual([registeredRpId, `www.${registeredRpId}`]);
+
+    // 更新後の redirect_uri で認証が通る = 完全一致検証が新しい値を見ている。
+    // 逆に旧値はもう通らない（全置換なので許可リストから消えている）。
+    const state = `e2e-b2b-updated-${runSuffix}`;
+    const result = await authenticateB2BPasskey({ api: apiTenant, apiBaseUrl: tenantApiBaseUrl, page: sitePage }, {
+      clientId,
+      rpId: registeredRpId,
+      redirectUri: updatedRedirectUri,
+      b2bSubject,
+      state,
+      codeChallenge,
+    });
+
+    const redirectUrl = new URL(result.redirect_url);
+    expect(`${redirectUrl.origin}${redirectUrl.pathname}`).toBe(updatedRedirectUri);
+    expect(redirectUrl.searchParams.get('code')).toBeTruthy();
   });
 });
