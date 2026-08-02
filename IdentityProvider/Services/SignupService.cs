@@ -23,6 +23,14 @@ namespace IdentityProvider.Services
         // 組織コード導出: 英数字以外の連続を 1 つの "-" に畳み込むための正規表現。
         private static readonly Regex NonAlphanumericRun = new("[^a-z0-9]+", RegexOptions.Compiled);
 
+        // サンドボックス（テストサイト）Org の組織コードに付ける接尾辞。
+        private const string SandboxCodeSuffix = "-sandbox";
+
+        // 組織コードはそのままテナント名になり {tenant}.ec-auth.io の 1 ラベルを構成する。
+        // DNS のラベル上限は 63 オクテット（RFC 1035）。超えると Org は作れてもその
+        // サブドメインに到達できず、プラグインの接続先が解決不能になる。
+        private const int MaxOrganizationCodeLength = 63;
+
         // 確認 URL 設定キーのテナント部を環境変数名に使える形へ正規化する正規表現。
         // 環境変数名はハイフンを含められない（Azure Linux App Service が 400 で拒否）ため、
         // [A-Za-z0-9_] 以外を "_" に置換する（例: "stg-accounts" -> "stg_accounts"）。
@@ -453,29 +461,20 @@ namespace IdentityProvider.Services
 
             var sites = new List<SiteEntry>();
 
-            string? productionCode = null;
             if (productionSite != null)
             {
-                productionCode = DeriveOrganizationCode(productionSite.Host);
                 sites.Add(new SiteEntry(
-                    productionCode, productionSite.Host, productionSite.BaseUrl,
+                    DeriveOrganizationCode(productionSite.Host, isSandbox: false),
+                    productionSite.Host, productionSite.BaseUrl,
                     IsSandbox: false, "production_site_url"));
             }
 
-            // テスト Org は、本番がない場合か、本番と「導出後の組織コード」が異なる場合のみ作成する。
-            // ホスト名は異なっても導出後コードが同一になるケース（例: www.shop.example.jp と
-            // shop.example.jp はいずれも shop-example-jp）があるため、生ホスト名ではなく
-            // 導出後コードで比較し、コード重複によるユニーク制約違反を防ぐ。
             if (testSite != null)
             {
-                var testCode = DeriveOrganizationCode(testSite.Host);
-                if (productionCode == null
-                    || !string.Equals(testCode, productionCode, StringComparison.OrdinalIgnoreCase))
-                {
-                    sites.Add(new SiteEntry(
-                        testCode, testSite.Host, testSite.BaseUrl,
-                        IsSandbox: true, "test_site_url"));
-                }
+                sites.Add(new SiteEntry(
+                    DeriveOrganizationCode(testSite.Host, isSandbox: true),
+                    testSite.Host, testSite.BaseUrl,
+                    IsSandbox: true, "test_site_url"));
             }
 
             return new SiteSet(
@@ -496,8 +495,23 @@ namespace IdentityProvider.Services
 
         private async Task EnsureOrganizationCodesAvailableAsync(SiteSet sites, CancellationToken ct, int statusCode = 422)
         {
-            // 同一リクエスト内で導出後の組織コードが衝突していないか検知する
-            // （本番・テストの URL が異なっても同じコードに導出されるケースを 422 で弾く）。
+            // 組織コードはテナント名（= {tenant}.ec-auth.io の 1 ラベル）になるため、
+            // DNS のラベル上限を超えるものは作らせない。作れても到達できないため。
+            foreach (var site in sites.Sites)
+            {
+                if (site.Code.Length > MaxOrganizationCodeLength)
+                {
+                    throw new SignupValidationException(
+                        "invalid_site_url",
+                        "サイト URL のドメインが長すぎます。より短いドメインでお申し込みください。",
+                        field: site.Field,
+                        statusCode: 422);
+                }
+            }
+
+            // 同一リクエスト内で導出後の組織コードが衝突していないか検知する。
+            // 本番とテストは接尾辞（-sandbox）で必ず分かれるため通常は発火しないが、
+            // 導出規則を将来変えたときに黙って 1 件に潰れるのを防ぐガードとして残す。
             var seenCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var site in sites.Sites)
             {
@@ -505,17 +519,30 @@ namespace IdentityProvider.Services
                 {
                     throw new SignupValidationException(
                         "duplicate_site",
-                        "本番サイトとテストサイトが同一の組織コードに導出されます。異なるドメインでお申し込みください。",
+                        "本番サイトとテストサイトが同じ組織として扱われます。"
+                            + "テストサイトには別のドメインをご指定ください。",
                         field: site.Field,
                         statusCode: 422);
                 }
             }
 
+            // ドメインの占有は「接尾辞を除いた導出コード」で判定する。site.Code をそのまま
+            // 比較すると、サンドボックス側だけコードが変わったせいで
+            //   - 旧規則（接尾辞なし）で登録済みのサンドボックス Org
+            //   - 本番として登録済みのドメイン
+            // を、別アカウントがテストサイトとして再登録できてしまう。
+            //
+            // 同一申込内での本番＋サンドボックス併存はこれでも壊れない。Organization の作成は
+            // このチェックより後（トランザクション内）で行うため、ペアの相方はまだ DB に無いため。
+            // 申込内の衝突判定は上の seenCodes が接尾辞込みのコードで行っており、そちらは併存を許す。
             foreach (var site in sites.Sites)
             {
+                var baseCode = DeriveOrganizationCode(site.Host, isSandbox: false);
+                var sandboxCode = baseCode + SandboxCodeSuffix;
+
                 var exists = await _context.Organizations
                     .IgnoreQueryFilters()
-                    .AnyAsync(o => o.Code == site.Code, ct);
+                    .AnyAsync(o => o.Code == baseCode || o.Code == sandboxCode, ct);
 
                 if (exists)
                 {
@@ -534,12 +561,26 @@ namespace IdentityProvider.Services
         /// ホスト名から組織コードを導出する。
         /// lowercase → 先頭 www. 除去 → サブドメイン保持 → 英数以外の連続を "-" に置換 → 前後の "-" を trim。
         /// 例: <c>shop.example.jp → shop-example-jp</c>。
+        ///
+        /// サンドボックス（テストサイト）の Org には必ず <c>-sandbox</c> を付ける。理由は 2 つある:
+        /// <list type="number">
+        ///   <item>
+        ///     本番と同じドメイン（あるいは <c>www.</c> の有無だけが違うドメイン）でもテスト Org を
+        ///     作れるようにするため。付けないと導出後コードが本番と衝突し、テスト環境を持たない
+        ///     顧客は検証にも本番 Org を使うしかなくなる（EcAuth#482 の問題 2）。
+        ///   </item>
+        ///   <item>
+        ///     組織コードはそのままテナント名になり、プラグインが接続する
+        ///     <c>https://{tenant}.ec-auth.io</c>（<c>ClientResolveController</c>）に現れる。
+        ///     接続先を見ただけで本番かサンドボックスかが分かる。
+        ///   </item>
+        /// </list>
         /// </summary>
-        private static string DeriveOrganizationCode(string host)
+        private static string DeriveOrganizationCode(string host, bool isSandbox)
         {
             var normalized = StripWwwPrefix(host.Trim().ToLowerInvariant());
             var code = NonAlphanumericRun.Replace(normalized, "-").Trim('-');
-            return code;
+            return isSandbox ? code + SandboxCodeSuffix : code;
         }
 
         /// <summary>
