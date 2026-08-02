@@ -334,26 +334,58 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(422, ex.StatusCode);
         }
 
+        [Theory]
+        // www. の有無だけが違うドメイン（導出後は同じ shop-example-jp になる）
+        [InlineData("https://shop.example.jp", "https://www.shop.example.jp")]
+        // 完全に同じ URL。テスト環境を別ドメインで持てない顧客がサンドボックスを得る経路。
+        [InlineData("https://shop.example.jp", "https://shop.example.jp")]
+        // 同一ホストのサブディレクトリ運用。redirect_uri も別になるので併存できる。
+        [InlineData("https://shop.example.jp", "https://shop.example.jp/stg/")]
+        public async Task ConfirmAsync_TestSiteOnSameDomain_CreatesSandboxOrganization(
+            string productionUrl, string testUrl)
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with { ProductionSiteUrl = productionUrl, TestSiteUrl = testUrl };
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
+            await service.ConfirmAsync(token);
+
+            // 以前はテスト Org を黙って作らずに済ませており、テスト環境を別ドメインで持たない
+            // 顧客は検証にも本番 Org を使うしかなかった（EcAuth#482 の問題 2）。
+            // サンドボックス Org には -sandbox が付くので、同じドメインでも両方作れる。
+            var customerOrgs = await context.Organizations
+                .IgnoreQueryFilters()
+                .Where(o => o.Code != Tenant)
+                .ToListAsync();
+            Assert.Equal(2, customerOrgs.Count);
+            Assert.Contains(customerOrgs, o => o.Code == "shop-example-jp" && !o.IsSandbox);
+            Assert.Contains(customerOrgs, o => o.Code == "shop-example-jp-sandbox" && o.IsSandbox);
+        }
+
         [Fact]
-        public async Task RequestAsync_ProductionAndTestDeriveSameCode_ThrowsDuplicateSite()
+        public async Task RequestAsync_HostTooLongForDnsLabel_ThrowsInvalidSiteUrl()
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
             var service = CreateService(context, tenantService, out _, out _);
 
-            // www.shop.example.jp と shop.example.jp はいずれも shop-example-jp に導出される。
+            // 組織コードはテナント名になり {tenant}.ec-auth.io の 1 ラベルを構成する。
+            // DNS のラベル上限（63）を超えると Org は作れてもそのサブドメインに到達できない。
+            // -sandbox 分だけ本番より先に上限へ当たるため、サンドボックス側で検出される。
+            var host = new string('a', 60) + ".jp"; // 導出後 63 文字（本番はぎりぎり通る）
             var input = ValidInput() with
             {
-                ProductionSiteUrl = "https://shop.example.jp",
-                TestSiteUrl = "https://www.shop.example.jp"
+                ProductionSiteUrl = $"https://{host}",
+                TestSiteUrl = $"https://stg.{host}"
             };
 
-            // 同一コードに導出されるため、テスト Org は追加されず単一 Org として扱われる。
-            // 重複検知は EnsureOrganizationCodesAvailableAsync の seenCodes でも担保するが、
-            // ここでは導出後コード比較によりテスト Org が作られないこと（=本番のみ）を確認する。
-            await service.RequestAsync(input);
-            var stored = await context.SignupRequests.IgnoreQueryFilters().FirstAsync();
-            Assert.NotNull(stored);
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
+            Assert.Equal("invalid_site_url", ex.Error);
+            Assert.Equal(422, ex.StatusCode);
+            Assert.Equal("test_site_url", ex.Field);
+            Assert.False(await context.SignupRequests.IgnoreQueryFilters().AnyAsync());
         }
 
         // ---- 組織コード導出 ----
@@ -472,58 +504,32 @@ namespace IdentityProvider.Test.Services
                 .ToListAsync();
             Assert.Equal(2, customerOrgs.Count);
             Assert.Contains(customerOrgs, o => o.Code == "shop-example-jp" && !o.IsSandbox);
-            Assert.Contains(customerOrgs, o => o.Code == "test-example-jp" && o.IsSandbox);
+            // ホストが分かれていてもサンドボックス側には -sandbox が付く。テナント名だけで
+            // 本番かサンドボックスかが判別でき、プラグインの接続先 URL にもそれが現れる。
+            Assert.Contains(customerOrgs, o => o.Code == "test-example-jp-sandbox" && o.IsSandbox);
         }
 
         [Fact]
-        public async Task ConfirmAsync_ProductionAndTestSameHost_CreatesOnlyProduction()
+        public async Task ConfirmAsync_TestSiteOnly_CreatesSandboxOrganization()
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
             var service = CreateService(context, tenantService, out var emailMock, out _);
 
+            // 本番 URL 無しでテストサイトだけ申し込むケースでも接尾辞は付く（規則を分岐させない）。
             var input = ValidInput() with
             {
-                ProductionSiteUrl = "https://shop.example.jp",
-                TestSiteUrl = "https://shop.example.jp"
+                ProductionSiteUrl = null,
+                TestSiteUrl = "https://test.example.jp"
             };
             var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
-
             await service.ConfirmAsync(token);
 
-            var customerOrgs = await context.Organizations
+            var customerOrg = await context.Organizations
                 .IgnoreQueryFilters()
-                .Where(o => o.Code != Tenant)
-                .ToListAsync();
-            Assert.Single(customerOrgs);
-            Assert.False(customerOrgs[0].IsSandbox);
-        }
-
-        [Fact]
-        public async Task ConfirmAsync_ProductionAndTestDeriveSameCode_CreatesOnlyProduction()
-        {
-            var tenantService = CreateTenantService();
-            using var context = CreateContextWithAccountsOrg(tenantService);
-            var service = CreateService(context, tenantService, out var emailMock, out _);
-
-            // www.shop.example.jp(test) と shop.example.jp(prod) はいずれも shop-example-jp に導出される。
-            // 生ホスト名は異なるが導出後コードが同一のためテスト Org は作らない。
-            var input = ValidInput() with
-            {
-                ProductionSiteUrl = "https://shop.example.jp",
-                TestSiteUrl = "https://www.shop.example.jp"
-            };
-            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
-
-            await service.ConfirmAsync(token);
-
-            var customerOrgs = await context.Organizations
-                .IgnoreQueryFilters()
-                .Where(o => o.Code != Tenant)
-                .ToListAsync();
-            Assert.Single(customerOrgs);
-            Assert.Equal("shop-example-jp", customerOrgs[0].Code);
-            Assert.False(customerOrgs[0].IsSandbox);
+                .SingleAsync(o => o.Code != Tenant);
+            Assert.Equal("test-example-jp-sandbox", customerOrg.Code);
+            Assert.True(customerOrg.IsSandbox);
         }
 
         // ---- ConfirmAsync: Client の初期値（redirect_uri / allowed_rp_ids）----
@@ -722,7 +728,7 @@ namespace IdentityProvider.Test.Services
                 .ToListAsync();
 
             var production = clients.Single(c => c.Organization!.Code == "shop-example-jp");
-            var sandbox = clients.Single(c => c.Organization!.Code == "test-example-jp");
+            var sandbox = clients.Single(c => c.Organization!.Code == "test-example-jp-sandbox");
             Assert.Equal("https://shop.example.jp/ecauth/callback.php", production.RedirectUris!.Single().Uri);
             Assert.Equal("https://test.example.jp/store/ecauth/callback.php", sandbox.RedirectUris!.Single().Uri);
         }

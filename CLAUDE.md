@@ -191,6 +191,30 @@ E2E でこれを一体にして「ブラウザから直接 API を叩く」と�
 保てば既定テナントに解決される。Playwright 側は `playwright.config.ts` の
 `--host-resolver-rules` に `MAP *.test 127.0.0.1` を入れて解決させる。
 
+#### 申込が作る Organization と組織コードの導出
+
+申込は入力された URL ごとに独立した Organization を作る（最大 2 件）。組織コードは
+そのままテナント名になり、プラグインが接続する `https://{tenant}.ec-auth.io` に現れる。
+
+| サイト | 組織コード | `IsSandbox` |
+|---|---|---|
+| 本番 | ホスト名から導出（`shop.example.jp` → `shop-example-jp`） | `false` |
+| テスト | 導出結果 + **`-sandbox`**（`stg.example.jp` → `stg-example-jp-sandbox`） | `true` |
+
+導出は lowercase → 先頭 `www.` 除去 → 英数以外の連続を `-` に畳む（`SignupService.DeriveOrganizationCode`）。
+
+**サンドボックスに必ず `-sandbox` が付く理由**は、本番と同じドメイン（あるいは `www.` の
+有無だけが違うドメイン）でもテスト Org を作れるようにするため。付けないと導出後コードが
+本番と衝突し、テスト環境を別ドメインで持たない顧客は検証にも本番 Org を使うしかなくなる。
+副次的に、接続先 URL を見ただけで本番かサンドボックスかが判別できる。
+
+同一ドメインで両方作った場合、2 つの Client は `allowed_rp_ids` も `redirect_uri` も同じ値に
+なりうるが問題は起きない。プラグインは自分の `client_id` から `/platform/v1/client-resolve` で
+テナントを引くため、資格情報を差し替えるだけで本番 / サンドボックスを行き来できる。
+
+組織コードは DNS ラベル 1 つ分なので 63 文字を超えられない（`MaxOrganizationCodeLength`）。
+超える申込は `invalid_site_url` で弾く。
+
 #### `wwwroot/b2b-passkey-test.html` の配信条件
 
 静的ファイル配信は **`app.Environment.IsProduction()` のときだけ**テナント限定になる
