@@ -125,6 +125,13 @@ namespace IdentityProvider.Test.Services
             return ExtractTokenFromConfirmUrl(capturedUrl!);
         }
 
+        // SignupService の DNS ラベル上限（MaxOrganizationCodeLength）。
+        private const int MaxOrganizationCodeLength = 63;
+
+        // 導出後がちょうど MaxOrganizationCodeLength になるホスト。
+        // "a" * 60 + ".jp" -> "a" * 60 + "-jp" = 63 文字。
+        private static readonly string MaxLengthHost = new string('a', 60) + ".jp";
+
         private static SignupInput ValidInput() => new()
         {
             Email = "owner@example.com",
@@ -364,21 +371,25 @@ namespace IdentityProvider.Test.Services
             Assert.Contains(customerOrgs, o => o.Code == "shop-example-jp-sandbox" && o.IsSandbox);
         }
 
+        /// <summary>
+        /// 組織コードはテナント名になり <c>{tenant}.ec-auth.io</c> の 1 ラベルを構成するため、
+        /// DNS のラベル上限（63）を超えると Org は作れてもそのサブドメインに到達できない。
+        /// 導出後ちょうど 63 文字になるホストを使い、<c>-sandbox</c> の 8 文字**だけ**で
+        /// 上限を超えることを固定する（本番として申し込めば通ることは下のテストで確認する）。
+        /// テスト URL に別のサブドメインを足すと、その分で先に上限を超えてしまい、
+        /// 接尾辞を消してもテストが通る＝接尾辞の寄与を検証できなくなる。
+        /// </summary>
         [Fact]
-        public async Task RequestAsync_HostTooLongForDnsLabel_ThrowsInvalidSiteUrl()
+        public async Task RequestAsync_SandboxSuffixExceedsDnsLabelLimit_ThrowsInvalidSiteUrl()
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
             var service = CreateService(context, tenantService, out _, out _);
 
-            // 組織コードはテナント名になり {tenant}.ec-auth.io の 1 ラベルを構成する。
-            // DNS のラベル上限（63）を超えると Org は作れてもそのサブドメインに到達できない。
-            // -sandbox 分だけ本番より先に上限へ当たるため、サンドボックス側で検出される。
-            var host = new string('a', 60) + ".jp"; // 導出後 63 文字（本番はぎりぎり通る）
             var input = ValidInput() with
             {
-                ProductionSiteUrl = $"https://{host}",
-                TestSiteUrl = $"https://stg.{host}"
+                ProductionSiteUrl = null,
+                TestSiteUrl = $"https://{MaxLengthHost}"
             };
 
             var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
@@ -386,6 +397,31 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(422, ex.StatusCode);
             Assert.Equal("test_site_url", ex.Field);
             Assert.False(await context.SignupRequests.IgnoreQueryFilters().AnyAsync());
+        }
+
+        [Fact]
+        public async Task RequestAsync_HostAtDnsLabelLimit_IsAcceptedAsProduction()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            // 上のテストと同じホスト。本番には接尾辞が付かないので 63 文字ちょうどで通る。
+            // これがあることで、上のテストの失敗が -sandbox に由来すると言い切れる。
+            var input = ValidInput() with
+            {
+                ProductionSiteUrl = $"https://{MaxLengthHost}",
+                TestSiteUrl = null
+            };
+
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
+            await service.ConfirmAsync(token);
+
+            var customerOrg = await context.Organizations
+                .IgnoreQueryFilters()
+                .SingleAsync(o => o.Code != Tenant);
+            Assert.Equal(MaxOrganizationCodeLength, customerOrg.Code.Length);
+            Assert.False(customerOrg.IsSandbox);
         }
 
         // ---- 組織コード導出 ----
