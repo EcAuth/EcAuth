@@ -21,6 +21,9 @@ import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
  * 前提（CI では playwright.yml が用意する）:
  *   - IdentityProvider が https://localhost:8081 で稼働し、accounts.ec-auth.io に解決すること
  *   - ecauth-website を hugo server --tlsAuto で E2E_WEBSITE_BASE_URL に配信していること
+ *     （配信する ref に Client 設定の編集 UI が含まれること。無い場合は skip せず**失敗**させる。
+ *       DOM の有無で skip すると、削除・セレクタ変更・描画失敗という本来検出すべき回帰まで
+ *       「機能が無いだけ」と誤認し、CI が緑のまま通ってしまうため）
  *   - サーバ側が以下を website のオリジンに向けて配線していること
  *       Signup__AllowedOrigins__0 / Frontend__BaseUrl /
  *       Signup__ConfirmBaseUrl__accounts / MagicLink__BaseUrl__accounts / ACCOUNTS_REDIRECT_URI
@@ -245,20 +248,6 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
       .locator(`.ci-settings[data-section="${key}"]`);
   }
 
-  /**
-   * 編集 UI（EcAuth/ecauth-website#19）を含まない ref を配信している場合に、そのケースだけ
-   * 明示理由付きでスキップする。CI は既定で ecauth-website のデフォルトブランチを checkout
-   * するため、website 側が未マージの間はセクションごと存在しない。
-   */
-  async function skipUnlessSettingsUi() {
-    const present = await settingsSection('redirect_uris').count();
-    test.skip(
-      present === 0,
-      'ecauth-website の ref に Client 設定の編集 UI がありません（EcAuth/ecauth-website#19 未マージ）。'
-        + ' workflow_dispatch の website_ref に該当ブランチを指定すると検証できます。'
-    );
-  }
-
   /** 畳まれていれば開いて返す（reload すると details は閉じた状態に戻る）。 */
   async function openSettings(key: 'redirect_uris' | 'allowed_rp_ids') {
     const section = settingsSection(key);
@@ -275,9 +264,23 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     return section.locator('.row-input').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value));
   }
 
+  /*
+   * 以下の初期値アサーションは、期待値を productionSiteHost から**意図的に**組み立てている。
+   *
+   * CLAUDE.md の「redirect_uri / rp_id をテスト側で組み立てない」が禁じているのは
+   * authenticate/verify に**送る値**（セレモニーの入力）であって、期待値ではない。
+   * 期待値まで登録値に置き換えると「UI が API の返した値を表示している」ことしか見なくなり、
+   * どんな誤った初期値が登録されていても通る恒真式になる — それは EcAuth#481 そのもの。
+   *
+   * 参照実装 signup_client_b2b_login.spec.ts も同じ使い分けをしている:
+   *   :180 / :187  期待値は siteHost から組み立てて登録値と突き合わせる（回帰検出）
+   *   :207 / :225  セレモニーに渡すのは API から取った registeredRpId / registeredRedirectUri
+   * 画面に出ている値は mypage.js が GET /v1/account/clients を描画したものなので、
+   * 「登録値を使う」側の要請はブラウザ経由で既に満たされている。
+   */
+
   test('マイページの編集 UI から redirect_uri を追加でき、実 API 側に残る', async () => {
     test.setTimeout(45000);
-    await skipUnlessSettingsUi();
 
     const section = await openSettings('redirect_uris');
 
@@ -304,7 +307,6 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
 
   test('RP ID の編集は確認ダイアログを経て保存され、サーバ側で正規化される', async () => {
     test.setTimeout(45000);
-    await skipUnlessSettingsUi();
 
     const section = await openSettings('allowed_rp_ids');
     expect(await inputValuesOf(section)).toEqual([productionSiteHost]);
@@ -324,7 +326,6 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
 
   test('実 API の 422 が入力値を含まない理由付きでフロントに表示される', async () => {
     test.setTimeout(45000);
-    await skipUnlessSettingsUi();
 
     const section = await openSettings('redirect_uris');
 
