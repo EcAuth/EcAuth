@@ -489,10 +489,68 @@ namespace IdentityProvider.Controllers
             ProvisionedSite provisioned;
             try
             {
-                if (!body.IsSandbox)
+                // サイト構成を変える操作は本番・サンドボックスを問わずアカウント行を排他ロックする。
+                // DeleteOrganization も同じ行を取るため、このアカウントの追加・削除は直列化される。
+                var lockedAccount = await LockAccountForUpdateAsync(subject, HttpContext.RequestAborted);
+                if (lockedAccount == null)
                 {
-                    // 本番サイト数の上限判定はトランザクション内で、アカウント行を排他ロックしてから行う。
-                    //
+                    await transaction.RollbackAsync(HttpContext.RequestAborted);
+                    return Unauthorized(new
+                    {
+                        error = "invalid_token",
+                        error_description = "有効な Account アクセストークンが必要です。"
+                    });
+                }
+
+                // ロック取得後に管理下 Org を引き直す。ロック待ちの間に別リクエストがコミットした
+                // 追加・削除を取り込む必要があるため、トランザクション開始前に読んだ
+                // ownedOrganizations は使えない。
+                var lockedManaged = await _accountService.GetManagedOrganizationsAsync(subject);
+                var lockedOrgIds = lockedManaged.Select(m => m.OrganizationId).ToHashSet();
+
+                if (body.IsSandbox)
+                {
+                    // 親をロック下で再検証する。事前チェックはトランザクション外のスナップショットに
+                    // 基づくため、その後に親が削除されていることがある。ここで見ないと、
+                    // 論理削除済みの親を指す有効なサンドボックスが残る（削除側は「まだ存在しない子」を
+                    // カスケードできないため、あとから直る見込みも無い）。
+                    var parentIsUsable = lockedOrgIds.Contains(parentOrganizationId!.Value)
+                        && await _context.Organizations
+                            .IgnoreQueryFilters()
+                            .AnyAsync(o => o.Id == parentOrganizationId.Value
+                                && !o.IsSandbox
+                                && o.DeletedAt == null,
+                                HttpContext.RequestAborted);
+
+                    if (!parentIsUsable)
+                    {
+                        await transaction.RollbackAsync(HttpContext.RequestAborted);
+                        return InvalidInput(
+                            "invalid_parent",
+                            "紐づける本番サイトが見つかりません。",
+                            "parent_organization_id");
+                    }
+
+                    // 同じ親への並行追加もここで弾く（DB のフィルター付きユニークインデックスが
+                    // 最終防衛線だが、409 ではなく理由の分かる 422 を返せるようにする）。
+                    var sandboxTaken = await _context.Organizations
+                        .IgnoreQueryFilters()
+                        .AnyAsync(o => o.ParentOrganizationId == parentOrganizationId.Value
+                            && o.DeletedAt == null,
+                            HttpContext.RequestAborted);
+
+                    if (sandboxTaken)
+                    {
+                        await transaction.RollbackAsync(HttpContext.RequestAborted);
+                        return InvalidInput(
+                            "sandbox_already_exists",
+                            "この本番サイトには既にテストサイトが登録されています。"
+                                + "作り直す場合は既存のテストサイトを削除してから追加してください。",
+                            "parent_organization_id");
+                    }
+                }
+                else
+                {
                     // 「アカウントあたりの本番サイト数」は集計値であり DB 制約として表現できない。
                     // ロック無しでカウントすると、同一アカウントの並行リクエストが同じスナップショットを
                     // 読んで両方とも上限未満と判定し、上限を超えて作成できてしまう。既存の DB 制約は
@@ -500,23 +558,6 @@ namespace IdentityProvider.Controllers
                     //   - IX_organization_parent_organization_id_active は parent_organization_id が
                     //     非 null の行だけが対象で、本番 Org（null）は含まれない
                     //   - organization.Code のユニーク制約は、別ドメイン同士なら衝突しない
-                    // アカウント行のロックが唯一の直列化ポイントになる。
-                    var maxSites = await LoadMaxSitesForUpdateAsync(subject, HttpContext.RequestAborted);
-                    if (maxSites == null)
-                    {
-                        await transaction.RollbackAsync(HttpContext.RequestAborted);
-                        return Unauthorized(new
-                        {
-                            error = "invalid_token",
-                            error_description = "有効な Account アクセストークンが必要です。"
-                        });
-                    }
-
-                    // ロック取得後に管理下 Org を引き直して数える。ロック待ちの間に別リクエストが
-                    // コミットした Org を取り込む必要があるため、トランザクション開始前に読んだ
-                    // ownedOrganizations は使えない。
-                    var lockedManaged = await _accountService.GetManagedOrganizationsAsync(subject);
-                    var lockedOrgIds = lockedManaged.Select(m => m.OrganizationId).ToHashSet();
                     var productionCount = lockedOrgIds.Count == 0
                         ? 0
                         : await _context.Organizations
@@ -524,12 +565,12 @@ namespace IdentityProvider.Controllers
                             .CountAsync(o => lockedOrgIds.Contains(o.Id) && !o.IsSandbox,
                                 HttpContext.RequestAborted);
 
-                    if (productionCount >= maxSites.Value)
+                    if (productionCount >= lockedAccount.MaxSites)
                     {
                         await transaction.RollbackAsync(HttpContext.RequestAborted);
                         return InvalidInput(
                             "site_limit_exceeded",
-                            $"登録できる本番サイトは {maxSites.Value} 件までです。"
+                            $"登録できる本番サイトは {lockedAccount.MaxSites} 件までです。"
                                 + "不要なサイトを削除するか、サポートにお問い合わせください。",
                             "site_url");
                     }
@@ -617,12 +658,7 @@ namespace IdentityProvider.Controllers
                 });
             }
 
-            var managed = await _accountService.GetManagedOrganizationsAsync(subject);
-            var orgIds = managed.Select(m => m.OrganizationId).ToHashSet();
-
-            // 削除済みの Org は管理対象から外れるため、二重削除もここで 404 になる。
-            // 存在しない Org と管理外の Org も同じ 404 に揃える（存在を漏らさない）。
-            if (!orgIds.Contains(id))
+            IActionResult NotFoundResult()
             {
                 _logger.LogWarning(
                     "Account {Subject} attempted to delete organization {OrganizationId} without ownership",
@@ -634,10 +670,48 @@ namespace IdentityProvider.Controllers
                 });
             }
 
+            // 削除済みの Org は管理対象から外れるため、二重削除もここで 404 になる。
+            // 存在しない Org と管理外の Org も同じ 404 に揃える（存在を漏らさない）。
+            // ロック取得前の早期リターン（ロックを取らずに済む分、無駄な待ちを避ける）。
+            var managed = await _accountService.GetManagedOrganizationsAsync(subject);
+            if (!managed.Any(m => m.OrganizationId == id))
+            {
+                return NotFoundResult();
+            }
+
+            await using var transaction = await _context.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+
+            // CreateOrganization と同じアカウント行を排他ロックする。これが無いと
+            // 「サンドボックス追加」と「その親の削除」がすれ違い、削除側は自分のスナップショットに
+            // 無い（＝まだコミットされていない）子をカスケードできないため、論理削除済みの親を指す
+            // 有効なサンドボックスが残る。
+            var lockedAccount = await LockAccountForUpdateAsync(subject, HttpContext.RequestAborted);
+            if (lockedAccount == null)
+            {
+                await transaction.RollbackAsync(HttpContext.RequestAborted);
+                return Unauthorized(new
+                {
+                    error = "invalid_token",
+                    error_description = "有効な Account アクセストークンが必要です。"
+                });
+            }
+
+            // ロック取得後に管理下 Org を引き直す。ロック待ちの間にコミットされたサンドボックスを
+            // カスケード対象に含めるため、ロック前の一覧は使えない。
+            var lockedManaged = await _accountService.GetManagedOrganizationsAsync(subject);
+            var lockedOrgIds = lockedManaged.Select(m => m.OrganizationId).ToHashSet();
+
+            // ロック待ちの間に別リクエストが先に削除していれば、ここで管理対象から外れている。
+            if (!lockedOrgIds.Contains(id))
+            {
+                await transaction.RollbackAsync(HttpContext.RequestAborted);
+                return NotFoundResult();
+            }
+
             var owned = await _context.Organizations
                 .IgnoreQueryFilters()
-                .Where(o => orgIds.Contains(o.Id))
-                .ToListAsync();
+                .Where(o => lockedOrgIds.Contains(o.Id))
+                .ToListAsync(HttpContext.RequestAborted);
 
             var target = owned.First(o => o.Id == id);
 
@@ -656,6 +730,7 @@ namespace IdentityProvider.Controllers
             }
 
             await _context.SaveChangesAsync(HttpContext.RequestAborted);
+            await transaction.CommitAsync(HttpContext.RequestAborted);
 
             _logger.LogInformation(
                 "サイトを削除しました（論理削除）: Subject={Subject}, OrganizationIds={OrganizationIds}",
@@ -669,31 +744,37 @@ namespace IdentityProvider.Controllers
         }
 
         /// <summary>
-        /// 上限判定のために Account 行を読む。**呼び出し側でトランザクションを開始しておくこと。**
+        /// Account 行を排他ロックして読む。**呼び出し側でトランザクションを開始しておくこと。**
         ///
         /// <para>
+        /// このアカウントのサイト構成を変更する操作（追加・削除）が共通で取る唯一の直列化ポイント。
         /// SQL Server では <c>WITH (UPDLOCK, HOLDLOCK)</c> を付けて行ロックを取り、同一アカウントの
-        /// 並行リクエストをトランザクション終了まで直列化する。UPDLOCK は更新ロックを即座に取って
+        /// 並行リクエストをトランザクション終了まで待たせる。UPDLOCK は更新ロックを即座に取って
         /// ロック昇格時のデッドロックを避け、HOLDLOCK はコミットまでロックを保持して
-        /// 「読んだ後に別トランザクションが Org を追加する」窓を塞ぐ。
+        /// 「読んだ後に別トランザクションが Organization を変更する」窓を塞ぐ。
+        /// </para>
+        /// <para>
+        /// 追加と削除で同じ行を取ることが重要。別々のロックにすると、サンドボックス追加と
+        /// その親の削除がすれ違い、削除済みの親を指す有効なサンドボックスが残る
+        /// （削除側は「まだ存在しない子」をカスケードできない）。
         /// </para>
         /// <para>
         /// InMemory プロバイダ（ユニットテスト）は生 SQL を実行できないため、通常の読み取りに
         /// フォールバックする。この分岐によりロックの実挙動はユニットテストでは検証できないので、
         /// 並行時の振る舞いは実 SQL Server に対する E2E
-        /// （<c>E2ETests/tests/specs/account_site_limit_concurrency.spec.ts</c>）で担保する。
+        /// （<c>account_site_limit_concurrency.spec.ts</c> /
+        /// <c>account_site_delete_concurrency.spec.ts</c>）で担保する。
         /// </para>
         /// </summary>
-        /// <returns>Account が見つからない場合は null。</returns>
-        private async Task<int?> LoadMaxSitesForUpdateAsync(string subject, CancellationToken ct)
+        /// <returns>Account が見つからない場合は null。読み取り専用（AsNoTracking）。</returns>
+        private async Task<Account?> LockAccountForUpdateAsync(string subject, CancellationToken ct)
         {
             if (!_context.Database.IsSqlServer())
             {
                 return await _context.Accounts
                     .IgnoreQueryFilters()
-                    .Where(a => a.Subject == subject)
-                    .Select(a => (int?)a.MaxSites)
-                    .FirstOrDefaultAsync(ct);
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(a => a.Subject == subject, ct);
             }
 
             // FromSqlInterpolated はパラメータ化されるため、subject の値が SQL に直接埋まることはない。
@@ -704,7 +785,7 @@ namespace IdentityProvider.Controllers
                 .AsNoTracking()
                 .ToListAsync(ct);
 
-            return locked.Count == 0 ? null : locked[0].MaxSites;
+            return locked.Count == 0 ? null : locked[0];
         }
 
         /// <summary>
