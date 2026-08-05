@@ -371,10 +371,11 @@ namespace IdentityProvider.Test.Services
             var service = CreateService(context, tenantService, out _, out _);
 
             // 別アカウントが同じドメインをテストサイトとして申し込む。
+            // 本番サイトは必須なので、衝突しない別ドメインを本番に置いてテスト側だけを衝突させる。
             var input = ValidInput() with
             {
                 Email = "another@example.com",
-                ProductionSiteUrl = null,
+                ProductionSiteUrl = "https://another-shop.example.jp",
                 TestSiteUrl = "https://stg.example.jp"
             };
 
@@ -457,9 +458,10 @@ namespace IdentityProvider.Test.Services
             using var context = CreateContextWithAccountsOrg(tenantService);
             var service = CreateService(context, tenantService, out _, out _);
 
+            // 本番は上限に収まる短いドメイン。上限超過はテスト側の接尾辞だけが原因になる。
             var input = ValidInput() with
             {
-                ProductionSiteUrl = null,
+                ProductionSiteUrl = "https://shop.example.jp",
                 TestSiteUrl = $"https://{MaxLengthHost}"
             };
 
@@ -616,27 +618,57 @@ namespace IdentityProvider.Test.Services
             Assert.Contains(customerOrgs, o => o.Code == "test-example-jp-sandbox" && o.IsSandbox);
         }
 
+        /// <summary>
+        /// テストサイトだけの申込は受け付けない。許すと紐づく本番の無いサンドボックス Org
+        /// （parent_organization_id が null）ができ、「1 本番あたりテストは 1 件」の判定
+        /// （AccountController が ParentOrganizationId で数える）をすり抜けて、後から本番を
+        /// 追加したときにサンドボックスが 2 件並ぶ状態を作れてしまう。
+        /// </summary>
         [Fact]
-        public async Task ConfirmAsync_TestSiteOnly_CreatesSandboxOrganization()
+        public async Task RequestAsync_TestSiteOnly_ThrowsInvalidSiteUrl()
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
-            var service = CreateService(context, tenantService, out var emailMock, out _);
+            var service = CreateService(context, tenantService, out _, out _);
 
-            // 本番 URL 無しでテストサイトだけ申し込むケースでも接尾辞は付く（規則を分岐させない）。
             var input = ValidInput() with
             {
                 ProductionSiteUrl = null,
                 TestSiteUrl = "https://test.example.jp"
             };
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
+            Assert.Equal("invalid_site_url", ex.Error);
+            Assert.Equal("production_site_url", ex.Field);
+            Assert.False(await context.SignupRequests.IgnoreQueryFilters().AnyAsync());
+        }
+
+        [Fact]
+        public async Task ConfirmAsync_ProductionAndTestSite_LinksSandboxToProduction()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with
+            {
+                ProductionSiteUrl = "https://shop.example.jp",
+                TestSiteUrl = "https://test.example.jp"
+            };
             var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
             await service.ConfirmAsync(token);
 
-            var customerOrg = await context.Organizations
+            var production = await context.Organizations
                 .IgnoreQueryFilters()
-                .SingleAsync(o => o.Code != Tenant);
-            Assert.Equal("test-example-jp-sandbox", customerOrg.Code);
-            Assert.True(customerOrg.IsSandbox);
+                .SingleAsync(o => o.Code == "shop-example-jp");
+            var sandbox = await context.Organizations
+                .IgnoreQueryFilters()
+                .SingleAsync(o => o.Code == "test-example-jp-sandbox");
+
+            Assert.True(sandbox.IsSandbox);
+            Assert.Null(production.ParentOrganizationId);
+            // 申込時点で本番とテストが紐づくため、孤立サンドボックスは生まれない。
+            Assert.Equal(production.Id, sandbox.ParentOrganizationId);
         }
 
         // ---- ConfirmAsync: Client の初期値（redirect_uri / allowed_rp_ids）----

@@ -413,11 +413,18 @@ namespace IdentityProvider.Services
             var production = NormalizeOptionalUrl(productionSiteUrl);
             var test = NormalizeOptionalUrl(testSiteUrl);
 
-            if (production == null && test == null)
+            // 本番サイトは必須。テストサイトだけの申込を許すと、紐づく本番が無い
+            // サンドボックス Org（parent_organization_id が null）ができてしまう。
+            // このサンドボックスは「1 本番あたりテストは 1 件」の判定
+            // （AccountController が ParentOrganizationId で数える）に引っかからないため、
+            // 後から本番を追加するとサンドボックスが 2 件並ぶ状態を作れてしまう。
+            // テスト環境から始めたい利用者には、本番ドメインを申込時に決めてもらったうえで
+            // テストサイトを併記する運用に寄せる。
+            if (production == null)
             {
                 throw new SignupValidationException(
                     "invalid_site_url",
-                    "本番サイト URL またはテストサイト URL のいずれかを入力してください。",
+                    "本番サイト URL を入力してください。",
                     field: "production_site_url");
             }
 

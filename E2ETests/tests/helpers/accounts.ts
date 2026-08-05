@@ -41,6 +41,8 @@ export interface SignupOptions {
   organizationName: string;
   /** 申込するサイトの URL。ここから Organization code / rp_id / redirect_uri が導出される */
   productionSiteUrl: string;
+  /** テストサイトの URL（任意）。渡すとサンドボックス Org が本番の子として一緒に作られる。 */
+  testSiteUrl?: string;
   /** "2" | "4" | "other" */
   ecCubeVersion: string;
 }
@@ -97,6 +99,7 @@ export async function signupAndGetAccountToken(
       organization_name: options.organizationName,
       contact_name: 'E2E Tester',
       production_site_url: options.productionSiteUrl,
+      test_site_url: options.testSiteUrl,
       ec_cube_version: options.ecCubeVersion,
     },
   });
