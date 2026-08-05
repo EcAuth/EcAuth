@@ -575,7 +575,6 @@ namespace IdentityProvider.Test.Controllers
             Assert.IsType<UnauthorizedObjectResult>(result);
         }
 
-        // 匿名オブジェクトのプロパティをリフレクションで取り出すヘルパー
         // ---- サイト（Organization）の一覧・追加・削除 ----
 
         private const int AccountsOrgId = 100;
@@ -869,6 +868,7 @@ namespace IdentityProvider.Test.Controllers
             Assert.Null((await ReloadOrganization(9)).DeletedAt);
         }
 
+        // 匿名オブジェクトのプロパティをリフレクションで取り出すヘルパー
         private static object GetProp(object obj, string name) =>
             obj.GetType().GetProperty(name)!.GetValue(obj)!;
 

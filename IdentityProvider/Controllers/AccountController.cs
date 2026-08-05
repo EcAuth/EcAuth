@@ -473,21 +473,6 @@ namespace IdentityProvider.Controllers
 
                 parentOrganizationId = parent.Id;
             }
-            else
-            {
-                // 本番サイトのみを上限の対象にする。テストサイトは本番 1 件につき 1 件までという
-                // 別の制約で縛られるため、二重に数えない。
-                var productionCount = ownedOrganizations.Count(o => !o.IsSandbox);
-                if (productionCount >= account.MaxSites)
-                {
-                    return InvalidInput(
-                        "site_limit_exceeded",
-                        $"登録できる本番サイトは {account.MaxSites} 件までです。"
-                            + "不要なサイトを削除するか、サポートにお問い合わせください。",
-                        "site_url");
-                }
-            }
-
             SiteEntry site;
             try
             {
@@ -504,6 +489,52 @@ namespace IdentityProvider.Controllers
             ProvisionedSite provisioned;
             try
             {
+                if (!body.IsSandbox)
+                {
+                    // 本番サイト数の上限判定はトランザクション内で、アカウント行を排他ロックしてから行う。
+                    //
+                    // 「アカウントあたりの本番サイト数」は集計値であり DB 制約として表現できない。
+                    // ロック無しでカウントすると、同一アカウントの並行リクエストが同じスナップショットを
+                    // 読んで両方とも上限未満と判定し、上限を超えて作成できてしまう。既存の DB 制約は
+                    // どちらもこれを止められない:
+                    //   - IX_organization_parent_organization_id_active は parent_organization_id が
+                    //     非 null の行だけが対象で、本番 Org（null）は含まれない
+                    //   - organization.Code のユニーク制約は、別ドメイン同士なら衝突しない
+                    // アカウント行のロックが唯一の直列化ポイントになる。
+                    var maxSites = await LoadMaxSitesForUpdateAsync(subject, HttpContext.RequestAborted);
+                    if (maxSites == null)
+                    {
+                        await transaction.RollbackAsync(HttpContext.RequestAborted);
+                        return Unauthorized(new
+                        {
+                            error = "invalid_token",
+                            error_description = "有効な Account アクセストークンが必要です。"
+                        });
+                    }
+
+                    // ロック取得後に管理下 Org を引き直して数える。ロック待ちの間に別リクエストが
+                    // コミットした Org を取り込む必要があるため、トランザクション開始前に読んだ
+                    // ownedOrganizations は使えない。
+                    var lockedManaged = await _accountService.GetManagedOrganizationsAsync(subject);
+                    var lockedOrgIds = lockedManaged.Select(m => m.OrganizationId).ToHashSet();
+                    var productionCount = lockedOrgIds.Count == 0
+                        ? 0
+                        : await _context.Organizations
+                            .IgnoreQueryFilters()
+                            .CountAsync(o => lockedOrgIds.Contains(o.Id) && !o.IsSandbox,
+                                HttpContext.RequestAborted);
+
+                    if (productionCount >= maxSites.Value)
+                    {
+                        await transaction.RollbackAsync(HttpContext.RequestAborted);
+                        return InvalidInput(
+                            "site_limit_exceeded",
+                            $"登録できる本番サイトは {maxSites.Value} 件までです。"
+                                + "不要なサイトを削除するか、サポートにお問い合わせください。",
+                            "site_url");
+                    }
+                }
+
                 provisioned = await _provisioning.ProvisionAsync(
                     site,
                     account.DisplayName ?? site.Host,
@@ -638,8 +669,48 @@ namespace IdentityProvider.Controllers
         }
 
         /// <summary>
-        /// 呼び出し Account の本番サイト上限を返す。Account が引けない場合は既定値を返す
-        /// （一覧表示のための補助情報であり、実際の上限判定は追加時に Account を引いて行う）。
+        /// 上限判定のために Account 行を読む。**呼び出し側でトランザクションを開始しておくこと。**
+        ///
+        /// <para>
+        /// SQL Server では <c>WITH (UPDLOCK, HOLDLOCK)</c> を付けて行ロックを取り、同一アカウントの
+        /// 並行リクエストをトランザクション終了まで直列化する。UPDLOCK は更新ロックを即座に取って
+        /// ロック昇格時のデッドロックを避け、HOLDLOCK はコミットまでロックを保持して
+        /// 「読んだ後に別トランザクションが Org を追加する」窓を塞ぐ。
+        /// </para>
+        /// <para>
+        /// InMemory プロバイダ（ユニットテスト）は生 SQL を実行できないため、通常の読み取りに
+        /// フォールバックする。この分岐によりロックの実挙動はユニットテストでは検証できないので、
+        /// 並行時の振る舞いは実 SQL Server に対する E2E
+        /// （<c>E2ETests/tests/specs/account_site_limit_concurrency.spec.ts</c>）で担保する。
+        /// </para>
+        /// </summary>
+        /// <returns>Account が見つからない場合は null。</returns>
+        private async Task<int?> LoadMaxSitesForUpdateAsync(string subject, CancellationToken ct)
+        {
+            if (!_context.Database.IsSqlServer())
+            {
+                return await _context.Accounts
+                    .IgnoreQueryFilters()
+                    .Where(a => a.Subject == subject)
+                    .Select(a => (int?)a.MaxSites)
+                    .FirstOrDefaultAsync(ct);
+            }
+
+            // FromSqlInterpolated はパラメータ化されるため、subject の値が SQL に直接埋まることはない。
+            var locked = await _context.Accounts
+                .FromSqlInterpolated(
+                    $"SELECT * FROM dbo.account WITH (UPDLOCK, HOLDLOCK) WHERE subject = {subject}")
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .ToListAsync(ct);
+
+            return locked.Count == 0 ? null : locked[0].MaxSites;
+        }
+
+        /// <summary>
+        /// 呼び出し Account の本番サイト上限を返す（一覧表示のための補助情報）。
+        /// 実際の上限判定は <see cref="CreateOrganization"/> がトランザクション内で
+        /// <see cref="LoadMaxSitesForUpdateAsync"/> を使って行う。
         /// </summary>
         private async Task<int> GetMaxSitesAsync(string subject)
         {
