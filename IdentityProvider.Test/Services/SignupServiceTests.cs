@@ -104,8 +104,8 @@ namespace IdentityProvider.Test.Services
                 disposableCheckerMock.Object,
                 CreateConfiguration(withConfirmBaseUrl),
                 _logger,
-                new PlaintextSecretProtector(),
-                new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()));
+                new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()),
+                new OrganizationProvisioningService(context, new PlaintextSecretProtector()));
         }
 
         /// <summary>
@@ -231,8 +231,8 @@ namespace IdentityProvider.Test.Services
 
             var service = new SignupService(
                 context, tenantService, emailMock.Object, disposableMock.Object, config, _logger,
-                new PlaintextSecretProtector(),
-                new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()));
+                new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()),
+                new OrganizationProvisioningService(context, new PlaintextSecretProtector()));
 
             await service.RequestAsync(ValidInput());
 

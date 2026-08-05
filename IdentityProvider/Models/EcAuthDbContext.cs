@@ -35,36 +35,63 @@ namespace IdentityProvider.Models
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            // 組織エンティティにテナントフィルターを適用
+            // 組織エンティティにテナントフィルターを適用。
+            //
+            // 論理削除（DeletedAt）はテナント条件と同じ扱いで全フィルターに乗せる。EF Core の
+            // グローバルクエリフィルターは「クエリのルート」と「Include したナビゲーション先」には
+            // 効くが、下記のように述語の中でナビゲーションを辿った参照（c.Organization.XXX）には
+            // 自動適用されない。したがって Organization 側に DeletedAt 条件を足すだけでは、
+            // Client 経由・EcAuthUser 経由のエンティティが削除済み Org の行を拾い続ける。
+            // 削除済みサイトで認証が通ってしまうため、派生フィルターにも同じ条件を明記する。
             modelBuilder.Entity<Organization>()
-                .HasQueryFilter(o => o.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(o => o.TenantName == _tenantService.TenantName && o.DeletedAt == null);
 
-            // Organization.Code のグローバルユニーク制約
+            // Organization.Code のグローバルユニーク制約。
+            // 論理削除しても code は解放されない（削除済み Org と同じコードで作り直せてしまうと、
+            // 課金集計で別サイトの利用期間が同一コードに混ざるため）。削除済みドメインの
+            // 再登録は AccountController が organization_deleted で明示的に拒否する。
             modelBuilder.Entity<Organization>()
                 .HasIndex(o => o.Code)
                 .IsUnique();
 
+            // サンドボックス Org → 本番 Org の自己参照。
+            // 自己参照のため Cascade は張れない（SQL Server が循環参照を拒否する）。
+            modelBuilder.Entity<Organization>()
+                .HasOne(o => o.ParentOrganization)
+                .WithMany(o => o.SandboxOrganizations)
+                .HasForeignKey(o => o.ParentOrganizationId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // 「1 本番 Org あたりサンドボックスは 1 つまで」を DB 制約として担保する。
+            // 論理削除済みを除外しているのは、削除したサンドボックスの枠が空かないと
+            // 「追加 → 動作確認 → 旧削除」での作り直しができなくなるため。
+            modelBuilder.Entity<Organization>()
+                .HasIndex(o => o.ParentOrganizationId)
+                .IsUnique()
+                .HasFilter("[parent_organization_id] IS NOT NULL AND [deleted_at] IS NULL")
+                .HasDatabaseName("IX_organization_parent_organization_id_active");
+
             // EcAuthUserにも同じグローバルクエリフィルターを適用
             modelBuilder.Entity<EcAuthUser>()
-                .HasQueryFilter(u => u.Organization != null && u.Organization.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(u => u.Organization != null && u.Organization.TenantName == _tenantService.TenantName && u.Organization.DeletedAt == null);
 
             // ExternalIdpMappingにもグローバルクエリフィルターを適用
             modelBuilder.Entity<ExternalIdpMapping>()
-                .HasQueryFilter(m => m.EcAuthUser != null && m.EcAuthUser.Organization != null && m.EcAuthUser.Organization.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(m => m.EcAuthUser != null && m.EcAuthUser.Organization != null && m.EcAuthUser.Organization.TenantName == _tenantService.TenantName && m.EcAuthUser.Organization.DeletedAt == null);
 
             // AuthorizationCodeにもグローバルクエリフィルターを適用
             // 注: 旧外部キー削除後はClient経由でテナントフィルターを適用
             modelBuilder.Entity<AuthorizationCode>()
-                .HasQueryFilter(ac => ac.Client != null && ac.Client.Organization != null && ac.Client.Organization.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(ac => ac.Client != null && ac.Client.Organization != null && ac.Client.Organization.TenantName == _tenantService.TenantName && ac.Client.Organization.DeletedAt == null);
 
             // AccessTokenにもグローバルクエリフィルターを適用
             // 注: 旧外部キー削除後はClient経由でテナントフィルターを適用
             modelBuilder.Entity<AccessToken>()
-                .HasQueryFilter(at => at.Client != null && at.Client.Organization != null && at.Client.Organization.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(at => at.Client != null && at.Client.Organization != null && at.Client.Organization.TenantName == _tenantService.TenantName && at.Client.Organization.DeletedAt == null);
 
             // ExternalIdpTokenにもグローバルクエリフィルターを適用
             modelBuilder.Entity<ExternalIdpToken>()
-                .HasQueryFilter(eit => eit.EcAuthUser != null && eit.EcAuthUser.Organization != null && eit.EcAuthUser.Organization.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(eit => eit.EcAuthUser != null && eit.EcAuthUser.Organization != null && eit.EcAuthUser.Organization.TenantName == _tenantService.TenantName && eit.EcAuthUser.Organization.DeletedAt == null);
 
             // EcAuthUser関連の設定
             modelBuilder.Entity<EcAuthUser>()
@@ -142,15 +169,15 @@ namespace IdentityProvider.Models
 
             // B2BUser テナントフィルター
             modelBuilder.Entity<B2BUser>()
-                .HasQueryFilter(u => u.Organization != null && u.Organization.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(u => u.Organization != null && u.Organization.TenantName == _tenantService.TenantName && u.Organization.DeletedAt == null);
 
             // B2BPasskeyCredential テナントフィルター（B2BUser経由）
             modelBuilder.Entity<B2BPasskeyCredential>()
-                .HasQueryFilter(c => c.B2BUser != null && c.B2BUser.Organization != null && c.B2BUser.Organization.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(c => c.B2BUser != null && c.B2BUser.Organization != null && c.B2BUser.Organization.TenantName == _tenantService.TenantName && c.B2BUser.Organization.DeletedAt == null);
 
             // WebAuthnChallenge テナントフィルター（Client経由）
             modelBuilder.Entity<WebAuthnChallenge>()
-                .HasQueryFilter(wc => wc.Client != null && wc.Client.Organization != null && wc.Client.Organization.TenantName == _tenantService.TenantName);
+                .HasQueryFilter(wc => wc.Client != null && wc.Client.Organization != null && wc.Client.Organization.TenantName == _tenantService.TenantName && wc.Client.Organization.DeletedAt == null);
 
             // B2BUser 関連の設定
             // Subject（UUID）はグローバルに一意（RFC 9562）。EC-CUBEプラグインが生成するUUIDを
@@ -200,10 +227,15 @@ namespace IdentityProvider.Models
                 .HasIndex(k => new { k.OrganizationId, k.Kid })
                 .IsUnique();
 
-            // Account: 所属 Org のテナント (accounts / stg-accounts) のみ参照可能
+            // Account: 所属 Org のテナント (accounts / stg-accounts) のみ参照可能。
+            // 所属先は申込受付テナントの Org であり顧客サイトの Org ではないため、通常は
+            // 論理削除されない。それでも条件を揃えているのは、受付 Org が誤って削除された
+            // 状態で Account だけ生き残る（＝どのテナントからも見えない Account が残る）
+            // ズレを防ぐため。
             modelBuilder.Entity<Account>()
                 .HasQueryFilter(a => a.Organization != null
-                    && a.Organization.TenantName == _tenantService.TenantName);
+                    && a.Organization.TenantName == _tenantService.TenantName
+                    && a.Organization.DeletedAt == null);
 
             modelBuilder.Entity<Account>()
                 .HasAlternateKey(a => a.Subject);
@@ -217,6 +249,13 @@ namespace IdentityProvider.Models
             modelBuilder.Entity<Account>()
                 .HasIndex(a => new { a.OrganizationId, a.Email })
                 .IsUnique();
+
+            // 本番 Organization 数の上限。DB 側にも既定値を置くことで、この列を追加する
+            // マイグレーションが既存の全アカウントに 10 を入れる（既定値なしだと 0 が入り、
+            // 全既存アカウントがサイトを 1 件も追加できなくなる）。
+            modelBuilder.Entity<Account>()
+                .Property(a => a.MaxSites)
+                .HasDefaultValue(Account.DefaultMaxSites);
 
             // AccountOrganization: テナント横断 (クエリフィルター対象外)
             modelBuilder.Entity<AccountOrganization>()

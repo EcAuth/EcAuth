@@ -84,6 +84,7 @@ namespace IdentityProvider.Services
             // クライアント取得
             var client = await _context.Clients
                 .IgnoreQueryFilters()
+                .ExcludeDeletedOrganizations()
                 .Include(c => c.Organization)
                 .FirstOrDefaultAsync(c => c.ClientId == request.ClientId);
 
@@ -533,6 +534,7 @@ namespace IdentityProvider.Services
             // クライアント取得
             var client = await _context.Clients
                 .IgnoreQueryFilters()
+                .ExcludeDeletedOrganizations()
                 .FirstOrDefaultAsync(c => c.ClientId == request.ClientId);
 
             if (client == null)

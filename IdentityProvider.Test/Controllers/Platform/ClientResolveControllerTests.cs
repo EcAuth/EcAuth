@@ -2,6 +2,7 @@ using IdentityProvider.Controllers.Platform;
 using IdentityProvider.Models;
 using IdentityProvider.Test.TestHelpers;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -149,6 +150,22 @@ namespace IdentityProvider.Test.Controllers.Platform
             var value = okResult.Value;
             var baseUrl = value!.GetType().GetProperty("base_url")!.GetValue(value)!.ToString();
             Assert.Equal("https://shop1.ec-auth.io", baseUrl);
+        }
+
+        [Fact]
+        public async Task Resolve_SoftDeletedOrganization_ReturnsNotFound()
+        {
+            // プラグインは接続先 IdP の base_url をこのエンドポイントから得るため、
+            // ここが 404 を返すことが「サイトを削除したら接続できなくなる」の担保になる。
+            var organization = await _context.Organizations
+                .IgnoreQueryFilters()
+                .FirstAsync(o => o.Id == 1);
+            organization.DeletedAt = DateTimeOffset.UtcNow;
+            await _context.SaveChangesAsync();
+
+            var result = await _controller.Resolve("test-client-id");
+
+            Assert.IsType<NotFoundObjectResult>(result);
         }
 
         public void Dispose()

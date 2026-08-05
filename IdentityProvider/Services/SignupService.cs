@@ -20,24 +20,10 @@ namespace IdentityProvider.Services
         // 同意バージョンの既定値（input で未指定の場合に使用）。
         private const string DefaultPolicyVersion = "1.0";
 
-        // 組織コード導出: 英数字以外の連続を 1 つの "-" に畳み込むための正規表現。
-        private static readonly Regex NonAlphanumericRun = new("[^a-z0-9]+", RegexOptions.Compiled);
-
-        // サンドボックス（テストサイト）Org の組織コードに付ける接尾辞。
-        private const string SandboxCodeSuffix = "-sandbox";
-
-        // 組織コードはそのままテナント名になり {tenant}.ec-auth.io の 1 ラベルを構成する。
-        // DNS のラベル上限は 63 オクテット（RFC 1035）。超えると Org は作れてもその
-        // サブドメインに到達できず、プラグインの接続先が解決不能になる。
-        private const int MaxOrganizationCodeLength = 63;
-
         // 確認 URL 設定キーのテナント部を環境変数名に使える形へ正規化する正規表現。
         // 環境変数名はハイフンを含められない（Azure Linux App Service が 400 で拒否）ため、
         // [A-Za-z0-9_] 以外を "_" に置換する（例: "stg-accounts" -> "stg_accounts"）。
         private static readonly Regex NonConfigKeyChar = new("[^A-Za-z0-9_]", RegexOptions.Compiled);
-
-        // 申込 URL のベースパス正規化: 末尾セグメントをファイル名とみなして落とす拡張子。
-        private static readonly string[] WebDocumentExtensions = [".php", ".html", ".htm"];
 
         private readonly EcAuthDbContext _context;
         private readonly ITenantService _tenantService;
@@ -45,8 +31,8 @@ namespace IdentityProvider.Services
         private readonly IDisposableEmailChecker _disposableEmailChecker;
         private readonly IConfiguration _configuration;
         private readonly ILogger<SignupService> _logger;
-        private readonly ISecretProtector _secretProtector;
         private readonly IPasskeyRegistrationTokenService _registrationTokenService;
+        private readonly IOrganizationProvisioningService _provisioning;
 
         public SignupService(
             EcAuthDbContext context,
@@ -55,8 +41,8 @@ namespace IdentityProvider.Services
             IDisposableEmailChecker disposableEmailChecker,
             IConfiguration configuration,
             ILogger<SignupService> logger,
-            ISecretProtector secretProtector,
-            IPasskeyRegistrationTokenService registrationTokenService)
+            IPasskeyRegistrationTokenService registrationTokenService,
+            IOrganizationProvisioningService provisioning)
         {
             _context = context;
             _tenantService = tenantService;
@@ -64,8 +50,8 @@ namespace IdentityProvider.Services
             _disposableEmailChecker = disposableEmailChecker;
             _configuration = configuration;
             _logger = logger;
-            _secretProtector = secretProtector;
             _registrationTokenService = registrationTokenService;
+            _provisioning = provisioning;
         }
 
         /// <inheritdoc />
@@ -85,7 +71,7 @@ namespace IdentityProvider.Services
                 ValidateEcCubeVersion(input.EcCubeVersion);
 
                 // 組織コードの重複チェック（全テナント横断）。
-                await EnsureOrganizationCodesAvailableAsync(sites, ct);
+                await _provisioning.EnsureOrganizationCodesAvailableAsync(sites.Sites, ct);
             }
 
             // 生トークン（メール URL に使う）と、その SHA-256 ハッシュ（DB に保存する）を生成する。
@@ -173,7 +159,7 @@ namespace IdentityProvider.Services
                 // 申込時から confirm までの間にデータが変わっている可能性があるため、再バリデーションする。
                 sites = ValidateSiteUrls(signupRequest.ProductionSiteUrl, signupRequest.TestSiteUrl);
                 // confirm 時の code 衝突は Race Condition のため 409 を返す。
-                await EnsureOrganizationCodesAvailableAsync(sites, ct, statusCode: 409);
+                await _provisioning.EnsureOrganizationCodesAvailableAsync(sites.Sites, ct, statusCode: 409);
 
                 // 受付テナント（accounts / stg-accounts）の Organization を取得する。
                 // 受付 Org の code は tenant_name と一致する（AccountsOrganizationSeeder の定義）。
@@ -241,38 +227,26 @@ namespace IdentityProvider.Services
 
                 // 顧客 Organization を入力 URL に応じて 1〜2 件作成し、
                 // 各 Org に Client / RsaKeyPair / AccountOrganization を作成する。
-                foreach (var site in sites.Sites)
+                //
+                // 本番を先に作り、テスト Org には本番の Id を親として持たせる
+                //（「1 本番 Org あたりサンドボックスは 1 つ」の紐付け）。テストサイトだけで
+                // 申し込んだ場合は親が存在しないため null のままにする。後から本番サイトを
+                // 追加したときに、マイページ側でこの孤立サンドボックスを親に紐づけ直せる。
+                int? productionOrganizationId = null;
+                foreach (var site in sites.Sites.OrderBy(s => s.IsSandbox))
                 {
-                    var organization = new Organization
-                    {
-                        Code = site.Code,
-                        Name = signupRequest.OrganizationName,
-                        TenantName = site.Code,
-                        IsSandbox = site.IsSandbox
-                    };
-                    _context.Organizations.Add(organization);
-                    // RsaKeyPair / AccountOrganization が OrganizationId を必要とするため、
-                    // ここで一度 SaveChanges して採番された Id を確定させる。
-                    await _context.SaveChangesAsync(ct);
+                    var provisioned = await _provisioning.ProvisionAsync(
+                        site,
+                        signupRequest.OrganizationName,
+                        signupRequest.EcCubeVersion,
+                        subject,
+                        parentOrganizationId: site.IsSandbox ? productionOrganizationId : null,
+                        ct);
 
-                    var client = CreateClient(
-                        organization, site, signupRequest.OrganizationName, signupRequest.EcCubeVersion);
-                    // 保存前に client_secret を暗号化する（レガシー/dev は平文パススルー）。
-                    // Key Vault 暗号化の所要時間を confirm 内の独立ステップとして計測する。
-                    using (TimingScope.Begin("client_secret_protect"))
+                    if (!site.IsSandbox)
                     {
-                        client.ClientSecret = await _secretProtector.ProtectAsync(client.ClientSecret, ct);
+                        productionOrganizationId = provisioned.Organization.Id;
                     }
-                    _context.Clients.Add(client);
-
-                    _context.RsaKeyPairs.Add(CreateRsaKeyPair(organization.Id));
-
-                    _context.AccountOrganizations.Add(new AccountOrganization
-                    {
-                        AccountSubject = subject,
-                        OrganizationId = organization.Id,
-                        Role = "owner"
-                    });
                 }
 
                 signupRequest.ConfirmedAt = DateTimeOffset.UtcNow;
@@ -434,7 +408,7 @@ namespace IdentityProvider.Services
             return name;
         }
 
-        private static SiteSet ValidateSiteUrls(string? productionSiteUrl, string? testSiteUrl)
+        private SiteSet ValidateSiteUrls(string? productionSiteUrl, string? testSiteUrl)
         {
             var production = NormalizeOptionalUrl(productionSiteUrl);
             var test = NormalizeOptionalUrl(testSiteUrl);
@@ -447,34 +421,16 @@ namespace IdentityProvider.Services
                     field: "production_site_url");
             }
 
-            SiteUrl? productionSite = null;
-            SiteUrl? testSite = null;
+            var sites = new List<SiteEntry>();
 
             if (production != null)
             {
-                productionSite = ValidateHttpsAndParseSiteUrl(production, "production_site_url");
+                sites.Add(_provisioning.BuildSite(production, isSandbox: false, "production_site_url"));
             }
+
             if (test != null)
             {
-                testSite = ValidateHttpsAndParseSiteUrl(test, "test_site_url");
-            }
-
-            var sites = new List<SiteEntry>();
-
-            if (productionSite != null)
-            {
-                sites.Add(new SiteEntry(
-                    DeriveOrganizationCode(productionSite.Host, isSandbox: false),
-                    productionSite.Host, productionSite.BaseUrl,
-                    IsSandbox: false, "production_site_url"));
-            }
-
-            if (testSite != null)
-            {
-                sites.Add(new SiteEntry(
-                    DeriveOrganizationCode(testSite.Host, isSandbox: true),
-                    testSite.Host, testSite.BaseUrl,
-                    IsSandbox: true, "test_site_url"));
+                sites.Add(_provisioning.BuildSite(test, isSandbox: true, "test_site_url"));
             }
 
             return new SiteSet(
@@ -493,163 +449,10 @@ namespace IdentityProvider.Services
             }
         }
 
-        private async Task EnsureOrganizationCodesAvailableAsync(SiteSet sites, CancellationToken ct, int statusCode = 422)
-        {
-            // 組織コードはテナント名（= {tenant}.ec-auth.io の 1 ラベル）になるため、
-            // DNS のラベル上限を超えるものは作らせない。作れても到達できないため。
-            foreach (var site in sites.Sites)
-            {
-                if (site.Code.Length > MaxOrganizationCodeLength)
-                {
-                    throw new SignupValidationException(
-                        "invalid_site_url",
-                        "サイト URL のドメインが長すぎます。より短いドメインでお申し込みください。",
-                        field: site.Field,
-                        statusCode: 422);
-                }
-            }
-
-            // 同一リクエスト内で導出後の組織コードが衝突していないか検知する。
-            // 本番とテストは接尾辞（-sandbox）で必ず分かれるため通常は発火しないが、
-            // 導出規則を将来変えたときに黙って 1 件に潰れるのを防ぐガードとして残す。
-            var seenCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var site in sites.Sites)
-            {
-                if (!seenCodes.Add(site.Code))
-                {
-                    throw new SignupValidationException(
-                        "duplicate_site",
-                        "本番サイトとテストサイトが同じ組織として扱われます。"
-                            + "テストサイトには別のドメインをご指定ください。",
-                        field: site.Field,
-                        statusCode: 422);
-                }
-            }
-
-            // ドメインの占有は「接尾辞を除いた導出コード」で判定する。site.Code をそのまま
-            // 比較すると、サンドボックス側だけコードが変わったせいで
-            //   - 旧規則（接尾辞なし）で登録済みのサンドボックス Org
-            //   - 本番として登録済みのドメイン
-            // を、別アカウントがテストサイトとして再登録できてしまう。
-            //
-            // 同一申込内での本番＋サンドボックス併存はこれでも壊れない。Organization の作成は
-            // このチェックより後（トランザクション内）で行うため、ペアの相方はまだ DB に無いため。
-            // 申込内の衝突判定は上の seenCodes が接尾辞込みのコードで行っており、そちらは併存を許す。
-            foreach (var site in sites.Sites)
-            {
-                var baseCode = DeriveOrganizationCode(site.Host, isSandbox: false);
-                var sandboxCode = baseCode + SandboxCodeSuffix;
-
-                var exists = await _context.Organizations
-                    .IgnoreQueryFilters()
-                    .AnyAsync(o => o.Code == baseCode || o.Code == sandboxCode, ct);
-
-                if (exists)
-                {
-                    throw new SignupValidationException(
-                        "organization_already_exists",
-                        "このドメインは既に EcAuth に登録されています。別のサイト URL でお申し込みください。",
-                        field: site.Field,
-                        statusCode: statusCode);
-                }
-            }
-        }
-
-        // ---- 組織コード導出・URL 処理 ----
-
-        /// <summary>
-        /// ホスト名から組織コードを導出する。
-        /// lowercase → 先頭 www. 除去 → サブドメイン保持 → 英数以外の連続を "-" に置換 → 前後の "-" を trim。
-        /// 例: <c>shop.example.jp → shop-example-jp</c>。
-        ///
-        /// サンドボックス（テストサイト）の Org には必ず <c>-sandbox</c> を付ける。理由は 2 つある:
-        /// <list type="number">
-        ///   <item>
-        ///     本番と同じドメイン（あるいは <c>www.</c> の有無だけが違うドメイン）でもテスト Org を
-        ///     作れるようにするため。付けないと導出後コードが本番と衝突し、テスト環境を持たない
-        ///     顧客は検証にも本番 Org を使うしかなくなる（EcAuth#482 の問題 2）。
-        ///   </item>
-        ///   <item>
-        ///     組織コードはそのままテナント名になり、プラグインが接続する
-        ///     <c>https://{tenant}.ec-auth.io</c>（<c>ClientResolveController</c>）に現れる。
-        ///     接続先を見ただけで本番かサンドボックスかが分かる。
-        ///   </item>
-        /// </list>
-        /// </summary>
-        private static string DeriveOrganizationCode(string host, bool isSandbox)
-        {
-            var normalized = StripWwwPrefix(host.Trim().ToLowerInvariant());
-            var code = NonAlphanumericRun.Replace(normalized, "-").Trim('-');
-            return isSandbox ? code + SandboxCodeSuffix : code;
-        }
-
-        /// <summary>
-        /// 先頭の <c>www.</c> を除去する（無ければそのまま返す）。呼び出し側で小文字化済みであることを前提とする。
-        /// </summary>
-        private static string StripWwwPrefix(string host)
-        {
-            return host.StartsWith("www.", StringComparison.Ordinal)
-                ? host["www.".Length..]
-                : host;
-        }
-
         private static string? NormalizeOptionalUrl(string? url)
         {
             var trimmed = url?.Trim();
             return string.IsNullOrEmpty(trimmed) ? null : trimmed;
-        }
-
-        /// <summary>
-        /// URL が HTTPS であることを検証し、RP ID 用のホスト名と、コールバック URL の基点になる
-        /// ベース URL（scheme + authority + 末尾スラッシュ付きベースパス）を返す。
-        /// </summary>
-        private static SiteUrl ValidateHttpsAndParseSiteUrl(string url, string field)
-        {
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
-                || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-                || string.IsNullOrEmpty(uri.Host))
-            {
-                throw new SignupValidationException(
-                    "invalid_site_url", "サイト URL は https:// で始まる正しい URL を入力してください。", field: field);
-            }
-
-            // IDN（国際化ドメイン）は Uri.Host だと Unicode のまま返り、組織コード導出の
-            // [^a-z0-9] 除去で空文字や衝突を招く。IdnHost（Punycode, ASCII）を使う。
-            // ブラウザが送る Host ヘッダも Punycode なので、プラグインが組み立てる
-            // redirect_uri / rp_id と一致する。
-            var host = uri.IdnHost;
-
-            // 非既定ポートは redirect_uri の完全一致検証に必要なので保持する
-            // （RP ID はポートを含まないドメイン名なので host 側では使わない）。
-            var authority = uri.IsDefaultPort ? host : $"{host}:{uri.Port}";
-
-            return new SiteUrl(host, $"https://{authority}{NormalizeBasePath(uri.AbsolutePath)}");
-        }
-
-        /// <summary>
-        /// 申込 URL のパスを、コールバック URL の基点になるベースパスへ正規化する（先頭・末尾がスラッシュ）。
-        /// EC-CUBE 2 系・4 系ともサブディレクトリインストールがあり得るため、パスを捨てずに引き継ぐ。
-        /// 末尾セグメントがウェブ文書の場合のみ落とす（<c>.../index.php</c> を貼られるケース）。
-        /// </summary>
-        private static string NormalizeBasePath(string absolutePath)
-        {
-            var path = string.IsNullOrEmpty(absolutePath) ? "/" : absolutePath;
-
-            // ドットの有無で判定すると "ec-cube-4.2" のようなディレクトリ名をファイル名と
-            // 誤判定してサブディレクトリごと落としてしまうため、拡張子で判定する。
-            var lastSlash = path.LastIndexOf('/');
-            var lastSegment = lastSlash >= 0 ? path[(lastSlash + 1)..] : string.Empty;
-            if (WebDocumentExtensions.Any(ext => lastSegment.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
-            {
-                path = path[..(lastSlash + 1)];
-            }
-
-            if (!path.StartsWith('/'))
-            {
-                path = "/" + path;
-            }
-
-            return path.EndsWith('/') ? path : path + "/";
         }
 
         private static bool IsValidEmail(string email)
@@ -666,83 +469,6 @@ namespace IdentityProvider.Services
             }
         }
 
-        // ---- レコード生成（AccountsOrganizationSeeder の流儀を流用）----
-
-        /// <summary>
-        /// 顧客 Org 用 Client を生成する。ClientSecret 生成・AllowedRpIds 設定・RedirectUri 付与の流儀は
-        /// <c>AccountsOrganizationSeeder.SeedClientAsync</c> / <c>SeedRedirectUriAsync</c> を流用する。
-        /// </summary>
-        private static Client CreateClient(
-            Organization organization, SiteEntry site, string appName, string ecCubeVersion)
-        {
-            var client = new Client
-            {
-                ClientId = BuildClientId(site.Code),
-                ClientSecret = GenerateClientSecret(),
-                AppName = appName,
-                OrganizationId = organization.Id,
-                SubjectType = SubjectType.B2B,
-                AllowedRpIds = BuildAllowedRpIds(site.Host)
-            };
-
-            // プラグインが authenticate/verify に送る redirect_uri は完全一致で検証される
-            // （B2BPasskeyController）。サイトのトップ URL では一致しないため、申込時に
-            // 選ばれた EC プラットフォームのコールバック URL を登録する。
-            client.RedirectUris!.Add(new RedirectUri
-            {
-                Uri = site.BaseUrl + CallbackPathFor(ecCubeVersion)
-            });
-
-            return client;
-        }
-
-        /// <summary>
-        /// 申込時に選ばれた EC プラットフォームのコールバックパスを返す（ベースパスからの相対）。
-        /// EC-CUBE 4 系はルート <c>ecauth_callback</c>（<c>/ecauth/callback</c>）、
-        /// 2 系は <c>HTTPS_URL . 'ecauth/callback.php'</c> を使う。
-        /// </summary>
-        private static string CallbackPathFor(string ecCubeVersion) => ecCubeVersion switch
-        {
-            "2" => "ecauth/callback.php",
-            // "4" と "other"（EC-CUBE 以外）は 4 系と同じパスを初期値にする。
-            _ => "ecauth/callback"
-        };
-
-        /// <summary>
-        /// 初期の allowed_rp_ids を組み立てる。申込 URL が <c>www.</c> 付きでも管理画面は apex
-        /// ドメインというケースがあるため、<c>www.</c> 除去版も許可しておく。
-        /// RP ID はポートを含まないドメイン名（WebAuthn の valid domain string）。
-        /// </summary>
-        private static List<string> BuildAllowedRpIds(string host)
-        {
-            var rpIds = new List<string> { host };
-
-            var stripped = StripWwwPrefix(host);
-            if (!string.Equals(stripped, host, StringComparison.Ordinal))
-            {
-                rpIds.Add(stripped);
-            }
-
-            return rpIds;
-        }
-
-        /// <summary>
-        /// RSA 鍵ペアを生成する。RSA.Create(2048) → Base64 エクスポートの流儀は
-        /// <c>AccountsOrganizationSeeder.SeedRsaKeyPairAsync</c> を流用する。
-        /// </summary>
-        private static RsaKeyPair CreateRsaKeyPair(int organizationId)
-        {
-            using var rsa = RSA.Create(2048);
-            return new RsaKeyPair
-            {
-                Kid = Guid.NewGuid().ToString(),
-                OrganizationId = organizationId,
-                PublicKey = Convert.ToBase64String(rsa.ExportRSAPublicKey()),
-                PrivateKey = Convert.ToBase64String(rsa.ExportRSAPrivateKey()),
-                IsActive = true
-            };
-        }
-
         // ---- トークン・URL・補助 ----
 
         private static string GenerateConfirmToken()
@@ -750,21 +476,6 @@ namespace IdentityProvider.Services
             // 32 byte の URL-safe ランダム。Base64URL（パディング除去）でエンコードする。
             var bytes = RandomNumberGenerator.GetBytes(ConfirmTokenBytes);
             return Base64UrlEncode(bytes);
-        }
-
-        private static string GenerateClientSecret()
-        {
-            var bytes = RandomNumberGenerator.GetBytes(32);
-            return Base64UrlEncode(bytes);
-        }
-
-        /// <summary>
-        /// 顧客 Org 用の client_id を組織コードから導出する。
-        /// グローバルユニーク制約があるため、組織コードに短いランダムサフィックスを付与して衝突を避ける。
-        /// </summary>
-        private static string BuildClientId(string code)
-        {
-            return $"ec-{code}-{Guid.NewGuid():N}";
         }
 
         private static string Base64UrlEncode(byte[] bytes)
@@ -848,15 +559,10 @@ namespace IdentityProvider.Services
 
         // ---- 内部表現 ----
 
-        private sealed record SiteSet(string? ProductionUrl, string? TestUrl, List<SiteEntry> Sites);
-
-        private sealed record SiteEntry(
-            string Code, string Host, string BaseUrl, bool IsSandbox, string Field);
-
         /// <summary>
-        /// 申込 URL の解析結果。<c>Host</c> は RP ID / 組織コード導出用（ポートを含まない）、
-        /// <c>BaseUrl</c> は redirect_uri 組み立て用（非既定ポートとベースパスを含み、末尾はスラッシュ）。
+        /// 申込 1 件が作るサイトの集合。<c>Sites</c> の各要素は
+        /// <see cref="IOrganizationProvisioningService.BuildSite"/> が検証・導出した結果。
         /// </summary>
-        private sealed record SiteUrl(string Host, string BaseUrl);
+        private sealed record SiteSet(string? ProductionUrl, string? TestUrl, List<SiteEntry> Sites);
     }
 }

@@ -387,6 +387,7 @@ namespace IdentityProvider.Services
                 // 2. Client を検索
                 var client = await _context.Clients
                     .IgnoreQueryFilters()
+                    .ExcludeDeletedOrganizations()
                     .FirstOrDefaultAsync(c => c.ClientId == clientIdClaim);
 
                 if (client == null)

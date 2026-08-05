@@ -67,6 +67,8 @@ builder.Services.AddScoped<IB2BPasskeyService, B2BPasskeyService>();
 
 // Account 申込フロー（Phase D-1）関連サービス
 builder.Services.AddScoped<ISignupService, SignupService>();
+// サイト（Organization）払い出し。申込フローとマイページのサイト追加が共用する。
+builder.Services.AddScoped<IOrganizationProvisioningService, OrganizationProvisioningService>();
 // メール送信プロバイダは Email:Provider で切替。既定は本番 / staging 用の SendGrid（HTTP API）。
 // ローカル開発 / CI E2E では Email:Provider=Smtp で MailKit ベースの SmtpEmailService に切替え、
 // mailpit（Smtp:Host / Smtp:Port）へ送信して実メール経路を検証する。

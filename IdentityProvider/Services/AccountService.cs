@@ -45,11 +45,15 @@ namespace IdentityProvider.Services
 
             // account_organization はテナント横断（クエリフィルター対象外）。
             // 管理対象 Organization も別テナントのため、Organization 側も IgnoreQueryFilters で引く。
+            //
+            // IgnoreQueryFilters は Organization のグローバルクエリフィルターごと外すため、
+            // 論理削除の条件も一緒に外れる。削除済みサイトが managed_orgs クレームに残ると
+            // 削除後もそのテナントのトークンが発行できてしまうため、ここで明示的に除外する。
             var managed = await _context.AccountOrganizations
                 .IgnoreQueryFilters()
                 .Where(ao => ao.AccountSubject == subject)
                 .Join(
-                    _context.Organizations.IgnoreQueryFilters(),
+                    _context.Organizations.IgnoreQueryFilters().Where(o => o.DeletedAt == null),
                     ao => ao.OrganizationId,
                     o => o.Id,
                     (ao, o) => new IAccountService.ManagedOrganization(o.Id, o.Code, ao.Role))
