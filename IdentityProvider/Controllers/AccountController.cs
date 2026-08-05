@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Asp.Versioning;
+using IdentityProvider.Exceptions;
 using IdentityProvider.Filters;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
@@ -53,6 +54,7 @@ namespace IdentityProvider.Controllers
         private readonly ITokenService _tokenService;
         private readonly IAccountService _accountService;
         private readonly ISecretProtector _secretProtector;
+        private readonly IOrganizationProvisioningService _provisioning;
         private readonly ILogger<AccountController> _logger;
 
         public AccountController(
@@ -60,12 +62,14 @@ namespace IdentityProvider.Controllers
             ITokenService tokenService,
             IAccountService accountService,
             ISecretProtector secretProtector,
+            IOrganizationProvisioningService provisioning,
             ILogger<AccountController> logger)
         {
             _context = context;
             _tokenService = tokenService;
             _accountService = accountService;
             _secretProtector = secretProtector;
+            _provisioning = provisioning;
             _logger = logger;
         }
 
@@ -284,6 +288,548 @@ namespace IdentityProvider.Controllers
                 id = client.Id,
                 client_id = client.ClientId,
                 allowed_rp_ids = rpIds.ToArray()
+            });
+        }
+
+        // ---- サイト（Organization）の一覧・追加・削除 ----
+
+        /// <summary>
+        /// GET /v1/account/organizations
+        /// 呼び出し Account が管理するサイト（Organization）の一覧を返す。
+        ///
+        /// 論理削除済みのサイトは含まない（<see cref="IAccountService.GetManagedOrganizationsAsync"/>
+        /// が除外する）。本番とテストの対応は <c>parent_organization_id</c> で表現し、
+        /// UI 側はこれを使って本番の下にテストをぶら下げて表示する。
+        /// </summary>
+        [HttpGet("organizations")]
+        public async Task<IActionResult> GetOrganizations()
+        {
+            var subject = await ValidateAccountTokenAsync();
+            if (subject == null)
+            {
+                return Unauthorized(new
+                {
+                    error = "invalid_token",
+                    error_description = "有効な Account アクセストークンが必要です。"
+                });
+            }
+
+            var managed = await _accountService.GetManagedOrganizationsAsync(subject);
+            var orgIds = managed.Select(m => m.OrganizationId).ToHashSet();
+            var maxSites = await GetMaxSitesAsync(subject);
+
+            if (orgIds.Count == 0)
+            {
+                return Ok(new
+                {
+                    organizations = Array.Empty<object>(),
+                    max_sites = maxSites,
+                    production_site_count = 0
+                });
+            }
+
+            // 管理対象 Organization は顧客テナント（別テナント）のため IgnoreQueryFilters で横断取得する。
+            // 削除済みは orgIds の時点で除外済み。
+            var organizations = await _context.Organizations
+                .IgnoreQueryFilters()
+                .Where(o => orgIds.Contains(o.Id))
+                .OrderBy(o => o.Id)
+                .ToListAsync();
+
+            var clients = await _context.Clients
+                .IgnoreQueryFilters()
+                .Include(c => c.RedirectUris)
+                .Where(c => c.OrganizationId != null && orgIds.Contains(c.OrganizationId.Value))
+                .ToListAsync();
+
+            var roleBySubject = managed.ToDictionary(m => m.OrganizationId, m => m.Role);
+
+            var result = organizations.Select(o => new
+            {
+                id = o.Id,
+                code = o.Code,
+                name = o.Name,
+                is_sandbox = o.IsSandbox,
+                parent_organization_id = o.ParentOrganizationId,
+                role = roleBySubject.TryGetValue(o.Id, out var role) ? role : null,
+                created_at = o.CreatedAt,
+                clients = clients
+                    .Where(c => c.OrganizationId == o.Id)
+                    .Select(c => new
+                    {
+                        id = c.Id,
+                        client_id = c.ClientId,
+                        // 値そのものは返さない（一覧に secret を載せない方針。RevealSecret を使う）。
+                        has_secret = !string.IsNullOrEmpty(c.ClientSecret),
+                        app_name = c.AppName,
+                        redirect_uris = c.RedirectUris.Select(r => r.Uri).ToArray(),
+                        allowed_rp_ids = c.AllowedRpIds.ToArray()
+                    })
+                    .ToArray()
+            }).ToArray();
+
+            return Ok(new
+            {
+                organizations = result,
+                max_sites = maxSites,
+                production_site_count = organizations.Count(o => !o.IsSandbox)
+            });
+        }
+
+        /// <summary>
+        /// POST /v1/account/organizations
+        /// サイト（Organization + Client + RsaKeyPair + AccountOrganization）を 1 件追加する。
+        ///
+        /// <para>
+        /// 申込で本番・テストの片方しか登録しなかった場合の復旧手段であり、サイトを増やす唯一の
+        /// 動線でもある（EcAuth#482）。生成ロジックは申込フローと同じ
+        /// <see cref="IOrganizationProvisioningService"/> を通す。
+        /// </para>
+        /// <para>
+        /// 制約は 2 つ。(1) 本番サイトは 1 アカウントあたり <c>account.max_sites</c> 件まで。
+        /// (2) テストサイトは本番 1 件につき 1 件まで（<c>parent_organization_id</c> で紐づけ、
+        /// DB のフィルター付きユニークインデックスでも担保）。
+        /// </para>
+        /// </summary>
+        [HttpPost("organizations")]
+        public async Task<IActionResult> CreateOrganization([FromBody] CreateOrganizationDto? body)
+        {
+            var subject = await ValidateAccountTokenAsync();
+            if (subject == null)
+            {
+                return Unauthorized(new
+                {
+                    error = "invalid_token",
+                    error_description = "有効な Account アクセストークンが必要です。"
+                });
+            }
+
+            if (body == null || string.IsNullOrWhiteSpace(body.SiteUrl))
+            {
+                return InvalidInput("invalid_request", "site_url を指定してください。", "site_url");
+            }
+
+            var ecCubeVersion = NormalizeEcCubeVersion(body.EcCubeVersion);
+            if (ecCubeVersion == null)
+            {
+                return InvalidInput(
+                    "unsupported_version", "対応していない EC-CUBE バージョンです。", "ec_cube_version");
+            }
+
+            var account = await _context.Accounts
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(a => a.Subject == subject);
+            if (account == null)
+            {
+                return Unauthorized(new
+                {
+                    error = "invalid_token",
+                    error_description = "有効な Account アクセストークンが必要です。"
+                });
+            }
+
+            var managed = await _accountService.GetManagedOrganizationsAsync(subject);
+            var orgIds = managed.Select(m => m.OrganizationId).ToHashSet();
+
+            // 削除済みは orgIds に含まれないため、以降のカウント・親検索はすべて有効な Org のみが対象。
+            var ownedOrganizations = orgIds.Count == 0
+                ? new List<Organization>()
+                : await _context.Organizations
+                    .IgnoreQueryFilters()
+                    .Where(o => orgIds.Contains(o.Id))
+                    .ToListAsync();
+
+            int? parentOrganizationId = null;
+            if (body.IsSandbox)
+            {
+                if (body.ParentOrganizationId == null)
+                {
+                    return InvalidInput(
+                        "invalid_request",
+                        "テストサイトを追加するには、紐づける本番サイト（parent_organization_id）を指定してください。",
+                        "parent_organization_id");
+                }
+
+                var parent = ownedOrganizations.FirstOrDefault(o => o.Id == body.ParentOrganizationId.Value);
+                if (parent == null || parent.IsSandbox)
+                {
+                    // 管理外の Org を指定された場合も、テスト Org を親に指定された場合も同じ扱い。
+                    // 他アカウントの Organization の存在を漏らさないため理由は区別しない。
+                    return InvalidInput(
+                        "invalid_parent",
+                        "紐づける本番サイトが見つかりません。",
+                        "parent_organization_id");
+                }
+
+                var sandboxExists = ownedOrganizations.Any(o => o.ParentOrganizationId == parent.Id);
+                if (sandboxExists)
+                {
+                    return InvalidInput(
+                        "sandbox_already_exists",
+                        "この本番サイトには既にテストサイトが登録されています。"
+                            + "作り直す場合は既存のテストサイトを削除してから追加してください。",
+                        "parent_organization_id");
+                }
+
+                parentOrganizationId = parent.Id;
+            }
+            SiteEntry site;
+            try
+            {
+                site = _provisioning.BuildSite(body.SiteUrl, body.IsSandbox, "site_url");
+                await _provisioning.EnsureOrganizationCodesAvailableAsync(
+                    new[] { site }, HttpContext.RequestAborted, ownedOrganizationIds: orgIds);
+            }
+            catch (SignupValidationException ex)
+            {
+                return FromValidationException(ex);
+            }
+
+            await using var transaction = await _context.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+            ProvisionedSite provisioned;
+            try
+            {
+                // サイト構成を変える操作は本番・サンドボックスを問わずアカウント行を排他ロックする。
+                // DeleteOrganization も同じ行を取るため、このアカウントの追加・削除は直列化される。
+                var lockedAccount = await LockAccountForUpdateAsync(subject, HttpContext.RequestAborted);
+                if (lockedAccount == null)
+                {
+                    await transaction.RollbackAsync(HttpContext.RequestAborted);
+                    return Unauthorized(new
+                    {
+                        error = "invalid_token",
+                        error_description = "有効な Account アクセストークンが必要です。"
+                    });
+                }
+
+                // ロック取得後に管理下 Org を引き直す。ロック待ちの間に別リクエストがコミットした
+                // 追加・削除を取り込む必要があるため、トランザクション開始前に読んだ
+                // ownedOrganizations は使えない。
+                var lockedManaged = await _accountService.GetManagedOrganizationsAsync(subject);
+                var lockedOrgIds = lockedManaged.Select(m => m.OrganizationId).ToHashSet();
+
+                if (body.IsSandbox)
+                {
+                    // 親をロック下で再検証する。事前チェックはトランザクション外のスナップショットに
+                    // 基づくため、その後に親が削除されていることがある。ここで見ないと、
+                    // 論理削除済みの親を指す有効なサンドボックスが残る（削除側は「まだ存在しない子」を
+                    // カスケードできないため、あとから直る見込みも無い）。
+                    var parentIsUsable = lockedOrgIds.Contains(parentOrganizationId!.Value)
+                        && await _context.Organizations
+                            .IgnoreQueryFilters()
+                            .AnyAsync(o => o.Id == parentOrganizationId.Value
+                                && !o.IsSandbox
+                                && o.DeletedAt == null,
+                                HttpContext.RequestAborted);
+
+                    if (!parentIsUsable)
+                    {
+                        await transaction.RollbackAsync(HttpContext.RequestAborted);
+                        return InvalidInput(
+                            "invalid_parent",
+                            "紐づける本番サイトが見つかりません。",
+                            "parent_organization_id");
+                    }
+
+                    // 同じ親への並行追加もここで弾く（DB のフィルター付きユニークインデックスが
+                    // 最終防衛線だが、409 ではなく理由の分かる 422 を返せるようにする）。
+                    var sandboxTaken = await _context.Organizations
+                        .IgnoreQueryFilters()
+                        .AnyAsync(o => o.ParentOrganizationId == parentOrganizationId.Value
+                            && o.DeletedAt == null,
+                            HttpContext.RequestAborted);
+
+                    if (sandboxTaken)
+                    {
+                        await transaction.RollbackAsync(HttpContext.RequestAborted);
+                        return InvalidInput(
+                            "sandbox_already_exists",
+                            "この本番サイトには既にテストサイトが登録されています。"
+                                + "作り直す場合は既存のテストサイトを削除してから追加してください。",
+                            "parent_organization_id");
+                    }
+                }
+                else
+                {
+                    // 「アカウントあたりの本番サイト数」は集計値であり DB 制約として表現できない。
+                    // ロック無しでカウントすると、同一アカウントの並行リクエストが同じスナップショットを
+                    // 読んで両方とも上限未満と判定し、上限を超えて作成できてしまう。既存の DB 制約は
+                    // どちらもこれを止められない:
+                    //   - IX_organization_parent_organization_id_active は parent_organization_id が
+                    //     非 null の行だけが対象で、本番 Org（null）は含まれない
+                    //   - organization.Code のユニーク制約は、別ドメイン同士なら衝突しない
+                    var productionCount = lockedOrgIds.Count == 0
+                        ? 0
+                        : await _context.Organizations
+                            .IgnoreQueryFilters()
+                            .CountAsync(o => lockedOrgIds.Contains(o.Id) && !o.IsSandbox,
+                                HttpContext.RequestAborted);
+
+                    if (productionCount >= lockedAccount.MaxSites)
+                    {
+                        await transaction.RollbackAsync(HttpContext.RequestAborted);
+                        return InvalidInput(
+                            "site_limit_exceeded",
+                            $"登録できる本番サイトは {lockedAccount.MaxSites} 件までです。"
+                                + "不要なサイトを削除するか、サポートにお問い合わせください。",
+                            "site_url");
+                    }
+                }
+
+                provisioned = await _provisioning.ProvisionAsync(
+                    site,
+                    account.DisplayName ?? site.Host,
+                    ecCubeVersion,
+                    subject,
+                    parentOrganizationId,
+                    HttpContext.RequestAborted);
+
+                await transaction.CommitAsync(HttpContext.RequestAborted);
+            }
+            catch (DbUpdateException ex)
+            {
+                await transaction.RollbackAsync(HttpContext.RequestAborted);
+
+                // 事前チェックをすり抜けた並行追加（同じ組織コード / 同じ親へのテストサイト 2 件）。
+                _logger.LogWarning(ex,
+                    "サイト追加が競合しました: Subject={Subject}, Code={Code}", subject, site.Code);
+                return Conflict(new
+                {
+                    error = "organization_already_exists",
+                    error_description = "サイトの登録が競合しました。時間をおいて再度お試しください。",
+                    field = "site_url"
+                });
+            }
+
+            _logger.LogInformation(
+                "サイトを追加しました: Subject={Subject}, OrganizationId={OrganizationId}, Code={Code}, IsSandbox={IsSandbox}, ParentOrganizationId={ParentOrganizationId}",
+                subject, provisioned.Organization.Id, provisioned.Organization.Code,
+                provisioned.Organization.IsSandbox, parentOrganizationId);
+
+            // client_secret は返さない（一覧に載せないのと同じ理由）。UI は reveal で 1 件ずつ取得する。
+            return Created($"/v1/account/organizations/{provisioned.Organization.Id}", new
+            {
+                id = provisioned.Organization.Id,
+                code = provisioned.Organization.Code,
+                name = provisioned.Organization.Name,
+                is_sandbox = provisioned.Organization.IsSandbox,
+                parent_organization_id = provisioned.Organization.ParentOrganizationId,
+                created_at = provisioned.Organization.CreatedAt,
+                client = new
+                {
+                    id = provisioned.Client.Id,
+                    client_id = provisioned.Client.ClientId,
+                    has_secret = !string.IsNullOrEmpty(provisioned.Client.ClientSecret),
+                    redirect_uris = provisioned.Client.RedirectUris!.Select(r => r.Uri).ToArray(),
+                    allowed_rp_ids = provisioned.Client.AllowedRpIds.ToArray()
+                }
+            });
+        }
+
+        /// <summary>
+        /// POST /v1/account/organizations/{id}/delete
+        /// サイトを論理削除する。
+        ///
+        /// <para>
+        /// <c>DELETE</c> ではなく POST なのは CORS ポリシー <c>SignupApiCors</c> が
+        /// GET / POST / OPTIONS 限定のため（<see cref="UpdateRedirectUris"/> と同じ理由）。
+        /// またレコードを消さない以上、DELETE のセマンティクスとも合わない。
+        /// </para>
+        /// <para>
+        /// **物理削除はしない**。将来の課金は Organization 単位の集計になるため、解約済みサイトも
+        /// 残す必要がある。組織コードも解放しない（同じコードで作り直せると集計で別サイトの
+        /// 利用期間が混ざる）ため、削除したドメインは再登録できない。
+        /// </para>
+        /// <para>
+        /// 本番サイトを削除すると、紐づくテストサイトも同時に論理削除する。親だけ消えて
+        /// 孤立したテストサイトが残ると、UI 上どの本番に属するか分からなくなるため。
+        /// </para>
+        /// </summary>
+        [HttpPost("organizations/{id:int}/delete")]
+        public async Task<IActionResult> DeleteOrganization(int id)
+        {
+            var subject = await ValidateAccountTokenAsync();
+            if (subject == null)
+            {
+                return Unauthorized(new
+                {
+                    error = "invalid_token",
+                    error_description = "有効な Account アクセストークンが必要です。"
+                });
+            }
+
+            IActionResult NotFoundResult()
+            {
+                _logger.LogWarning(
+                    "Account {Subject} attempted to delete organization {OrganizationId} without ownership",
+                    subject, id);
+                return NotFound(new
+                {
+                    error = "not_found",
+                    error_description = "対象のサイトが見つかりません。"
+                });
+            }
+
+            // 削除済みの Org は管理対象から外れるため、二重削除もここで 404 になる。
+            // 存在しない Org と管理外の Org も同じ 404 に揃える（存在を漏らさない）。
+            // ロック取得前の早期リターン（ロックを取らずに済む分、無駄な待ちを避ける）。
+            var managed = await _accountService.GetManagedOrganizationsAsync(subject);
+            if (!managed.Any(m => m.OrganizationId == id))
+            {
+                return NotFoundResult();
+            }
+
+            await using var transaction = await _context.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+
+            // CreateOrganization と同じアカウント行を排他ロックする。これが無いと
+            // 「サンドボックス追加」と「その親の削除」がすれ違い、削除側は自分のスナップショットに
+            // 無い（＝まだコミットされていない）子をカスケードできないため、論理削除済みの親を指す
+            // 有効なサンドボックスが残る。
+            var lockedAccount = await LockAccountForUpdateAsync(subject, HttpContext.RequestAborted);
+            if (lockedAccount == null)
+            {
+                await transaction.RollbackAsync(HttpContext.RequestAborted);
+                return Unauthorized(new
+                {
+                    error = "invalid_token",
+                    error_description = "有効な Account アクセストークンが必要です。"
+                });
+            }
+
+            // ロック取得後に管理下 Org を引き直す。ロック待ちの間にコミットされたサンドボックスを
+            // カスケード対象に含めるため、ロック前の一覧は使えない。
+            var lockedManaged = await _accountService.GetManagedOrganizationsAsync(subject);
+            var lockedOrgIds = lockedManaged.Select(m => m.OrganizationId).ToHashSet();
+
+            // ロック待ちの間に別リクエストが先に削除していれば、ここで管理対象から外れている。
+            if (!lockedOrgIds.Contains(id))
+            {
+                await transaction.RollbackAsync(HttpContext.RequestAborted);
+                return NotFoundResult();
+            }
+
+            var owned = await _context.Organizations
+                .IgnoreQueryFilters()
+                .Where(o => lockedOrgIds.Contains(o.Id))
+                .ToListAsync(HttpContext.RequestAborted);
+
+            var target = owned.First(o => o.Id == id);
+
+            // 本番サイトの配下にあるテストサイトも巻き込んで削除する。
+            var targets = new List<Organization> { target };
+            if (!target.IsSandbox)
+            {
+                targets.AddRange(owned.Where(o => o.ParentOrganizationId == target.Id));
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            foreach (var organization in targets)
+            {
+                organization.DeletedAt = now;
+                organization.UpdatedAt = now;
+            }
+
+            await _context.SaveChangesAsync(HttpContext.RequestAborted);
+            await transaction.CommitAsync(HttpContext.RequestAborted);
+
+            _logger.LogInformation(
+                "サイトを削除しました（論理削除）: Subject={Subject}, OrganizationIds={OrganizationIds}",
+                subject, string.Join(",", targets.Select(o => o.Id)));
+
+            return Ok(new
+            {
+                deleted_organization_ids = targets.Select(o => o.Id).ToArray(),
+                deleted_at = now
+            });
+        }
+
+        /// <summary>
+        /// Account 行を排他ロックして読む。**呼び出し側でトランザクションを開始しておくこと。**
+        ///
+        /// <para>
+        /// このアカウントのサイト構成を変更する操作（追加・削除）が共通で取る唯一の直列化ポイント。
+        /// SQL Server では <c>WITH (UPDLOCK, HOLDLOCK)</c> を付けて行ロックを取り、同一アカウントの
+        /// 並行リクエストをトランザクション終了まで待たせる。UPDLOCK は更新ロックを即座に取って
+        /// ロック昇格時のデッドロックを避け、HOLDLOCK はコミットまでロックを保持して
+        /// 「読んだ後に別トランザクションが Organization を変更する」窓を塞ぐ。
+        /// </para>
+        /// <para>
+        /// 追加と削除で同じ行を取ることが重要。別々のロックにすると、サンドボックス追加と
+        /// その親の削除がすれ違い、削除済みの親を指す有効なサンドボックスが残る
+        /// （削除側は「まだ存在しない子」をカスケードできない）。
+        /// </para>
+        /// <para>
+        /// InMemory プロバイダ（ユニットテスト）は生 SQL を実行できないため、通常の読み取りに
+        /// フォールバックする。この分岐によりロックの実挙動はユニットテストでは検証できないので、
+        /// 並行時の振る舞いは実 SQL Server に対する E2E
+        /// （<c>account_site_limit_concurrency.spec.ts</c> /
+        /// <c>account_site_delete_concurrency.spec.ts</c>）で担保する。
+        /// </para>
+        /// </summary>
+        /// <returns>Account が見つからない場合は null。読み取り専用（AsNoTracking）。</returns>
+        private async Task<Account?> LockAccountForUpdateAsync(string subject, CancellationToken ct)
+        {
+            if (!_context.Database.IsSqlServer())
+            {
+                return await _context.Accounts
+                    .IgnoreQueryFilters()
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(a => a.Subject == subject, ct);
+            }
+
+            // FromSqlInterpolated はパラメータ化されるため、subject の値が SQL に直接埋まることはない。
+            var locked = await _context.Accounts
+                .FromSqlInterpolated(
+                    $"SELECT * FROM dbo.account WITH (UPDLOCK, HOLDLOCK) WHERE subject = {subject}")
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .ToListAsync(ct);
+
+            return locked.Count == 0 ? null : locked[0];
+        }
+
+        /// <summary>
+        /// 呼び出し Account の本番サイト上限を返す（一覧表示のための補助情報）。
+        /// 実際の上限判定は <see cref="CreateOrganization"/> がトランザクション内で
+        /// <see cref="LoadMaxSitesForUpdateAsync"/> を使って行う。
+        /// </summary>
+        private async Task<int> GetMaxSitesAsync(string subject)
+        {
+            var maxSites = await _context.Accounts
+                .IgnoreQueryFilters()
+                .Where(a => a.Subject == subject)
+                .Select(a => (int?)a.MaxSites)
+                .FirstOrDefaultAsync();
+
+            return maxSites ?? Account.DefaultMaxSites;
+        }
+
+        /// <summary>
+        /// ec_cube_version を検証する。未指定は 4 系として扱う（現行の主流であり、
+        /// 2 系のコールバックパスとの違いは追加後に redirect_uri 編集で直せる）。
+        /// 対応していない値は null を返す。
+        /// </summary>
+        private static string? NormalizeEcCubeVersion(string? version)
+        {
+            var v = version?.Trim();
+            if (string.IsNullOrEmpty(v))
+            {
+                return "4";
+            }
+
+            return v is "2" or "4" or "other" ? v : null;
+        }
+
+        /// <summary>
+        /// プロビジョニング側のバリデーション例外を、この API のエラー形式に変換する。
+        /// </summary>
+        private IActionResult FromValidationException(SignupValidationException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                error = ex.Error,
+                error_description = ex.ErrorDescription,
+                field = ex.Field
             });
         }
 
@@ -524,6 +1070,34 @@ namespace IdentityProvider.Controllers
         {
             [JsonPropertyName("allowed_rp_ids")]
             public List<string>? AllowedRpIds { get; set; }
+        }
+
+        /// <summary>
+        /// <c>POST /v1/account/organizations</c> のリクエストボディ（snake_case）。
+        /// </summary>
+        public sealed class CreateOrganizationDto
+        {
+            /// <summary>追加するサイトの URL（https 必須）。</summary>
+            [JsonPropertyName("site_url")]
+            public string? SiteUrl { get; set; }
+
+            /// <summary>テストサイトとして追加する場合 true。</summary>
+            [JsonPropertyName("is_sandbox")]
+            public bool IsSandbox { get; set; }
+
+            /// <summary>
+            /// テストサイトを紐づける本番サイトの Organization Id。
+            /// <c>is_sandbox = true</c> のときのみ必須。
+            /// </summary>
+            [JsonPropertyName("parent_organization_id")]
+            public int? ParentOrganizationId { get; set; }
+
+            /// <summary>
+            /// 初期 redirect_uri のコールバックパスを決める（"2" / "4" / "other"）。
+            /// 未指定は "4"。
+            /// </summary>
+            [JsonPropertyName("ec_cube_version")]
+            public string? EcCubeVersion { get; set; }
         }
 
         /// <summary>

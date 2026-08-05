@@ -110,6 +110,7 @@ namespace IdentityProvider.Controllers
             }
 
             var Client = await _context.Clients
+                .ExcludeDeletedOrganizations()
                 .Where(c => c.ClientId == client_id)
                 .FirstOrDefaultAsync();
             if (Client == null)

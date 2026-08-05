@@ -33,6 +33,7 @@ namespace IdentityProvider.Test.Controllers
                 _mockTokenService.Object,
                 _mockAccountService.Object,
                 new PlaintextSecretProtector(),
+                new OrganizationProvisioningService(_context, new PlaintextSecretProtector()),
                 new Mock<ILogger<AccountController>>().Object);
         }
 
@@ -572,6 +573,299 @@ namespace IdentityProvider.Test.Controllers
             });
 
             Assert.IsType<UnauthorizedObjectResult>(result);
+        }
+
+        // ---- サイト（Organization）の一覧・追加・削除 ----
+
+        private const int AccountsOrgId = 100;
+
+        /// <summary>受付テナント Org と、その配下の Account を作る。</summary>
+        private async Task SeedAccount(int maxSites = Account.DefaultMaxSites)
+        {
+            _context.Organizations.Add(new Organization
+            {
+                Id = AccountsOrgId,
+                Code = "accounts",
+                Name = "EcAuth Accounts",
+                TenantName = "accounts"
+            });
+            _context.Accounts.Add(new Account
+            {
+                Id = 1,
+                Subject = AccountSubject,
+                Email = "owner@example.jp",
+                OrganizationId = AccountsOrgId,
+                MaxSites = maxSites
+            });
+            await _context.SaveChangesAsync();
+        }
+
+        private async Task SeedOrganization(
+            int orgId, string code, bool isSandbox,
+            int? parentOrganizationId = null, DateTimeOffset? deletedAt = null)
+        {
+            _context.Organizations.Add(new Organization
+            {
+                Id = orgId,
+                Code = code,
+                Name = code,
+                TenantName = code,
+                IsSandbox = isSandbox,
+                ParentOrganizationId = parentOrganizationId,
+                DeletedAt = deletedAt
+            });
+            await _context.SaveChangesAsync();
+        }
+
+        private static List<object> GetOrganizationList(object? okValue)
+        {
+            var organizations = okValue!.GetType().GetProperty("organizations")!.GetValue(okValue)!;
+            return ((IEnumerable<object>)organizations).ToList();
+        }
+
+        private async Task<Organization> ReloadOrganization(int id) =>
+            await _context.Organizations.IgnoreQueryFilters().FirstAsync(o => o.Id == id);
+
+        [Fact]
+        public async Task GetOrganizations_ReturnsManagedSitesWithPairingAndLimit()
+        {
+            await SeedAccount(maxSites: 3);
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret-prod");
+            await SeedOrganization(2, "shop1-sandbox", isSandbox: true, parentOrganizationId: 1);
+            await SeedOrganization(3, "other", isSandbox: false);
+
+            AuthenticateAsOwnerOf((1, "shop1"), (2, "shop1-sandbox"));
+
+            var result = await _controller.GetOrganizations();
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            var organizations = GetOrganizationList(ok.Value);
+            Assert.Equal(2, organizations.Count);
+            Assert.Equal(3, (int)GetProp(ok.Value!, "max_sites"));
+            // 本番のみを数える（サンドボックスは上限の対象外）。
+            Assert.Equal(1, (int)GetProp(ok.Value!, "production_site_count"));
+
+            var sandbox = organizations.Single(o => (bool)GetProp(o, "is_sandbox"));
+            Assert.Equal(1, (int?)GetProp(sandbox, "parent_organization_id"));
+
+            var production = organizations.Single(o => !(bool)GetProp(o, "is_sandbox"));
+            Assert.Null(production.GetType().GetProperty("parent_organization_id")!.GetValue(production));
+        }
+
+        [Fact]
+        public async Task CreateOrganization_ProductionAtLimit_ReturnsSiteLimitExceeded()
+        {
+            await SeedAccount(maxSites: 2);
+            await SeedOrganization(1, "shop1", isSandbox: false);
+            await SeedOrganization(2, "shop2", isSandbox: false);
+            AuthenticateAsOwnerOf((1, "shop1"), (2, "shop2"));
+
+            var result = await _controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://shop3.example.jp"
+            });
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal("site_limit_exceeded", (string)GetProp(unprocessable.Value!, "error"));
+            Assert.Empty(await _context.Organizations.IgnoreQueryFilters()
+                .Where(o => o.Code == "shop3-example-jp").ToListAsync());
+        }
+
+        [Fact]
+        public async Task CreateOrganization_SandboxDoesNotCountTowardProductionLimit()
+        {
+            await SeedAccount(maxSites: 1);
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret-prod");
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            // 本番は上限いっぱいだが、テストサイトは別枠なので追加できる。
+            var result = await _controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://stg.example.jp",
+                IsSandbox = true,
+                ParentOrganizationId = 1
+            });
+
+            var created = Assert.IsType<CreatedResult>(result);
+            Assert.True((bool)GetProp(created.Value!, "is_sandbox"));
+            Assert.Equal("stg-example-jp-sandbox", (string)GetProp(created.Value!, "code"));
+            Assert.Equal(1, (int?)GetProp(created.Value!, "parent_organization_id"));
+        }
+
+        [Fact]
+        public async Task CreateOrganization_SandboxWithSameDomainAsProduction_Succeeds()
+        {
+            await SeedAccount();
+            await SeedOrganization(1, "shop1-example-jp", isSandbox: false);
+            AuthenticateAsOwnerOf((1, "shop1-example-jp"));
+
+            // 自分が持つ本番 Org と同じドメイン。組織コードは -sandbox 接尾辞で分かれるため作れる。
+            var result = await _controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://shop1.example.jp",
+                IsSandbox = true,
+                ParentOrganizationId = 1
+            });
+
+            var created = Assert.IsType<CreatedResult>(result);
+            Assert.Equal("shop1-example-jp-sandbox", (string)GetProp(created.Value!, "code"));
+        }
+
+        [Fact]
+        public async Task CreateOrganization_SandboxWithoutParent_ReturnsInvalidRequest()
+        {
+            await SeedAccount();
+            await SeedOrganization(1, "shop1", isSandbox: false);
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://stg.example.jp",
+                IsSandbox = true
+            });
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal("invalid_request", (string)GetProp(unprocessable.Value!, "error"));
+            Assert.Equal("parent_organization_id", (string)GetProp(unprocessable.Value!, "field"));
+        }
+
+        [Fact]
+        public async Task CreateOrganization_SandboxWhenParentAlreadyHasOne_ReturnsSandboxAlreadyExists()
+        {
+            await SeedAccount();
+            await SeedOrganization(1, "shop1", isSandbox: false);
+            await SeedOrganization(2, "shop1-sandbox", isSandbox: true, parentOrganizationId: 1);
+            AuthenticateAsOwnerOf((1, "shop1"), (2, "shop1-sandbox"));
+
+            var result = await _controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://stg.example.jp",
+                IsSandbox = true,
+                ParentOrganizationId = 1
+            });
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal("sandbox_already_exists", (string)GetProp(unprocessable.Value!, "error"));
+        }
+
+        [Fact]
+        public async Task CreateOrganization_ParentNotManaged_ReturnsInvalidParent()
+        {
+            await SeedAccount();
+            await SeedOrganization(1, "shop1", isSandbox: false);
+            await SeedOrganization(9, "someone-else", isSandbox: false);
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://stg.example.jp",
+                IsSandbox = true,
+                ParentOrganizationId = 9
+            });
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal("invalid_parent", (string)GetProp(unprocessable.Value!, "error"));
+        }
+
+        [Fact]
+        public async Task CreateOrganization_DeletedDomain_ReturnsOrganizationDeleted()
+        {
+            await SeedAccount();
+            // 別アカウントが使っていたドメインを削除済みにしておく。
+            await SeedOrganization(9, "shop9-example-jp", isSandbox: false, deletedAt: DateTimeOffset.UtcNow);
+            AuthenticateAsOwnerOf();
+
+            var result = await _controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://shop9.example.jp"
+            });
+
+            var objectResult = Assert.IsType<ObjectResult>(result);
+            Assert.Equal(422, objectResult.StatusCode);
+            Assert.Equal("organization_deleted", (string)GetProp(objectResult.Value!, "error"));
+        }
+
+        [Fact]
+        public async Task CreateOrganization_NewProduction_CreatesClientAndRsaKeyPair()
+        {
+            await SeedAccount();
+            AuthenticateAsOwnerOf();
+
+            var result = await _controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://shop.example.jp",
+                EcCubeVersion = "2"
+            });
+
+            var created = Assert.IsType<CreatedResult>(result);
+            var organizationId = (int)GetProp(created.Value!, "id");
+
+            var organization = await ReloadOrganization(organizationId);
+            Assert.Equal("shop-example-jp", organization.Code);
+            Assert.Equal("shop-example-jp", organization.TenantName);
+            Assert.False(organization.IsSandbox);
+            Assert.Null(organization.DeletedAt);
+
+            // Client / RsaKeyPair / AccountOrganization が揃っていること。
+            var client = await _context.Clients.IgnoreQueryFilters()
+                .Include(c => c.RedirectUris)
+                .FirstAsync(c => c.OrganizationId == organizationId);
+            Assert.Equal(SubjectType.B2B, client.SubjectType);
+            // EC-CUBE 2 系は callback.php。
+            Assert.Equal("https://shop.example.jp/ecauth/callback.php", client.RedirectUris!.Single().Uri);
+            Assert.Contains("shop.example.jp", client.AllowedRpIds);
+            Assert.True(await _context.RsaKeyPairs.IgnoreQueryFilters()
+                .AnyAsync(k => k.OrganizationId == organizationId));
+            Assert.True(await _context.AccountOrganizations.IgnoreQueryFilters()
+                .AnyAsync(ao => ao.OrganizationId == organizationId && ao.AccountSubject == AccountSubject));
+        }
+
+        [Fact]
+        public async Task DeleteOrganization_Production_SoftDeletesItselfAndItsSandbox()
+        {
+            await SeedAccount();
+            await SeedOrganization(1, "shop1", isSandbox: false);
+            await SeedOrganization(2, "shop1-sandbox", isSandbox: true, parentOrganizationId: 1);
+            AuthenticateAsOwnerOf((1, "shop1"), (2, "shop1-sandbox"));
+
+            var result = await _controller.DeleteOrganization(1);
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            var deletedIds = (int[])GetProp(ok.Value!, "deleted_organization_ids");
+            Assert.Equal(new[] { 1, 2 }, deletedIds);
+
+            // 物理削除はしない。行は残り、deleted_at だけが入る。
+            Assert.NotNull((await ReloadOrganization(1)).DeletedAt);
+            Assert.NotNull((await ReloadOrganization(2)).DeletedAt);
+        }
+
+        [Fact]
+        public async Task DeleteOrganization_Sandbox_DoesNotTouchParent()
+        {
+            await SeedAccount();
+            await SeedOrganization(1, "shop1", isSandbox: false);
+            await SeedOrganization(2, "shop1-sandbox", isSandbox: true, parentOrganizationId: 1);
+            AuthenticateAsOwnerOf((1, "shop1"), (2, "shop1-sandbox"));
+
+            var result = await _controller.DeleteOrganization(2);
+
+            Assert.IsType<OkObjectResult>(result);
+            Assert.Null((await ReloadOrganization(1)).DeletedAt);
+            Assert.NotNull((await ReloadOrganization(2)).DeletedAt);
+        }
+
+        [Fact]
+        public async Task DeleteOrganization_NotManaged_ReturnsNotFound()
+        {
+            await SeedAccount();
+            await SeedOrganization(1, "shop1", isSandbox: false);
+            await SeedOrganization(9, "someone-else", isSandbox: false);
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.DeleteOrganization(9);
+
+            Assert.IsType<NotFoundObjectResult>(result);
+            Assert.Null((await ReloadOrganization(9)).DeletedAt);
         }
 
         // 匿名オブジェクトのプロパティをリフレクションで取り出すヘルパー

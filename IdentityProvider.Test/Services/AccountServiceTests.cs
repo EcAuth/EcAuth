@@ -98,5 +98,37 @@ namespace IdentityProvider.Test.Services
 
             Assert.Empty(managed);
         }
+
+        [Fact]
+        public async Task GetManagedOrganizationsAsync_ExcludesSoftDeletedOrganizations()
+        {
+            // 削除済みサイトが managed_orgs に残ると、削除後もそのテナントのトークンが
+            // 発行できてしまう。IgnoreQueryFilters で引いている経路なので明示的に除外している。
+            var tenantService = new MockTenantService();
+            tenantService.SetTenant("accounts");
+            using var context = TestDbContextHelper.CreateInMemoryContext(tenantService: tenantService);
+
+            context.Organizations.AddRange(
+                new Organization { Id = 10, Code = "active-shop", Name = "Active", TenantName = "active-shop" },
+                new Organization
+                {
+                    Id = 11,
+                    Code = "deleted-shop",
+                    Name = "Deleted",
+                    TenantName = "deleted-shop",
+                    DeletedAt = DateTimeOffset.UtcNow
+                });
+            context.AccountOrganizations.AddRange(
+                new AccountOrganization { AccountSubject = "account-subject", OrganizationId = 10, Role = "owner" },
+                new AccountOrganization { AccountSubject = "account-subject", OrganizationId = 11, Role = "owner" });
+            await context.SaveChangesAsync();
+
+            var service = new AccountService(context, _logger);
+
+            var managed = await service.GetManagedOrganizationsAsync("account-subject");
+
+            var only = Assert.Single(managed);
+            Assert.Equal(10, only.OrganizationId);
+        }
     }
 }

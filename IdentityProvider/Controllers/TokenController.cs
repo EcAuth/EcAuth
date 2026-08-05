@@ -145,6 +145,7 @@ namespace IdentityProvider.Controllers
                 using (TimingScope.Begin("client_lookup"))
                 {
                     client = await _context.Clients
+                        .ExcludeDeletedOrganizations()
                         .FirstOrDefaultAsync(c => c.ClientId == client_id);
                 }
 

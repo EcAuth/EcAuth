@@ -463,6 +463,7 @@ namespace IdentityProvider.Controllers
                 // クライアント存在確認（認証なし、client_idのみ）
                 var client = await _context.Clients
                     .IgnoreQueryFilters()
+                    .ExcludeDeletedOrganizations()
                     .FirstOrDefaultAsync(c => c.ClientId == request.ClientId);
 
                 if (client == null)
@@ -560,6 +561,7 @@ namespace IdentityProvider.Controllers
                 {
                     client = await _context.Clients
                         .IgnoreQueryFilters()
+                        .ExcludeDeletedOrganizations()
                         .Include(c => c.RedirectUris)
                         .FirstOrDefaultAsync(c => c.ClientId == request.ClientId);
                 }
@@ -844,6 +846,7 @@ namespace IdentityProvider.Controllers
             // public な Account コンソール client を client_id で解決（secret 不要）。
             var client = await _context.Clients
                 .IgnoreQueryFilters()
+                .ExcludeDeletedOrganizations()
                 .Include(c => c.RedirectUris)
                 .FirstOrDefaultAsync(c => c.ClientId == clientId);
             if (client == null || client.SubjectType != SubjectType.Account)
@@ -883,6 +886,7 @@ namespace IdentityProvider.Controllers
             // client_id のみでクエリし、client_secret はアプリケーション側で比較
             var client = await _context.Clients
                 .IgnoreQueryFilters()
+                .ExcludeDeletedOrganizations()
                 .FirstOrDefaultAsync(c => c.ClientId == clientId);
 
             if (client?.ClientSecret == null)

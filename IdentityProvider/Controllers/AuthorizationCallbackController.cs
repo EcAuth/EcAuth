@@ -129,6 +129,7 @@ namespace IdentityProvider.Controllers
 
                 // 6. EcAuth独自の認可コードを生成
                 var client = await _context.Clients
+                    .ExcludeDeletedOrganizations()
                     .FirstOrDefaultAsync(c => c.Id == stateData.ClientId);
 
                 if (client == null)
