@@ -156,6 +156,26 @@ namespace IdentityProvider.Services
                         "token_expired", "確認トークンの有効期限が切れています。お手数ですが再度お申し込みください。", field: "token");
                 }
 
+                // 本番サイト URL 必須化（EcAuth#482）より前に保存された申込は、本番 URL を
+                // 持たないまま確認待ちになっている可能性がある。下の再バリデーションに任せると
+                // 「本番サイト URL を入力してください」が返るが、確認画面には入力欄が無く
+                // 利用者は何もできない。再申込しかないことが伝わるエラーに振り替える。
+                //
+                // 該当するのはこの変更のデプロイ前 24 時間（ConfirmTokenLifetime）以内に
+                // テストサイトのみで申し込み、まだ確認していないケースに限られる。
+                if (string.IsNullOrWhiteSpace(signupRequest.ProductionSiteUrl))
+                {
+                    _logger.LogWarning(
+                        "本番サイト URL を持たない申込の確認を拒否しました: Tenant={Tenant}, TokenHash={TokenHash}",
+                        signupRequest.TenantName, TokenHashPrefix(token));
+                    throw new SignupValidationException(
+                        "signup_needs_resubmission",
+                        "お申し込み内容が現在の登録要件を満たしていません。"
+                            + "お手数ですが、本番サイト URL を入力して再度お申し込みください。",
+                        field: "token",
+                        statusCode: 422);
+                }
+
                 // 申込時から confirm までの間にデータが変わっている可能性があるため、再バリデーションする。
                 sites = ValidateSiteUrls(signupRequest.ProductionSiteUrl, signupRequest.TestSiteUrl);
                 // confirm 時の code 衝突は Race Condition のため 409 を返す。

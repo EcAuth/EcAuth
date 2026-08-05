@@ -218,17 +218,41 @@ test.describe.serial('マイページからのサイト追加・削除', () => {
     expect((await response.json()).error).toBe('organization_deleted');
   });
 
-  test('削除で枠が空くので同じ本番に新しいテストサイトを作れる', async () => {
+  test('テストサイトを削除すると同じ本番の枠が空く', async () => {
     // 「サイト追加 → 動作確認 → 旧サイト削除」で付け替えるための前提。
-    const response = await api.post(`${accountsApiBaseUrl}/v1/account/organizations`, {
-      headers: authHeaders(),
-      data: {
-        site_url: `https://e2e-restg-${runSuffix}.test/`,
-        is_sandbox: true,
-        parent_organization_id: productionOrgId,
-      },
-    });
-    expect(response.status()).toBe(201);
-    expect((await response.json()).parent_organization_id).toBe(productionOrgId);
+    // 枠の解放を検証するには **同じ親** で「作る → 埋まっている → 消す → また作れる」を
+    // 通す必要がある。別の親に作るだけでは、枠が解放されない実装でも成功してしまう。
+    const addSandbox = (host: string) =>
+      api.post(`${accountsApiBaseUrl}/v1/account/organizations`, {
+        headers: authHeaders(),
+        data: {
+          site_url: `https://${host}.test/`,
+          is_sandbox: true,
+          parent_organization_id: productionOrgId,
+        },
+      });
+
+    // 1 件目は作れる。
+    const first = await addSandbox(`e2e-slot1-${runSuffix}`);
+    expect(first.status()).toBe(201);
+    const firstId = (await first.json()).id as number;
+
+    // 枠が埋まっている間は 2 件目を作れない。
+    const blocked = await addSandbox(`e2e-slot2-${runSuffix}`);
+    expect(blocked.status()).toBe(422);
+    expect((await blocked.json()).error).toBe('sandbox_already_exists');
+
+    // 1 件目を削除すると枠が空く。
+    const deleted = await api.post(
+      `${accountsApiBaseUrl}/v1/account/organizations/${firstId}/delete`,
+      { headers: authHeaders() }
+    );
+    expect(deleted.status()).toBe(200);
+
+    // 同じ親に作り直せる（フィルター付きユニークインデックスが deleted_at IS NULL を
+    // 条件に含めているため、論理削除済みの行は枠を占有しない）。
+    const again = await addSandbox(`e2e-slot3-${runSuffix}`);
+    expect(again.status()).toBe(201);
+    expect((await again.json()).parent_organization_id).toBe(productionOrgId);
   });
 });

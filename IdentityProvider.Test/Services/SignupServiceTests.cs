@@ -909,6 +909,47 @@ namespace IdentityProvider.Test.Services
             Assert.Equal("token_expired", ex.Error);
         }
 
+        /// <summary>
+        /// 本番サイト URL 必須化（EcAuth#482）より前に保存された申込は、本番 URL を持たないまま
+        /// 確認待ちになっている可能性がある。再バリデーションに任せると「本番サイト URL を
+        /// 入力してください」が返るが、確認画面には入力欄が無いため利用者は何もできない。
+        /// 再申込しかないことが伝わる専用エラーに振り替えていることを固定する。
+        /// </summary>
+        [Fact]
+        public async Task ConfirmAsync_PendingRequestWithoutProductionUrl_ThrowsNeedsResubmission()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out _, out _);
+
+            // RequestAsync は本番必須になったのでこの状態は作れない。デプロイ前に保存された
+            // 申込を再現するため、SignupRequest を直接投入する。
+            context.SignupRequests.Add(new SignupRequest
+            {
+                ConfirmTokenHash = HashToken("legacy-token"),
+                Email = "owner@example.com",
+                OrganizationName = "Example Shop",
+                ProductionSiteUrl = null,
+                TestSiteUrl = "https://test.example.jp",
+                EcCubeVersion = "4",
+                TenantName = Tenant,
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                CreatedAt = DateTimeOffset.UtcNow.AddHours(-1)
+            });
+            await context.SaveChangesAsync();
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(
+                () => service.ConfirmAsync("legacy-token"));
+
+            Assert.Equal("signup_needs_resubmission", ex.Error);
+            Assert.Equal(422, ex.StatusCode);
+            // 入力欄のある画面が無いため、指し示すのは token（＝この申込そのもの）。
+            Assert.Equal("token", ex.Field);
+            // Organization は作られず、申込も未確認のまま残る。
+            Assert.False(await context.Organizations.IgnoreQueryFilters().AnyAsync(o => o.Code != Tenant));
+            Assert.Null((await context.SignupRequests.IgnoreQueryFilters().SingleAsync()).ConfirmedAt);
+        }
+
         [Fact]
         public async Task ConfirmAsync_AlreadyConfirmedToken_Throws()
         {
