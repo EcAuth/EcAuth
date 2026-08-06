@@ -14,7 +14,7 @@ import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
  *     → Frontend:BaseUrl 経由でマイページへ復帰
  *     → /mypage/ から PKCE で認可開始 → accounts で実パスキー認証 → 認可コード
  *     → /auth/callback が /v1/token でトークン交換（public client・PKCE）
- *     → /v1/account/clients で Client 一覧、secret の reveal / 再生成
+ *     → /v1/account/organizations でサイト一覧、secret の reveal / 再生成
  *     → マイページの編集 UI から redirect_uri / allowed_rp_ids を実 API で全置換
  *     → リカバリ（マジックリンク）でも同じマイページに着地する
  *
@@ -200,10 +200,13 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     await expect(page.locator('#login-view')).toBeHidden();
   });
 
-  test('マイページが実 API から Client 一覧を取得して表示する', async () => {
+  test('マイページが実 API からサイト一覧を取得して表示する', async () => {
     test.setTimeout(30000);
 
-    // 申込で作られた顧客 Org の Client が出ること（組織コードはサイト host から導出される）。
+    // 申込で作られた顧客 Org が出ること（組織コードはサイト host から導出される）。
+    // マイページは 1 カード = 1 サイト（Organization）で描画し、その配下に Client を出す。
+    // カードのクラス名は Client 単位だった頃から .client-item のまま
+    // （単位が変わっていないため据え置き。ecauth-website#29）。
     const item = page.locator('.client-item').filter({ hasText: expectedOrgCode });
     await expect(item).toHaveCount(1, { timeout: 15000 });
 
@@ -275,7 +278,7 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
    * 参照実装 signup_client_b2b_login.spec.ts も同じ使い分けをしている:
    *   :180 / :187  期待値は siteHost から組み立てて登録値と突き合わせる（回帰検出）
    *   :207 / :225  セレモニーに渡すのは API から取った registeredRpId / registeredRedirectUri
-   * 画面に出ている値は mypage.js が GET /v1/account/clients を描画したものなので、
+   * 画面に出ている値は mypage.js が GET /v1/account/organizations を描画したものなので、
    * 「登録値を使う」側の要請はブラウザ経由で既に満たされている。
    */
 
