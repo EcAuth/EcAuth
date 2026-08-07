@@ -48,7 +48,6 @@ updates:
       - "/IdentityProvider"
       - "/MockOpenIdProvider"
       - "/IdpUtilities"
-      - "/ConsoleApp"
       - "/IdentityProvider.Test"
       - "/MockOpenIdProvider.Test"
       - "/IdpUtilities.Test"
