@@ -127,9 +127,9 @@ jobs:
           FEDERATE_OAUTH2_APP_NAME=federate-oauth2
           FEDERATE_OAUTH2_CLIENT_ID=federateclientid
           FEDERATE_OAUTH2_CLIENT_SECRET=federate-client-secret
-          FEDERATE_OAUTH2_AUTHORIZATION_ENDPOINT=https://localhost:9091/authorization?org=dev
-          FEDERATE_OAUTH2_TOKEN_ENDPOINT=https://localhost:9091/token?org=dev
-          FEDERATE_OAUTH2_USERINFO_ENDPOINT=https://localhost:9091/userinfo?org=dev
+          FEDERATE_OAUTH2_AUTHORIZATION_ENDPOINT=http://127.0.0.1:8787/authorization?org=dev
+          FEDERATE_OAUTH2_TOKEN_ENDPOINT=http://127.0.0.1:8787/token?org=dev
+          FEDERATE_OAUTH2_USERINFO_ENDPOINT=http://127.0.0.1:8787/userinfo?org=dev
           DEV_B2B_USER_SUBJECT=3f7c0ab4-b004-4102-b6ed-a730369dd237
           DEV_B2B_USER_EXTERNAL_ID=test-admin
           DEV_B2B_REDIRECT_URI=https://localhost:8081/admin/ecauth/callback
