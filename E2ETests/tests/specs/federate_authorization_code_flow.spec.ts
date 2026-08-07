@@ -7,7 +7,7 @@ test.describe.serial('認可コードフローフェデレーションのテス�
   const authorizationEndpoint = process.env.E2E_AUTHORIZATION_ENDPOINT || 'https://localhost:8081/v1/authorization';
   const tokenEndpoint = process.env.E2E_TOKEN_ENDPOINT || 'https://localhost:8081/v1/token';
   const ecAuthUserInfoEndpoint = process.env.E2E_ECAUTH_USERINFO_ENDPOINT || 'https://localhost:8081/v1/userinfo';
-  const externalIdpUserInfoEndpoint = process.env.E2E_USERINFO_ENDPOINT || 'https://localhost:9091/userinfo';
+  const externalIdpUserInfoEndpoint = process.env.E2E_USERINFO_ENDPOINT || 'http://127.0.0.1:8787/userinfo?org=dev';
   const redirectUri = process.env.E2E_REDIRECT_URI || 'https://localhost:8081/v1/auth/callback';
   const clientId = 'client_id';
   const clientSecret = 'client_secret';
@@ -27,7 +27,7 @@ test.describe.serial('認可コードフローフェデレーションのテス�
     // PKCE を付けたうえで存続させる（必須化の拒否そのものは別テストで検証）。
     const { codeVerifier, codeChallenge } = generatePkcePair();
     // MockIdPドメインへの認証情報を含むコンテキストを作成
-    const mockIdpBaseUrl = process.env.MOCK_IDP_BASE_URL || 'https://mock-openid-provider.mangoplant-f8a75293.japaneast.azurecontainerapps.io';
+    const mockIdpBaseUrl = process.env.MOCK_IDP_BASE_URL || 'http://127.0.0.1:8787';
     const mockIdpOrigin = new URL(mockIdpBaseUrl).origin;
 
     const context = await browser.newContext({
@@ -254,7 +254,7 @@ test.describe.serial('認可コードフローフェデレーションのテス�
     browser: Browser,
     extraParams: Record<string, string> = {}
   ): Promise<string> {
-    const mockIdpBaseUrl = process.env.MOCK_IDP_BASE_URL || 'https://mock-openid-provider.mangoplant-f8a75293.japaneast.azurecontainerapps.io';
+    const mockIdpBaseUrl = process.env.MOCK_IDP_BASE_URL || 'http://127.0.0.1:8787';
     const mockIdpOrigin = new URL(mockIdpBaseUrl).origin;
 
     const context = await browser.newContext({

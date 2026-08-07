@@ -91,9 +91,12 @@ STAGING_REDIRECT_URI=https://localhost:4430/callback
 STAGING_MOCK_IDP_APP_NAME=staging-mock-idp
 STAGING_MOCK_IDP_CLIENT_ID=staging_mock_idp_client_id
 STAGING_MOCK_IDP_CLIENT_SECRET=staging_mock_idp_client_secret
-STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT=https://localhost:9091/authorization?org=staging
-STAGING_MOCK_IDP_TOKEN_ENDPOINT=https://localhost:9091/token
-STAGING_MOCK_IDP_USERINFO_ENDPOINT=https://localhost:9091/userinfo
+# ローカル開発用のプレースホルダ。MockIdP は Cloudflare Workers 上で動くため、
+# ローカルでは `wrangler dev`（既定 http://127.0.0.1:8787）を指す。
+# ?org= はマルチテナント解決に必須。
+STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT=http://127.0.0.1:8787/authorization?org=staging
+STAGING_MOCK_IDP_TOKEN_ENDPOINT=http://127.0.0.1:8787/token?org=staging
+STAGING_MOCK_IDP_USERINFO_ENDPOINT=http://127.0.0.1:8787/userinfo?org=staging
 
 # =============================================================================
 # Account Management Settings (ローカル開発用ダミー値)
