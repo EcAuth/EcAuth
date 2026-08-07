@@ -62,8 +62,9 @@ jobs:
       - name: Load base environment variables
         run: |
           # E2E 用の非機密のローカル/ダミー設定値（旧 .env.dist 相当）。
-          # クレデンシャルは含まない。MOCK_IDP_BASE_URL 等の機密は後続 step で
-          # secrets から注入する。変数展開を含む値（FEDERATE_OAUTH2_* / STAGING_MOCK_IDP_*_ENDPOINT）は
+          # クレデンシャルは含まない。MOCK_IDP_BASE_URL はジョブレベルの env で
+          # secrets から供給する（ここに既定値を書くと $GITHUB_ENV が
+          # ジョブレベル env を上書きしてしまい、供給元が二重化する）。変数展開を含む値（FEDERATE_OAUTH2_* / STAGING_MOCK_IDP_*_ENDPOINT）は
           # 旧 .env.dist でも除外されていたため、ここでも展開済みの値を後続 step で組み立てる。
           # 注意: 以下の heredoc は $GITHUB_ENV に追記されるため KEY=value 行のみ許容。
           # コメント行を混ぜると「Invalid format」で step が失敗する（Account/mailpit 系の
@@ -90,7 +91,6 @@ jobs:
           MOCK_IDP_FEDERATE_CLIENT_SECRET=federate-client-secret
           MOCK_IDP_FEDERATE_CLIENT_NAME=FederateClient
           MOCK_IDP_FEDERATE_USER_EMAIL=federate@example.jp
-          MOCK_IDP_BASE_URL=http://127.0.0.1:8787
           FEDERATE_OAUTH2_APP_NAME=federate-oauth2
           DEFAULT_ORGANIZATION_CODE=example
           DEFAULT_ORGANIZATION_NAME=example
@@ -159,7 +159,7 @@ jobs:
           DB_PASSWORD: ${{ env.DB_PASSWORD }}
           MOCK_IDP_FEDERATE_CLIENT_ID: ${{ env.MOCK_IDP_FEDERATE_CLIENT_ID }}
           MOCK_IDP_FEDERATE_CLIENT_SECRET: ${{ env.MOCK_IDP_FEDERATE_CLIENT_SECRET }}
-          # secrets から直接参照（ジョブレベルのenvでは空になるため）
+          # 供給元は secrets の一本のみ（ジョブレベル env と同じ値を明示）
           MOCK_IDP_BASE_URL: ${{ secrets.MOCK_IDP_BASE_URL }}
           MOCK_IDP_ORG: ${{ env.MOCK_IDP_ORG }}
 
