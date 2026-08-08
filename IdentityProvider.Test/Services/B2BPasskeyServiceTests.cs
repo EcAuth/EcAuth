@@ -1497,6 +1497,149 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(expectedLowercaseRpId, capturedChallengeRequest.RpId);
         }
 
+        /// <summary>
+        /// 発行した allowCredentials がチャレンジへ束縛されること（WebAuthn §7.2 Step 5 を
+        /// verify 側で実施するための前提）。
+        /// </summary>
+        [Fact]
+        public async Task CreateAuthenticationOptionsAsync_ShouldBindIssuedAllowCredentialsToChallenge()
+        {
+            // Arrange
+            var credentialId1 = Encoding.UTF8.GetBytes("bind-credential-1");
+            var credentialId2 = Encoding.UTF8.GetBytes("bind-credential-2");
+            _context.B2BPasskeyCredentials.AddRange(
+                NewCredential(TestB2BSubject, credentialId1),
+                NewCredential(TestB2BSubject, credentialId2));
+            await _context.SaveChangesAsync();
+
+            IWebAuthnChallengeService.ChallengeRequest? capturedChallengeRequest = null;
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .Callback<IWebAuthnChallengeService.ChallengeRequest>(req => capturedChallengeRequest = req)
+                .ReturnsAsync(new IWebAuthnChallengeService.ChallengeResult
+                {
+                    SessionId = "bind-session",
+                    Challenge = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes("auth-challenge")),
+                    ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+                });
+
+            // Act
+            var result = await _service.CreateAuthenticationOptionsAsync(
+                new IB2BPasskeyService.AuthenticationOptionsRequest
+                {
+                    ClientId = "test-client-id",
+                    RpId = "shop.example.com",
+                    B2BSubject = TestB2BSubject
+                });
+
+            // Assert: 束縛された一覧が、実際に発行した allowCredentials と一致すること
+            Assert.NotNull(capturedChallengeRequest);
+            Assert.NotNull(capturedChallengeRequest.AllowedCredentialIds);
+
+            var issued = result.Options.AllowCredentials!
+                .Select(c => WebEncoders.Base64UrlEncode(c.Id))
+                .ToList();
+            Assert.Equal(issued, capturedChallengeRequest.AllowedCredentialIds);
+            Assert.Equal(
+                new[]
+                {
+                    WebEncoders.Base64UrlEncode(credentialId1),
+                    WebEncoders.Base64UrlEncode(credentialId2)
+                }.Order(),
+                capturedChallengeRequest.AllowedCredentialIds.Order());
+        }
+
+        /// <summary>
+        /// b2b_subject 指定経路は Client の Organization に属するユーザーのクレデンシャルに
+        /// 限定する。この API は無認証で呼べるため、絞らないと他 Organization のユーザーの
+        /// クレデンシャル ID 一覧が本人確認前に漏れる。
+        /// </summary>
+        [Fact]
+        public async Task CreateAuthenticationOptionsAsync_SubjectFromAnotherOrganization_ShouldReturnEmptyAllowCredentials()
+        {
+            // Arrange: 別 Organization のユーザーとそのクレデンシャル
+            var otherOrganization = new Organization
+            {
+                Id = 2,
+                Code = "other-org",
+                Name = "別組織",
+                TenantName = "test-tenant"
+            };
+            _context.Organizations.Add(otherOrganization);
+
+            _context.B2BUsers.Add(new B2BUser
+            {
+                Id = 2,
+                Subject = TestB2BSubject2,
+                ExternalId = ExternalIdHasher.Hash("admin@other.example.com"),
+                UserType = "admin",
+                OrganizationId = 2,
+                Organization = otherOrganization
+            });
+            _context.B2BPasskeyCredentials.Add(
+                NewCredential(TestB2BSubject2, Encoding.UTF8.GetBytes("other-org-credential")));
+            await _context.SaveChangesAsync();
+
+            IWebAuthnChallengeService.ChallengeRequest? capturedChallengeRequest = null;
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .Callback<IWebAuthnChallengeService.ChallengeRequest>(req => capturedChallengeRequest = req)
+                .ReturnsAsync(new IWebAuthnChallengeService.ChallengeResult
+                {
+                    SessionId = "cross-org-options-session",
+                    Challenge = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes("auth-challenge")),
+                    ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+                });
+
+            // Act: Organization 1 の Client で、Organization 2 のユーザーの b2b_subject を指定
+            var result = await _service.CreateAuthenticationOptionsAsync(
+                new IB2BPasskeyService.AuthenticationOptionsRequest
+                {
+                    ClientId = "test-client-id",
+                    RpId = "shop.example.com",
+                    B2BSubject = TestB2BSubject2
+                });
+
+            // Assert: 他 Organization のクレデンシャルは一切返さない
+            Assert.Empty(result.Options.AllowCredentials!);
+            Assert.NotNull(capturedChallengeRequest);
+            Assert.Empty(capturedChallengeRequest.AllowedCredentialIds!);
+        }
+
+        /// <summary>
+        /// Organization 未設定の Client は Organization スコープを判定できないため、
+        /// options 発行前に拒否する（登録側 / verify 側と同じ扱い）。
+        /// </summary>
+        [Fact]
+        public async Task CreateAuthenticationOptionsAsync_ClientWithoutOrganization_ShouldThrowInvalidOperationException()
+        {
+            // Arrange
+            _context.Clients.Add(new Client
+            {
+                Id = 3,
+                ClientId = "orphan-client-id",
+                ClientSecret = "orphan-secret",
+                AppName = "Organization 未設定クライアント",
+                OrganizationId = null,
+                AllowedRpIds = new List<string> { "shop.example.com" }
+            });
+            await _context.SaveChangesAsync();
+
+            // Act & Assert
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                _service.CreateAuthenticationOptionsAsync(
+                    new IB2BPasskeyService.AuthenticationOptionsRequest
+                    {
+                        ClientId = "orphan-client-id",
+                        RpId = "shop.example.com",
+                        B2BSubject = null
+                    }));
+            Assert.Contains("no associated Organization", exception.Message);
+
+            // チャレンジは発行されないこと
+            _mockChallengeService.Verify(
+                x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()),
+                Times.Never);
+        }
+
         #endregion
 
         #region VerifyAuthenticationAsync Tests
@@ -1807,6 +1950,334 @@ namespace IdentityProvider.Test.Services
             // SignCount異常（クローン攻撃の可能性）としてエラーが返されること
             Assert.Contains("Signature counter", result.ErrorMessage);
         }
+
+        #endregion
+
+        #region WebAuthn §7.2 Step 5 / Step 6 検証 Tests
+
+        /// <summary>
+        /// WebAuthn Level 3 §7.2 Step 5: allowCredentials が空でない場合、assertion の
+        /// credential.id がその一覧に含まれることを検証する。
+        /// challenge.Subject を null にして Step 6 と Organization 検証では捕まらない状況を作り、
+        /// Step 5 単独の効果を確認する。
+        /// </summary>
+        [Fact]
+        public async Task VerifyAuthenticationAsync_CredentialNotInIssuedAllowCredentials_ShouldReturnFailure()
+        {
+            // Arrange: 同一ユーザーの 2 本のクレデンシャル。発行した allowCredentials には
+            // 1 本目しか入っていないが、assertion は 2 本目で返ってくる。
+            var issuedCredentialId = Encoding.UTF8.GetBytes("issued-credential");
+            var notIssuedCredentialId = Encoding.UTF8.GetBytes("not-issued-credential");
+
+            _context.B2BPasskeyCredentials.AddRange(
+                NewCredential(TestB2BSubject, issuedCredentialId),
+                NewCredential(TestB2BSubject, notIssuedCredentialId));
+            await _context.SaveChangesAsync();
+
+            var challenge = NewAuthenticationChallenge("step5-session", subject: null);
+            challenge.AllowedCredentialIds = new List<string>
+            {
+                WebEncoders.Base64UrlEncode(issuedCredentialId)
+            };
+            SetupChallenge(challenge);
+            SetupSuccessfulAssertion(challenge.SessionId, signCount: 1);
+
+            // Act
+            var result = await _service.VerifyAuthenticationAsync(
+                NewVerifyRequest(challenge.SessionId, "test-client-id", notIssuedCredentialId));
+
+            // Assert
+            Assert.False(result.Success);
+            Assert.Contains("not allowed", result.ErrorMessage);
+        }
+
+        /// <summary>
+        /// 発行した allowCredentials に含まれるクレデンシャルは Step 5 を通過する。
+        /// </summary>
+        [Fact]
+        public async Task VerifyAuthenticationAsync_CredentialInIssuedAllowCredentials_ShouldSucceed()
+        {
+            // Arrange
+            var credentialId = Encoding.UTF8.GetBytes("allowed-credential");
+            _context.B2BPasskeyCredentials.Add(NewCredential(TestB2BSubject, credentialId));
+            await _context.SaveChangesAsync();
+
+            var challenge = NewAuthenticationChallenge("step5-ok-session", subject: null);
+            challenge.AllowedCredentialIds = new List<string> { WebEncoders.Base64UrlEncode(credentialId) };
+            SetupChallenge(challenge);
+            SetupSuccessfulAssertion(challenge.SessionId, signCount: 1);
+
+            // Act
+            var result = await _service.VerifyAuthenticationAsync(
+                NewVerifyRequest(challenge.SessionId, "test-client-id", credentialId));
+
+            // Assert
+            Assert.True(result.Success);
+            Assert.Equal(TestB2BSubject, result.B2BSubject);
+        }
+
+        /// <summary>
+        /// allowCredentials を空で発行したセッション（discoverable credential フロー）では
+        /// Step 5 の「空でない場合」という前提を満たさないため照合しない。
+        /// </summary>
+        [Fact]
+        public async Task VerifyAuthenticationAsync_EmptyIssuedAllowCredentials_ShouldSkipStep5()
+        {
+            // Arrange
+            var credentialId = Encoding.UTF8.GetBytes("discoverable-only-credential");
+            _context.B2BPasskeyCredentials.Add(NewCredential(TestB2BSubject, credentialId));
+            await _context.SaveChangesAsync();
+
+            var challenge = NewAuthenticationChallenge("step5-empty-session", subject: null);
+            challenge.AllowedCredentialIds = new List<string>();
+            SetupChallenge(challenge);
+            SetupSuccessfulAssertion(challenge.SessionId, signCount: 1);
+
+            // Act
+            var result = await _service.VerifyAuthenticationAsync(
+                NewVerifyRequest(challenge.SessionId, "test-client-id", credentialId));
+
+            // Assert
+            Assert.True(result.Success);
+            Assert.Equal(TestB2BSubject, result.B2BSubject);
+        }
+
+        /// <summary>
+        /// allowed_credential_ids カラム追加前に発行された既存セッション（NULL）では
+        /// Step 5 を適用できないため照合しない（マイグレーション直後の 5 分間の互換性）。
+        /// </summary>
+        [Fact]
+        public async Task VerifyAuthenticationAsync_AllowedCredentialIdsNotRecorded_ShouldSkipStep5()
+        {
+            // Arrange
+            var credentialId = Encoding.UTF8.GetBytes("legacy-session-credential");
+            _context.B2BPasskeyCredentials.Add(NewCredential(TestB2BSubject, credentialId));
+            await _context.SaveChangesAsync();
+
+            var challenge = NewAuthenticationChallenge("legacy-session", subject: null);
+            Assert.Null(challenge.AllowedCredentialIdsJson); // 未記録であることを明示
+            SetupChallenge(challenge);
+            SetupSuccessfulAssertion(challenge.SessionId, signCount: 1);
+
+            // Act
+            var result = await _service.VerifyAuthenticationAsync(
+                NewVerifyRequest(challenge.SessionId, "test-client-id", credentialId));
+
+            // Assert
+            Assert.True(result.Success);
+        }
+
+        /// <summary>
+        /// WebAuthn Level 3 §7.2 Step 6: options 発行時にユーザーが確定していた場合
+        /// （b2b_subject 指定経路 = challenge.Subject が非 null）、そのユーザーの
+        /// クレデンシャルであることを検証する。登録側の ExpectedSubject 突合と対称。
+        /// </summary>
+        [Fact]
+        public async Task VerifyAuthenticationAsync_CredentialOfAnotherSubject_ShouldReturnFailure()
+        {
+            // Arrange: 同一 Organization の別ユーザーのクレデンシャル
+            var otherUser = new B2BUser
+            {
+                Id = 2,
+                Subject = TestB2BSubject2,
+                ExternalId = ExternalIdHasher.Hash("staff@example.com"),
+                UserType = "staff",
+                OrganizationId = 1,
+                Organization = _organization
+            };
+            _context.B2BUsers.Add(otherUser);
+
+            var credentialId = Encoding.UTF8.GetBytes("other-subject-credential");
+            _context.B2BPasskeyCredentials.Add(NewCredential(TestB2BSubject2, credentialId));
+            await _context.SaveChangesAsync();
+
+            // challenge.Subject は TestB2BSubject（別人）。Step 5 は未記録にして Step 6 単独の効果を見る。
+            var challenge = NewAuthenticationChallenge("step6-session", subject: TestB2BSubject);
+            SetupChallenge(challenge);
+            SetupSuccessfulAssertion(challenge.SessionId, signCount: 1);
+
+            // Act
+            var result = await _service.VerifyAuthenticationAsync(
+                NewVerifyRequest(challenge.SessionId, "test-client-id", credentialId));
+
+            // Assert
+            Assert.False(result.Success);
+            Assert.Contains("session subject", result.ErrorMessage);
+        }
+
+        /// <summary>
+        /// 同一 rp_id を共有する別 Organization のクレデンシャルでは認証を通さない。
+        ///
+        /// 同一ドメインで本番サイトとサンドボックスサイトの両方を申し込んだ場合、両者は
+        /// 別 Organization だが allowed_rp_ids が同じ値になりうる。rpIdHash の検証は
+        /// challenge.RpId に基づくため assertion 自体は成立してしまい、Organization
+        /// 検証がなければ本番 / サンドボックスの分離が破れる。
+        /// </summary>
+        [Fact]
+        public async Task VerifyAuthenticationAsync_CredentialFromAnotherOrganization_ShouldReturnFailure()
+        {
+            // Arrange: 同一テナント内の別 Organization（サンドボックス相当）
+            var sandboxOrganization = new Organization
+            {
+                Id = 2,
+                Code = "test-org-sandbox",
+                Name = "テスト組織（サンドボックス）",
+                TenantName = "test-tenant"
+            };
+            _context.Organizations.Add(sandboxOrganization);
+
+            var sandboxUser = new B2BUser
+            {
+                Id = 2,
+                Subject = TestB2BSubject2,
+                ExternalId = ExternalIdHasher.Hash("admin@example.com"),
+                UserType = "admin",
+                OrganizationId = 2,
+                Organization = sandboxOrganization
+            };
+            _context.B2BUsers.Add(sandboxUser);
+
+            var credentialId = Encoding.UTF8.GetBytes("sandbox-credential");
+            _context.B2BPasskeyCredentials.Add(NewCredential(TestB2BSubject2, credentialId));
+            await _context.SaveChangesAsync();
+
+            // Step 5 / Step 6 では捕まらない状況（未記録 + ユーザー未確定）で Organization 検証を見る
+            var challenge = NewAuthenticationChallenge("cross-org-session", subject: null);
+            SetupChallenge(challenge);
+            SetupSuccessfulAssertion(challenge.SessionId, signCount: 1);
+
+            // Act: 本番 Client（Organization 1）のセッションでサンドボックスのクレデンシャルを提示
+            var result = await _service.VerifyAuthenticationAsync(
+                NewVerifyRequest(challenge.SessionId, "test-client-id", credentialId));
+
+            // Assert
+            Assert.False(result.Success);
+            Assert.Contains("organization", result.ErrorMessage);
+        }
+
+        /// <summary>
+        /// 別 Client が発行したセッションを自分の client_id で verify に持ち込めない。
+        /// コントローラーは request.ClientId で Client を認証するが、セッションが
+        /// その Client のものであることは検証していないため、サービス側で突合する。
+        /// </summary>
+        [Fact]
+        public async Task VerifyAuthenticationAsync_SessionIssuedForAnotherClient_ShouldReturnFailure()
+        {
+            // Arrange: 同一 Organization 内の別 Client が発行したセッション
+            var otherClient = new Client
+            {
+                Id = 2,
+                ClientId = "other-client-id",
+                ClientSecret = "other-secret",
+                AppName = "別クライアント",
+                OrganizationId = 1,
+                AllowedRpIds = new List<string> { "shop.example.com" }
+            };
+            _context.Clients.Add(otherClient);
+
+            var credentialId = Encoding.UTF8.GetBytes("cross-client-credential");
+            _context.B2BPasskeyCredentials.Add(NewCredential(TestB2BSubject, credentialId));
+            await _context.SaveChangesAsync();
+
+            var challenge = NewAuthenticationChallenge("cross-client-session", subject: null, clientId: 2);
+            SetupChallenge(challenge);
+            SetupSuccessfulAssertion(challenge.SessionId, signCount: 1);
+
+            // Act: Client 2 のセッションを Client 1 の client_id で verify する
+            var result = await _service.VerifyAuthenticationAsync(
+                NewVerifyRequest(challenge.SessionId, "test-client-id", credentialId));
+
+            // Assert
+            Assert.False(result.Success);
+            Assert.Contains("does not belong to this client", result.ErrorMessage);
+        }
+
+        [Fact]
+        public async Task VerifyAuthenticationAsync_UnknownClient_ShouldReturnFailure()
+        {
+            // Arrange
+            var credentialId = Encoding.UTF8.GetBytes("unknown-client-credential");
+            _context.B2BPasskeyCredentials.Add(NewCredential(TestB2BSubject, credentialId));
+            await _context.SaveChangesAsync();
+
+            var challenge = NewAuthenticationChallenge("unknown-client-session", subject: null);
+            SetupChallenge(challenge);
+            SetupSuccessfulAssertion(challenge.SessionId, signCount: 1);
+
+            // Act
+            var result = await _service.VerifyAuthenticationAsync(
+                NewVerifyRequest(challenge.SessionId, "unknown-client-id", credentialId));
+
+            // Assert
+            Assert.False(result.Success);
+            Assert.Contains("Client not found", result.ErrorMessage);
+        }
+
+        #endregion
+
+        #region §7.2 検証テスト用ヘルパー
+
+        private B2BPasskeyCredential NewCredential(string b2bSubject, byte[] credentialId) =>
+            new B2BPasskeyCredential
+            {
+                B2BSubject = b2bSubject,
+                CredentialId = credentialId,
+                PublicKey = Encoding.UTF8.GetBytes("public-key"),
+                SignCount = 0,
+                AaGuid = Guid.NewGuid()
+            };
+
+        private WebAuthnChallenge NewAuthenticationChallenge(string sessionId, string? subject, int clientId = 1) =>
+            new WebAuthnChallenge
+            {
+                SessionId = sessionId,
+                Challenge = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes("auth-challenge")),
+                Type = "authentication",
+                UserType = "b2b",
+                Subject = subject,
+                RpId = "shop.example.com",
+                ClientId = clientId,
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+            };
+
+        private void SetupChallenge(WebAuthnChallenge challenge) =>
+            _mockChallengeService.Setup(x => x.GetChallengeBySessionIdAsync(challenge.SessionId))
+                .ReturnsAsync(challenge);
+
+        /// <summary>
+        /// Fido2 の assertion 検証自体は成功する状態にする。これにより、テストが失敗した場合の
+        /// 原因が §7.2 の追加検証であることを切り分けられる。
+        /// </summary>
+        private void SetupSuccessfulAssertion(string sessionId, uint signCount)
+        {
+            _mockFido2.Setup(x => x.MakeAssertionAsync(
+                It.IsAny<MakeAssertionParams>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new VerifyAssertionResult { SignCount = signCount });
+
+            _mockChallengeService.Setup(x => x.ConsumeChallengeAsync(sessionId))
+                .ReturnsAsync(true);
+        }
+
+        private static IB2BPasskeyService.AuthenticationVerifyRequest NewVerifyRequest(
+            string sessionId, string clientId, byte[] credentialId) =>
+            new IB2BPasskeyService.AuthenticationVerifyRequest
+            {
+                SessionId = sessionId,
+                ClientId = clientId,
+                AssertionResponse = new AuthenticatorAssertionRawResponse
+                {
+                    Id = WebEncoders.Base64UrlEncode(credentialId),
+                    RawId = credentialId,
+                    Type = PublicKeyCredentialType.PublicKey,
+                    Response = new AuthenticatorAssertionRawResponse.AssertionResponse
+                    {
+                        AuthenticatorData = Encoding.UTF8.GetBytes("auth-data"),
+                        ClientDataJson = Encoding.UTF8.GetBytes("client-data"),
+                        Signature = Encoding.UTF8.GetBytes("signature")
+                    }
+                }
+            };
 
         #endregion
 

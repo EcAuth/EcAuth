@@ -36,6 +36,14 @@ namespace IdentityProvider.Services
             /// クライアントID
             /// </summary>
             public int ClientId { get; set; }
+
+            /// <summary>
+            /// このセッションで発行する allowCredentials の credential_id（Base64URL 形式）。
+            /// WebAuthn Level 3 §7.2 Step 5 の照合のためチャレンジへ束縛する。
+            /// null は「記録しない」を意味する（登録チャレンジなど Step 5 が適用されない経路）。
+            /// 空リストは「allowCredentials を空で発行した」ことの記録で、Step 5 は適用されない。
+            /// </summary>
+            public IReadOnlyList<string>? AllowedCredentialIds { get; set; }
         }
 
         /// <summary>
