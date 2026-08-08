@@ -81,6 +81,67 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(request.Subject, saved.Subject);
             Assert.Equal(request.RpId, saved.RpId);
             Assert.Equal(request.ClientId, saved.ClientId);
+            // 登録チャレンジは WebAuthn §7.2 Step 5 の対象外なので未記録（NULL）
+            Assert.Null(saved.AllowedCredentialIdsJson);
+            Assert.Null(saved.AllowedCredentialIds);
+        }
+
+        /// <summary>
+        /// 発行した allowCredentials をチャレンジへ束縛する（WebAuthn §7.2 Step 5 の照合用）。
+        /// </summary>
+        [Fact]
+        public async Task GenerateChallengeAsync_WithAllowedCredentialIds_ShouldPersistThem()
+        {
+            // Arrange
+            var allowedCredentialIds = new List<string> { "Y3JlZGVudGlhbC0x", "Y3JlZGVudGlhbC0y" };
+            var request = new IWebAuthnChallengeService.ChallengeRequest
+            {
+                Type = "authentication",
+                UserType = "b2b",
+                RpId = "shop.example.com",
+                ClientId = 1,
+                AllowedCredentialIds = allowedCredentialIds
+            };
+
+            // Act
+            var result = await _service.GenerateChallengeAsync(request);
+
+            // Assert
+            var saved = await _context.WebAuthnChallenges
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.SessionId == result.SessionId);
+            Assert.NotNull(saved);
+            Assert.Equal(allowedCredentialIds, saved.AllowedCredentialIds);
+        }
+
+        /// <summary>
+        /// allowCredentials が空のまま発行した場合も「記録済みだが空」として保存する。
+        /// NULL（未記録）と区別できるようにしておくことで、Step 5 が適用されない理由が
+        /// 「発行時に記録していない」のか「空で発行した」のかを事後に切り分けられる。
+        /// </summary>
+        [Fact]
+        public async Task GenerateChallengeAsync_WithEmptyAllowedCredentialIds_ShouldPersistEmptyList()
+        {
+            // Arrange
+            var request = new IWebAuthnChallengeService.ChallengeRequest
+            {
+                Type = "authentication",
+                UserType = "b2b",
+                RpId = "shop.example.com",
+                ClientId = 1,
+                AllowedCredentialIds = new List<string>()
+            };
+
+            // Act
+            var result = await _service.GenerateChallengeAsync(request);
+
+            // Assert
+            var saved = await _context.WebAuthnChallenges
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.SessionId == result.SessionId);
+            Assert.NotNull(saved);
+            Assert.NotNull(saved.AllowedCredentialIdsJson);
+            Assert.Empty(saved.AllowedCredentialIds!);
         }
 
         [Fact]
