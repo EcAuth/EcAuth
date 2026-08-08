@@ -540,6 +540,13 @@ namespace IdentityProvider.Services
             if (client == null)
                 throw new InvalidOperationException($"Client not found: {request.ClientId}");
 
+            // Organization 未設定の Client は Organization スコープを判定できないため拒否する。
+            // 登録側（CreateRegistrationOptionsAsync）と verify 側（VerifyAuthenticationAsync）は
+            // 既に拒否しており、ここで通しても後段で必ず落ちる。allowCredentials とチャレンジを
+            // 発行してから verify で落とすのではなく、options 発行前に明示的に弾く。
+            if (client.OrganizationId == null)
+                throw new InvalidOperationException($"Client has no associated Organization: {request.ClientId}");
+
             // RP ID検証（ドメイン名は大文字小文字を区別しない: RFC 4343）
             if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");

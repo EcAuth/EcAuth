@@ -1604,6 +1604,42 @@ namespace IdentityProvider.Test.Services
             Assert.Empty(capturedChallengeRequest.AllowedCredentialIds!);
         }
 
+        /// <summary>
+        /// Organization 未設定の Client は Organization スコープを判定できないため、
+        /// options 発行前に拒否する（登録側 / verify 側と同じ扱い）。
+        /// </summary>
+        [Fact]
+        public async Task CreateAuthenticationOptionsAsync_ClientWithoutOrganization_ShouldThrowInvalidOperationException()
+        {
+            // Arrange
+            _context.Clients.Add(new Client
+            {
+                Id = 3,
+                ClientId = "orphan-client-id",
+                ClientSecret = "orphan-secret",
+                AppName = "Organization 未設定クライアント",
+                OrganizationId = null,
+                AllowedRpIds = new List<string> { "shop.example.com" }
+            });
+            await _context.SaveChangesAsync();
+
+            // Act & Assert
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                _service.CreateAuthenticationOptionsAsync(
+                    new IB2BPasskeyService.AuthenticationOptionsRequest
+                    {
+                        ClientId = "orphan-client-id",
+                        RpId = "shop.example.com",
+                        B2BSubject = null
+                    }));
+            Assert.Contains("no associated Organization", exception.Message);
+
+            // チャレンジは発行されないこと
+            _mockChallengeService.Verify(
+                x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()),
+                Times.Never);
+        }
+
         #endregion
 
         #region VerifyAuthenticationAsync Tests
