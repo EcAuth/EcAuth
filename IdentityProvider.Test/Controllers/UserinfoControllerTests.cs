@@ -4,8 +4,8 @@ using IdentityProvider.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Primitives;
 using Moq;
+using System.Text;
 using Xunit;
 
 namespace IdentityProvider.Test.Controllers
@@ -150,15 +150,43 @@ namespace IdentityProvider.Test.Controllers
         }
 
         [Fact]
-        public async Task Post_AccessTokenInFormBody_ReturnsBadRequest()
+        public async Task Post_AccessTokenInFormBodyWithAuthorizationHeader_ReturnsBadRequest()
         {
-            // Arrange - RFC 6750 §2.2 のフォームボディ送信も OAuth 2.1 では禁止
-            _controller.HttpContext.Request.ContentType = "application/x-www-form-urlencoded";
-            _controller.HttpContext.Request.Form = new FormCollection(new Dictionary<string, StringValues>
-            {
-                ["access_token"] = "some-token"
-            });
-            // ヘッダー併用時は RFC 6750 §3.1 の「複数の送信方法」に該当するため拒否されること
+            // Arrange - RFC 6750 §3.1 の「複数の送信方法」に該当するケース
+            SetFormUrlEncodedBody("access_token=some-token");
+            _controller.HttpContext.Request.Headers["Authorization"] = "Bearer some-token";
+
+            // Act
+            var result = await _controller.Post();
+
+            // Assert
+            var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+            var error = badRequest.Value!.GetType().GetProperty("error")?.GetValue(badRequest.Value);
+            Assert.Equal("invalid_request", error);
+        }
+
+        [Fact]
+        public async Task Post_AccessTokenInFormBodyOnly_ReturnsBadRequest()
+        {
+            // Arrange - OAuth 2.1 では RFC 6750 §2.2 の送信方法自体が禁止のため、
+            // ヘッダー未併用でも invalid_token (401) ではなく invalid_request (400) になる
+            SetFormUrlEncodedBody("access_token=some-token");
+
+            // Act
+            var result = await _controller.Post();
+
+            // Assert
+            var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+            var error = badRequest.Value!.GetType().GetProperty("error")?.GetValue(badRequest.Value);
+            Assert.Equal("invalid_request", error);
+        }
+
+        [Fact]
+        public async Task Post_MalformedFormBody_ReturnsBadRequest()
+        {
+            // Arrange - FormReader のキー長制限 (既定 2048) 超過で InvalidDataException が送出される。
+            // 認証前に到達しうるため 500 ではなく 400 に落ちること
+            SetFormUrlEncodedBody($"{new string('k', 3000)}=v");
             _controller.HttpContext.Request.Headers["Authorization"] = "Bearer some-token";
 
             // Act
@@ -177,11 +205,7 @@ namespace IdentityProvider.Test.Controllers
             var accessToken = "valid-access-token";
             var subject = "test-subject";
 
-            _controller.HttpContext.Request.ContentType = "application/x-www-form-urlencoded";
-            _controller.HttpContext.Request.Form = new FormCollection(new Dictionary<string, StringValues>
-            {
-                ["scope"] = "openid"
-            });
+            SetFormUrlEncodedBody("scope=openid");
             _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
 
             _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
@@ -207,6 +231,18 @@ namespace IdentityProvider.Test.Controllers
             var okResult = Assert.IsType<OkObjectResult>(result);
             var subProperty = okResult.Value!.GetType().GetProperty("sub")?.GetValue(okResult.Value);
             Assert.Equal(subject, subProperty);
+        }
+
+        /// <summary>
+        /// Request.Form へ解析済みの値を差し込むと ReadFormAsync の解析経路を素通りするため、
+        /// 生のボディを書いてコントローラーに解析させる。
+        /// </summary>
+        private void SetFormUrlEncodedBody(string body)
+        {
+            var bytes = Encoding.UTF8.GetBytes(body);
+            _controller.HttpContext.Request.ContentType = "application/x-www-form-urlencoded";
+            _controller.HttpContext.Request.ContentLength = bytes.Length;
+            _controller.HttpContext.Request.Body = new MemoryStream(bytes);
         }
 
         [Fact]
