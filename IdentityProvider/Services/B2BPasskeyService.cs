@@ -540,6 +540,13 @@ namespace IdentityProvider.Services
             if (client == null)
                 throw new InvalidOperationException($"Client not found: {request.ClientId}");
 
+            // Organization 未設定の Client は Organization スコープを判定できないため拒否する。
+            // 登録側（CreateRegistrationOptionsAsync）と verify 側（VerifyAuthenticationAsync）は
+            // 既に拒否しており、ここで通しても後段で必ず落ちる。allowCredentials とチャレンジを
+            // 発行してから verify で落とすのではなく、options 発行前に明示的に弾く。
+            if (client.OrganizationId == null)
+                throw new InvalidOperationException($"Client has no associated Organization: {request.ClientId}");
+
             // RP ID検証（ドメイン名は大文字小文字を区別しない: RFC 4343）
             if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");
@@ -559,9 +566,17 @@ namespace IdentityProvider.Services
             if (b2bSubject != null)
             {
                 // 特定ユーザーのクレデンシャルのみ（ユーザー確定済みの経路）
+                //
+                // b2b_subject はリクエスト由来の値で、この API は無認証で呼べる。Organization で
+                // 絞らないと、他 Organization のユーザーの b2b_subject を指定するだけでその
+                // クレデンシャル ID 一覧を取得でき（本人確認前の情報漏えい）、さらにその
+                // allowCredentials で認証を試行できてしまう。Client の Organization に属する
+                // ユーザーのクレデンシャルに限定する。
                 allowCredentials = await _context.B2BPasskeyCredentials
                     .IgnoreQueryFilters()
-                    .Where(c => c.B2BSubject == b2bSubject)
+                    .Where(c => c.B2BSubject == b2bSubject
+                        && c.B2BUser != null
+                        && c.B2BUser.OrganizationId == client.OrganizationId)
                     .Select(c => new PublicKeyCredentialDescriptor(
                         PublicKeyCredentialType.PublicKey,
                         c.CredentialId,
@@ -604,6 +619,9 @@ namespace IdentityProvider.Services
             }
 
             // チャレンジ生成
+            // 発行する allowCredentials をチャレンジへ束縛し、verify 側で WebAuthn §7.2 Step 5 を
+            // 実施できるようにする。descriptor から導出することで「発行した一覧」と
+            // 「照合する一覧」が構造的に一致する。
             var challengeResult = await _challengeService.GenerateChallengeAsync(
                 new IWebAuthnChallengeService.ChallengeRequest
                 {
@@ -611,7 +629,10 @@ namespace IdentityProvider.Services
                     UserType = "b2b",
                     Subject = b2bSubject,
                     RpId = rpId,
-                    ClientId = client.Id
+                    ClientId = client.Id,
+                    AllowedCredentialIds = allowCredentials
+                        .Select(c => WebEncoders.Base64UrlEncode(c.Id))
+                        .ToList()
                 });
 
             // 認証オプション生成
@@ -689,6 +710,61 @@ namespace IdentityProvider.Services
                     };
                 }
 
+                // セッションとリクエスト元 Client の束縛検証
+                //
+                // コントローラーは request.ClientId で Client を認証するが、チャレンジセッションが
+                // その Client のものであることは検証していない。ここで突合しないと、別 Client が
+                // 発行したセッションを自分の client_id で verify に持ち込め、認可コードが
+                // リクエスト元 Client 宛に発行される（Client 境界の越境）。
+                //
+                // 注: GetChallengeBySessionIdAsync は Client / Organization を Include 済みだが、
+                // ここでは navigation に依存せず明示的に引く。テストは challenge をモックで返すため
+                // navigation が null になり、依存すると本番だけ通る経路が生まれてテストで守れない。
+                Client? client;
+                using (TimingScope.Begin("session_client_verify"))
+                {
+                    client = await _context.Clients
+                        .IgnoreQueryFilters()
+                        .ExcludeDeletedOrganizations()
+                        .FirstOrDefaultAsync(c => c.ClientId == request.ClientId);
+                }
+
+                if (client == null)
+                {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "client_not_found", "Client not found");
+                    return new IB2BPasskeyService.AuthenticationVerifyResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Client not found"
+                    };
+                }
+
+                if (client.Id != challenge.ClientId)
+                {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "session_client_mismatch", "Session was not issued for this client");
+                    return new IB2BPasskeyService.AuthenticationVerifyResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Session does not belong to this client"
+                    };
+                }
+
+                if (client.OrganizationId == null)
+                {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "client_organization_missing", "Client has no associated Organization");
+                    return new IB2BPasskeyService.AuthenticationVerifyResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Client has no associated Organization"
+                    };
+                }
+
                 // クレデンシャル取得
                 // Fido2.NetLib 4.0.0では Id は Base64URL文字列なのでデコードが必要
                 var assertionCredentialIdBytes = WebEncoders.Base64UrlDecode(request.AssertionResponse.Id);
@@ -713,11 +789,88 @@ namespace IdentityProvider.Services
                     };
                 }
 
+                // WebAuthn Level 3 §7.2 Step 5
+                // 「pkOptions.allowCredentials が空でない場合、credential.id がその一覧の
+                // いずれかを指すことを検証する」
+                //
+                // 比較はデコード後のバイト列を再エンコードした正規形で行う（クライアントが送る
+                // Base64URL 文字列のパディング差異で不一致にならないようにする）。
+                var assertionCredentialId = WebEncoders.Base64UrlEncode(assertionCredentialIdBytes);
+                var allowedCredentialIds = challenge.AllowedCredentialIds;
+                if (allowedCredentialIds is { Count: > 0 }
+                    && !allowedCredentialIds.Contains(assertionCredentialId, StringComparer.Ordinal))
+                {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "credential_not_allowed", "Credential is not in the allowCredentials issued for this session");
+                    return new IB2BPasskeyService.AuthenticationVerifyResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Credential is not allowed for this session"
+                    };
+                }
+
+                // WebAuthn Level 3 §7.2 Step 6（ユーザー事前確定時）
+                // 「認証セレモニー開始前にユーザーが特定されていた場合、その特定されたユーザー
+                // アカウントが credential.rawId に等しい id を持つ credential record を含むことを
+                // 検証する」
+                //
+                // b2b_subject 指定経路では options 発行時に RP がユーザーを確定しており、それが
+                // challenge.Subject に保存されている。登録側（VerifyRegistrationAsync の
+                // ExpectedSubject 突合）と対称になる。
+                // challenge.Subject が null の経路（ユーザー未確定）は Step 6 の後者の要件を
+                // isUserHandleOwner コールバックが満たす。
+                if (!string.IsNullOrEmpty(challenge.Subject)
+                    && !string.Equals(credential.B2BSubject, challenge.Subject, StringComparison.Ordinal))
+                {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "credential_subject_mismatch", "Credential does not belong to the subject identified for this session");
+                    return new IB2BPasskeyService.AuthenticationVerifyResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Credential does not belong to the session subject"
+                    };
+                }
+
+                // Organization スコープ検証
+                //
+                // rpIdHash の検証は Fido2.NetLib が ServerDomain = challenge.RpId に基づいて行うため、
+                // rp_id が異なるクレデンシャルは assertion 検証で落ちる。しかし同一 rp_id を共有する
+                // 別 Organization（同一ドメインで本番サイトとサンドボックスサイトの両方を申し込んだ
+                // 場合など）のクレデンシャルは通ってしまう。Client の Organization に属するユーザーの
+                // クレデンシャルであることを明示的に検証する。
+                bool credentialBelongsToClientOrganization;
+                using (TimingScope.Begin("credential_organization_verify"))
+                {
+                    credentialBelongsToClientOrganization = await _context.B2BUsers
+                        .IgnoreQueryFilters()
+                        .AnyAsync(u => u.Subject == credential.B2BSubject
+                            && u.OrganizationId == client.OrganizationId);
+                }
+
+                if (!credentialBelongsToClientOrganization)
+                {
+                    _logger.LogWarning(
+                        PasskeyVerifyFailedLogTemplate,
+                        request.ClientId, request.SessionId, "credential_organization_mismatch", "Credential owner does not belong to the client's Organization");
+                    return new IB2BPasskeyService.AuthenticationVerifyResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Credential does not belong to this organization"
+                    };
+                }
+
                 // AssertionOptionsを復元
+                // AllowCredentials も発行時の値へ復元する。Fido2.NetLib 側も §7.2 Step 5 相当の
+                // 照合を行うため、上の自前チェックとの二重防御になる（未記録の既存行では null）。
                 var options = new AssertionOptions
                 {
                     Challenge = WebEncoders.Base64UrlDecode(challenge.Challenge),
-                    RpId = challenge.RpId
+                    RpId = challenge.RpId,
+                    AllowCredentials = allowedCredentialIds?
+                        .Select(id => new PublicKeyCredentialDescriptor(WebEncoders.Base64UrlDecode(id)))
+                        .ToList()
                 };
 
                 // ユーザーハンドル所有権チェック用デリゲート

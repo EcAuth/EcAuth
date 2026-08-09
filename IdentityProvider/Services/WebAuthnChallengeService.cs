@@ -67,6 +67,7 @@ namespace IdentityProvider.Services
                 Subject = request.Subject,
                 RpId = request.RpId,
                 ClientId = request.ClientId,
+                AllowedCredentialIds = request.AllowedCredentialIds,
                 ExpiresAt = expiresAt,
                 CreatedAt = DateTimeOffset.UtcNow
             };

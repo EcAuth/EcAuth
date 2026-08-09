@@ -66,7 +66,7 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 | `/userinfo` | `auth_header_parse` / `access_token_validate` / `user_lookup` |
 | `/api/external-userinfo` | `auth_header_parse` / `access_token_validate` / `external_userinfo_fetch` |
 | `register/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `fido2_make_credential` / `credential_persist` / `challenge_consume`） |
-| `authenticate/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `credential_lookup` / `fido2_make_assertion` / `signcount_persist` / `challenge_consume`） |
+| `authenticate/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `session_client_verify` / `credential_lookup` / `credential_organization_verify` / `fido2_make_assertion` / `signcount_persist` / `challenge_consume`） |
 | `/api/signup/request` | `validate` / `persist` / `send_email` |
 | `/api/signup/confirm` | `token_lookup` / `confirm`（内訳: `client_secret_protect`） |
 | `/api/signup/status` | `status_lookup` |
@@ -151,6 +151,43 @@ AppServiceConsoleLogs
 - 切り分けの原則: 起動・マイグレーション・シーダー等 `app.Run()` 前の診断は **`AppServiceConsoleLogs`**、
   リクエスト処理時（host start 後）の診断は **`traces` / `AppTraces`**。「App Insights に出ない」と感じたら、
   まず参照テーブルの取り違えを疑う（起動前ログを App Insights に押し込む `ForceFlush` 等の小細工は不要・無効）。
+
+### B2B パスキー authenticate/verify の検証レイヤ（WebAuthn §7.2）
+
+`B2BPasskeyService.VerifyAuthenticationAsync` は assertion 検証の前に 5 段の検証を行う。
+**どれも冗長ではない**（EcAuth#516 でこの多くが欠けていたことが判明した）。順序と目的:
+
+| # | 検証 | 失敗理由ログ | 何を守るか |
+|---|------|--------------|-----------|
+| 1 | セッションとリクエスト元 Client の突合（`client.Id == challenge.ClientId`） | `session_client_mismatch` | 別 Client が発行したセッションを自分の `client_id` で持ち込み、認可コードを自分宛に発行させる経路 |
+| 2 | §7.2 Step 5: `challenge.AllowedCredentialIds` との照合 | `credential_not_allowed` | このセッションで発行していないクレデンシャルでの認証 |
+| 3 | §7.2 Step 6: `challenge.Subject` との照合 | `credential_subject_mismatch` | b2b_subject 指定経路で、確定済みユーザー以外のクレデンシャルでの認証。登録側の `ExpectedSubject` 突合と対称 |
+| 4 | Organization スコープ（`credential.B2BSubject` が Client の Organization の `B2BUser` に属するか） | `credential_organization_mismatch` | **同一 rp_id を共有する別 Organization 間の越境**。同一ドメインで本番サイトとサンドボックスサイトの両方を申し込むと `allowed_rp_ids` が同値になりうるため、rpIdHash 検証では防げない |
+| 5 | `isUserHandleOwner` コールバック（Fido2.NetLib 経由） | — | Step 6 の後者（ユーザー未確定経路）の要件 |
+
+判断の根拠:
+
+- **Organization 検証（#4）は #2 / #3 では代替できない。** `CreateAuthenticationOptionsAsync` の
+  b2b_subject 指定経路は、リクエスト由来の `b2b_subject` をそのまま使う（この API は無認証で呼べる）。
+  Organization で絞らなければ他 Organization のユーザーの b2b_subject を指定できてしまい、
+  その場合 #2 / #3 は「発行した一覧」「確定した subject」と整合するので通過する。
+  → **options 側でも Organization で絞る**ことと、verify 側の #4 の両方が必要。
+  この不変条件は `AuthorizeByRegistrationTokenAsync` が登録トークンに対して既に課しているものと同じ。
+- **`rpIdHash` 検証では足りない。** Fido2.NetLib の origin / rpIdHash 検証は
+  `ServerDomain = challenge.RpId` に基づくため、rp_id が違うクレデンシャルは落ちる。
+  逆に**同一 rp_id なら Organization / Client をまたいでも通る**。
+- **#2 を自前で実装しているのは Fido2.NetLib と二重防御にするため。** `OriginalOptions.AllowCredentials`
+  も発行時の値へ復元してライブラリ側の照合にも掛けているが、失敗理由を構造化ログに出し、
+  ユニットテスト（`IFido2` はモック）で守れる形にするために自前チェックを残す。
+- **`webauthn_challenge.allowed_credential_ids` の 3 状態**（NULL / `"[]"` / 要素あり）は意図的。
+  NULL は「発行時に記録していない」（登録チャレンジ、カラム追加前の既存行）、`"[]"` は
+  「allowCredentials を空で発行した」（discoverable credential フロー）。どちらも §7.2 Step 5 の
+  「空でない場合」を満たさないため照合しないが、事後に理由を切り分けられるよう区別して保存する。
+- **Client 境界（同一 Organization 内の Client 間）は #2 が担う。** ただし b2b_subject 未指定経路の
+  allowCredentials は現在 Organization 単位で発行しているため、この経路では実質 Organization
+  境界と同じになる。`CreateAuthenticationOptionsAsync` のコメントにある移行
+  （rk フラグ保存 → `ResidentKey.Required` 化 → 既存ユーザー再登録 → 空 allowCredentials へ切替）を
+  終えた時点で、#2 が自動的に Client 境界の強制になる。
 
 ### E2E テストの実装上の要点
 
