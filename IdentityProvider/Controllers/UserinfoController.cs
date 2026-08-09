@@ -62,28 +62,6 @@ namespace IdentityProvider.Controllers
             {
                 _logger.LogInformation("UserInfo endpoint accessed");
 
-                // 0. OAuth 2.1 §5.3 / RFC 6750 §3.1: アクセストークンを URI クエリパラメータや
-                //    フォームボディで送信することは禁止（サーバーログ・ブラウザ履歴・Referer 経由の漏洩防止）。
-                using (TimingScope.Begin("token_transport_check"))
-                {
-                    var tokenInQuery = HttpContext.Request.Query.ContainsKey("access_token");
-                    var tokenInForm = !tokenInQuery
-                        && IsFormUrlEncodedRequest(HttpContext.Request)
-                        && (await HttpContext.Request.ReadFormAsync()).ContainsKey("access_token");
-
-                    if (tokenInQuery || tokenInForm)
-                    {
-                        _logger.LogWarning(
-                            "Access token supplied via {Transport} - rejected (OAuth 2.1 5.3)",
-                            tokenInQuery ? "query parameter" : "form body");
-                        return BadRequest(new
-                        {
-                            error = "invalid_request",
-                            error_description = "アクセストークンを URI クエリパラメータまたはフォームボディで送信することは許可されていません。Authorization ヘッダーを使用してください。"
-                        });
-                    }
-                }
-
                 // 1. Authorization ヘッダーの取得 + Bearer Token 解析
                 string accessToken;
                 using (TimingScope.Begin("auth_header_parse"))
@@ -138,7 +116,30 @@ namespace IdentityProvider.Controllers
                     accessToken = token;
                 }
 
-                // 2. アクセストークンの検証（SubjectType を含む詳細な結果を取得）
+                // 2. OAuth 2.1 §5.1 / RFC 6750 §3.1: 複数の送信方法の併用は禁止。
+                //    クエリ / フォームボディ単独の場合は §5.1 の「resource servers MUST ignore」に従い、
+                //    上の分岐が「トークン不在」として 401 を返すためここには到達しない。
+                using (TimingScope.Begin("token_transport_check"))
+                {
+                    var tokenInQuery = HttpContext.Request.Query.ContainsKey("access_token");
+                    var tokenInForm = !tokenInQuery
+                        && IsFormUrlEncodedRequest(HttpContext.Request)
+                        && (await HttpContext.Request.ReadFormAsync()).ContainsKey("access_token");
+
+                    if (tokenInQuery || tokenInForm)
+                    {
+                        _logger.LogWarning(
+                            "Access token supplied via both Authorization header and {Transport} - rejected (OAuth 2.1 5.1)",
+                            tokenInQuery ? "query parameter" : "form body");
+                        return BadRequest(new
+                        {
+                            error = "invalid_request",
+                            error_description = "アクセストークンを複数の方法で送信することは許可されていません。Authorization ヘッダーのみを使用してください。"
+                        });
+                    }
+                }
+
+                // 3. アクセストークンの検証（SubjectType を含む詳細な結果を取得）
                 _logger.LogInformation("Validating access token");
                 ITokenService.AccessTokenValidationResult validationResult;
                 using (TimingScope.Begin("access_token_validate"))
@@ -159,7 +160,7 @@ namespace IdentityProvider.Controllers
                 var subject = validationResult.Subject;
                 var subjectType = validationResult.SubjectType ?? SubjectType.B2C;
 
-                // 3. SubjectType に応じたユーザー情報の取得
+                // 4. SubjectType に応じたユーザー情報の取得
                 _logger.LogInformation("Fetching user info for subject: {Subject}, SubjectType: {SubjectType}", subject, subjectType);
 
                 string? userSubject = null;
@@ -225,11 +226,12 @@ namespace IdentityProvider.Controllers
         }
 
         /// <summary>
-        /// RFC 6750 §2.2 のフォームボディ送信に該当するリクエストかを判定する。
+        /// OAuth 2.1 §5.1.2 のフォームボディ送信に該当するリクエストかを判定する。
         /// </summary>
         /// <remarks>
-        /// multipart/form-data も HasFormContentType では true になるが、RFC 6750 §2.2 の対象外であり、
-        /// 認証前に大きなボディをバッファリングさせないため application/x-www-form-urlencoded に限定する。
+        /// multipart/form-data も HasFormContentType では true になるが、§5.1.2 は
+        /// application/x-www-form-urlencoded かつ single-part を条件としており対象外。
+        /// トークン検証前に大きなボディをバッファリングさせない意味でも限定する必要がある。
         /// </remarks>
         private static bool IsFormUrlEncodedRequest(HttpRequest request)
             => MediaTypeHeaderValue.TryParse(request.ContentType, out var mediaType)
