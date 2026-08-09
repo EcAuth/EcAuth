@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Moq;
+using System.Text;
 using Xunit;
 
 namespace IdentityProvider.Test.Controllers
@@ -129,6 +130,136 @@ namespace IdentityProvider.Test.Controllers
 
             var errorProperty = response.GetType().GetProperty("error")?.GetValue(response);
             Assert.Equal("invalid_token", errorProperty);
+        }
+
+        [Fact]
+        public async Task Get_AccessTokenInQueryParameterWithAuthorizationHeader_ReturnsBadRequest()
+        {
+            // Arrange - OAuth 2.1 §5.1 / RFC 6750 §3.1 の「複数の送信方法」に該当するケース
+            _controller.HttpContext.Request.QueryString = new QueryString("?access_token=some-token");
+            _controller.HttpContext.Request.Headers["Authorization"] = "Bearer some-token";
+
+            // Act
+            var result = await _controller.Get();
+
+            // Assert
+            var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+            var error = badRequest.Value!.GetType().GetProperty("error")?.GetValue(badRequest.Value);
+            Assert.Equal("invalid_request", error);
+        }
+
+        [Fact]
+        public async Task Get_AccessTokenInQueryParameterOnly_ReturnsUnauthorized()
+        {
+            // Arrange - OAuth 2.1 §5.1 の「resource servers MUST ignore」に従い、
+            // クエリのトークンは無視されて「トークン不在」の 401 になる
+            _controller.HttpContext.Request.QueryString = new QueryString("?access_token=some-token");
+
+            // Act
+            var result = await _controller.Get();
+
+            // Assert
+            var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
+            var error = unauthorized.Value!.GetType().GetProperty("error")?.GetValue(unauthorized.Value);
+            Assert.Equal("invalid_token", error);
+            _mockTokenService.Verify(x => x.ValidateAccessTokenWithTypeAsync(It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task Post_AccessTokenInFormBodyWithAuthorizationHeader_ReturnsBadRequest()
+        {
+            // Arrange - OAuth 2.1 §5.1 / RFC 6750 §3.1 の「複数の送信方法」に該当するケース
+            SetFormUrlEncodedBody("access_token=some-token");
+            _controller.HttpContext.Request.Headers["Authorization"] = "Bearer some-token";
+
+            // Act
+            var result = await _controller.Post();
+
+            // Assert
+            var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+            var error = badRequest.Value!.GetType().GetProperty("error")?.GetValue(badRequest.Value);
+            Assert.Equal("invalid_request", error);
+        }
+
+        [Fact]
+        public async Task Post_AccessTokenInFormBodyOnly_ReturnsUnauthorized()
+        {
+            // Arrange - §5.1.2 は「Resource servers MAY support this method」であり、
+            // EcAuth は未サポート。単独送信は 400 ではなく「トークン不在」の 401 になる
+            SetFormUrlEncodedBody("access_token=some-token");
+
+            // Act
+            var result = await _controller.Post();
+
+            // Assert
+            var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
+            var error = unauthorized.Value!.GetType().GetProperty("error")?.GetValue(unauthorized.Value);
+            Assert.Equal("invalid_token", error);
+            _mockTokenService.Verify(x => x.ValidateAccessTokenWithTypeAsync(It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task Post_MalformedFormBody_ReturnsBadRequest()
+        {
+            // Arrange - FormReader のキー長制限 (既定 2048) 超過で InvalidDataException が送出される。
+            // トークン検証前に到達しうるため 500 ではなく 400 に落ちること
+            SetFormUrlEncodedBody($"{new string('k', 3000)}=v");
+            _controller.HttpContext.Request.Headers["Authorization"] = "Bearer some-token";
+
+            // Act
+            var result = await _controller.Post();
+
+            // Assert
+            var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+            var error = badRequest.Value!.GetType().GetProperty("error")?.GetValue(badRequest.Value);
+            Assert.Equal("invalid_request", error);
+        }
+
+        [Fact]
+        public async Task Post_FormBodyWithoutAccessToken_ReturnsUserInfo()
+        {
+            // Arrange
+            var accessToken = "valid-access-token";
+            var subject = "test-subject";
+
+            SetFormUrlEncodedBody("scope=openid");
+            _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
+
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = true,
+                    Subject = subject,
+                    SubjectType = SubjectType.B2C
+                });
+
+            _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
+                .ReturnsAsync(new EcAuthUser
+                {
+                    Subject = subject,
+                    EmailHash = "test-email-hash",
+                    OrganizationId = 1
+                });
+
+            // Act
+            var result = await _controller.Post();
+
+            // Assert
+            var okResult = Assert.IsType<OkObjectResult>(result);
+            var subProperty = okResult.Value!.GetType().GetProperty("sub")?.GetValue(okResult.Value);
+            Assert.Equal(subject, subProperty);
+        }
+
+        /// <summary>
+        /// Request.Form へ解析済みの値を差し込むと ReadFormAsync の解析経路を素通りするため、
+        /// 生のボディを書いてコントローラーに解析させる。
+        /// </summary>
+        private void SetFormUrlEncodedBody(string body)
+        {
+            var bytes = Encoding.UTF8.GetBytes(body);
+            _controller.HttpContext.Request.ContentType = "application/x-www-form-urlencoded";
+            _controller.HttpContext.Request.ContentLength = bytes.Length;
+            _controller.HttpContext.Request.Body = new MemoryStream(bytes);
         }
 
         [Fact]

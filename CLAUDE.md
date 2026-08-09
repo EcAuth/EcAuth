@@ -63,7 +63,7 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 | エンドポイント | ステップ |
 |---|---|
 | `/token` | `client_lookup` / `client_secret_verify` / `auth_code_lookup` / `auth_code_mark_used` / `user_lookup` / `token_generate` |
-| `/userinfo` | `auth_header_parse` / `access_token_validate` / `user_lookup` |
+| `/userinfo` | `auth_header_parse` / `token_transport_check` / `access_token_validate` / `user_lookup` |
 | `/api/external-userinfo` | `auth_header_parse` / `access_token_validate` / `external_userinfo_fetch` |
 | `register/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `fido2_make_credential` / `credential_persist` / `challenge_consume`） |
 | `authenticate/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `session_client_verify` / `credential_lookup` / `credential_organization_verify` / `fido2_make_assertion` / `signcount_persist` / `challenge_consume`） |
