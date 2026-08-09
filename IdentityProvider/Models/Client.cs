@@ -32,7 +32,9 @@ namespace IdentityProvider.Models
         public SubjectType SubjectType { get; set; } = SubjectType.B2C;
 
         public Organization? Organization { get; set; }
-        public ICollection<RedirectUri>? RedirectUris { get; } = new List<RedirectUri>();
+        // get-only + 初期化子のため null になりえない。null 許容にすると呼び出し側が
+        // 毎回 null チェックを強いられる（CS8604）ので、実態どおり非 null で宣言する。
+        public ICollection<RedirectUri> RedirectUris { get; } = new List<RedirectUri>();
         public ICollection<OpenIdProvider>? OpenIdProviders { get; } = new List<OpenIdProvider>();
 
         [Column("allowed_rp_ids")]

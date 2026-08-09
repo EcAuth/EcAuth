@@ -86,7 +86,6 @@ jobs:
           MOCK_IDP_FEDERATE_CLIENT_SECRET=federate-client-secret
           MOCK_IDP_FEDERATE_CLIENT_NAME=FederateClient
           MOCK_IDP_FEDERATE_USER_EMAIL=federate@example.jp
-          MOCK_IDP_BASE_URL=https://localhost:9091
           FEDERATE_OAUTH2_APP_NAME=federate-oauth2
           DEFAULT_ORGANIZATION_CODE=example
           DEFAULT_ORGANIZATION_NAME=example
@@ -133,7 +132,7 @@ jobs:
           MOCK_IDP_ORG: ${{ env.MOCK_IDP_ORG }}
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 

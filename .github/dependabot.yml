@@ -25,69 +25,76 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
-    # 公式 actions/* と azure/* を種類ごとに 1 PR に集約
-    # major は breaking change の可能性があるため個別 PR を維持
+    # minor/patch と major の 2 PR に集約する。
+    # patterns を "*" にしているのは、公式 actions/* 以外のサードパーティ
+    # （anthropics/* 1password/* pnpm/* peaceiris/* nanasess/* 等）を
+    # 取りこぼさないため。ベンダー別に patterns を切ると、列挙から漏れた
+    # action がそのまま個別 PR として滞留する。
     groups:
-      actions-minor-patch:
+      github-actions-minor:
         patterns:
-          - "actions/*"
+          - "*"
         update-types:
           - "minor"
           - "patch"
-      azure-minor-patch:
+      github-actions-major:
         patterns:
-          - "azure/*"
+          - "*"
         update-types:
-          - "minor"
-          - "patch"
+          - "major"
 
   # .NET NuGet パッケージの自動更新
   - package-ecosystem: "nuget"
     directories:
       - "/"
       - "/IdentityProvider"
-      - "/MockOpenIdProvider"
-      - "/IdpUtilities"
-      - "/ConsoleApp"
       - "/IdentityProvider.Test"
-      - "/MockOpenIdProvider.Test"
-      - "/IdpUtilities.Test"
+      - "/E2ETests.Selenium"
     schedule:
       interval: "weekly"
       day: "tuesday"
       time: "09:00"
       timezone: "Asia/Tokyo"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "dotnet"
     commit-message:
       prefix: "chore"
       include: "scope"
-    # セキュリティアップデートは即座に作成
     allow:
       - dependency-type: "all"
     # GitHub Packages の認証設定を参照
     registries:
       - github-packages
-    # .NET 10 へのメジャーバージョンアップグレードを無視
-    # プロジェクトが net9.0 をターゲットにしているため、ランタイムに含まれる
-    # パッケージは同じメジャーバージョンを維持する
+    # group を指定すると複数 directories の同一パッケージ更新が 1 PR に集約される
+    groups:
+      nuget-minor:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      nuget-major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+    # .NET ランタイム同梱パッケージの major 更新は、.NET 本体のメジャー移行と
+    # 同時に IdpUtilities → MockIdP → EcAuth の順で進める必要があるため止める。
+    # 手順は EcAuthDocs の claude-repository-guide.md
+    # 「.NET メジャーバージョン移行の順序（標準手順）」を参照。
+    # patch/minor（10.0.9 → 10.0.10 等）は通す。
     ignore:
       - dependency-name: "System.Text.Json"
-        versions: [">= 10.0.0"]
+        update-types: ["version-update:semver-major"]
       - dependency-name: "Microsoft.EntityFrameworkCore*"
-        versions: [">= 10.0.0"]
+        update-types: ["version-update:semver-major"]
       - dependency-name: "Microsoft.AspNetCore*"
-        versions: [">= 10.0.0"]
+        update-types: ["version-update:semver-major"]
       - dependency-name: "Microsoft.Extensions*"
-        versions: [">= 10.0.0"]
+        update-types: ["version-update:semver-major"]
       - dependency-name: "dotnet-ef"
-        versions: [">= 10.0.0"]
-      # Swashbuckle 10.x は Microsoft.OpenApi 2.x を要求するが、
-      # Microsoft.AspNetCore.OpenApi 9.x（.NET 9）は Microsoft.OpenApi 1.x に依存するため競合する。
-      # .NET 10 移行時にまとめて対応する（ref: PR #298）
-      - dependency-name: "Swashbuckle.AspNetCore"
         update-types: ["version-update:semver-major"]
 
   # E2ETests の npm パッケージの自動更新
@@ -109,3 +116,15 @@ updates:
     # 開発依存関係も含める
     allow:
       - dependency-type: "all"
+    groups:
+      npm-minor:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      npm-major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"

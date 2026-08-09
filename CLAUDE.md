@@ -66,7 +66,7 @@ cd E2ETests && pnpm install && pnpm exec playwright test
 | `/userinfo` | `auth_header_parse` / `access_token_validate` / `user_lookup` |
 | `/api/external-userinfo` | `auth_header_parse` / `access_token_validate` / `external_userinfo_fetch` |
 | `register/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `fido2_make_credential` / `credential_persist` / `challenge_consume`） |
-| `authenticate/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `credential_lookup` / `fido2_make_assertion` / `signcount_persist` / `challenge_consume`） |
+| `authenticate/verify` | `client_authenticate` / `service_call`（内訳: `challenge_lookup` / `session_client_verify` / `credential_lookup` / `credential_organization_verify` / `fido2_make_assertion` / `signcount_persist` / `challenge_consume`） |
 | `/api/signup/request` | `validate` / `persist` / `send_email` |
 | `/api/signup/confirm` | `token_lookup` / `confirm`（内訳: `client_secret_protect`） |
 | `/api/signup/status` | `status_lookup` |
@@ -152,6 +152,43 @@ AppServiceConsoleLogs
   リクエスト処理時（host start 後）の診断は **`traces` / `AppTraces`**。「App Insights に出ない」と感じたら、
   まず参照テーブルの取り違えを疑う（起動前ログを App Insights に押し込む `ForceFlush` 等の小細工は不要・無効）。
 
+### B2B パスキー authenticate/verify の検証レイヤ（WebAuthn §7.2）
+
+`B2BPasskeyService.VerifyAuthenticationAsync` は assertion 検証の前に 5 段の検証を行う。
+**どれも冗長ではない**（EcAuth#516 でこの多くが欠けていたことが判明した）。順序と目的:
+
+| # | 検証 | 失敗理由ログ | 何を守るか |
+|---|------|--------------|-----------|
+| 1 | セッションとリクエスト元 Client の突合（`client.Id == challenge.ClientId`） | `session_client_mismatch` | 別 Client が発行したセッションを自分の `client_id` で持ち込み、認可コードを自分宛に発行させる経路 |
+| 2 | §7.2 Step 5: `challenge.AllowedCredentialIds` との照合 | `credential_not_allowed` | このセッションで発行していないクレデンシャルでの認証 |
+| 3 | §7.2 Step 6: `challenge.Subject` との照合 | `credential_subject_mismatch` | b2b_subject 指定経路で、確定済みユーザー以外のクレデンシャルでの認証。登録側の `ExpectedSubject` 突合と対称 |
+| 4 | Organization スコープ（`credential.B2BSubject` が Client の Organization の `B2BUser` に属するか） | `credential_organization_mismatch` | **同一 rp_id を共有する別 Organization 間の越境**。同一ドメインで本番サイトとサンドボックスサイトの両方を申し込むと `allowed_rp_ids` が同値になりうるため、rpIdHash 検証では防げない |
+| 5 | `isUserHandleOwner` コールバック（Fido2.NetLib 経由） | — | Step 6 の後者（ユーザー未確定経路）の要件 |
+
+判断の根拠:
+
+- **Organization 検証（#4）は #2 / #3 では代替できない。** `CreateAuthenticationOptionsAsync` の
+  b2b_subject 指定経路は、リクエスト由来の `b2b_subject` をそのまま使う（この API は無認証で呼べる）。
+  Organization で絞らなければ他 Organization のユーザーの b2b_subject を指定できてしまい、
+  その場合 #2 / #3 は「発行した一覧」「確定した subject」と整合するので通過する。
+  → **options 側でも Organization で絞る**ことと、verify 側の #4 の両方が必要。
+  この不変条件は `AuthorizeByRegistrationTokenAsync` が登録トークンに対して既に課しているものと同じ。
+- **`rpIdHash` 検証では足りない。** Fido2.NetLib の origin / rpIdHash 検証は
+  `ServerDomain = challenge.RpId` に基づくため、rp_id が違うクレデンシャルは落ちる。
+  逆に**同一 rp_id なら Organization / Client をまたいでも通る**。
+- **#2 を自前で実装しているのは Fido2.NetLib と二重防御にするため。** `OriginalOptions.AllowCredentials`
+  も発行時の値へ復元してライブラリ側の照合にも掛けているが、失敗理由を構造化ログに出し、
+  ユニットテスト（`IFido2` はモック）で守れる形にするために自前チェックを残す。
+- **`webauthn_challenge.allowed_credential_ids` の 3 状態**（NULL / `"[]"` / 要素あり）は意図的。
+  NULL は「発行時に記録していない」（登録チャレンジ、カラム追加前の既存行）、`"[]"` は
+  「allowCredentials を空で発行した」（discoverable credential フロー）。どちらも §7.2 Step 5 の
+  「空でない場合」を満たさないため照合しないが、事後に理由を切り分けられるよう区別して保存する。
+- **Client 境界（同一 Organization 内の Client 間）は #2 が担う。** ただし b2b_subject 未指定経路の
+  allowCredentials は現在 Organization 単位で発行しているため、この経路では実質 Organization
+  境界と同じになる。`CreateAuthenticationOptionsAsync` のコメントにある移行
+  （rk フラグ保存 → `ResidentKey.Required` 化 → 既存ユーザー再登録 → 空 allowCredentials へ切替）を
+  終えた時点で、#2 が自動的に Client 境界の強制になる。
+
 ### E2E テストの実装上の要点
 
 `E2ETests/` で B2B パスキーや申込フローを扱うときに、毎回ソースから再導出する羽目になる事実をまとめる。
@@ -190,6 +227,30 @@ E2E でこれを一体にして「ブラウザから直接 API を叩く」と�
 テナント名として扱うのは **3 セグメント以上**のときだけなので、`e2e-{RUN}.test` の 2 セグメントに
 保てば既定テナントに解決される。Playwright 側は `playwright.config.ts` の
 `--host-resolver-rules` に `MAP *.test 127.0.0.1` を入れて解決させる。
+
+#### 申込が作る Organization と組織コードの導出
+
+申込は入力された URL ごとに独立した Organization を作る（最大 2 件）。組織コードは
+そのままテナント名になり、プラグインが接続する `https://{tenant}.ec-auth.io` に現れる。
+
+| サイト | 組織コード | `IsSandbox` |
+|---|---|---|
+| 本番 | ホスト名から導出（`shop.example.jp` → `shop-example-jp`） | `false` |
+| テスト | 導出結果 + **`-sandbox`**（`stg.example.jp` → `stg-example-jp-sandbox`） | `true` |
+
+導出は lowercase → 先頭 `www.` 除去 → 英数以外の連続を `-` に畳む（`SignupService.DeriveOrganizationCode`）。
+
+**サンドボックスに必ず `-sandbox` が付く理由**は、本番と同じドメイン（あるいは `www.` の
+有無だけが違うドメイン）でもテスト Org を作れるようにするため。付けないと導出後コードが
+本番と衝突し、テスト環境を別ドメインで持たない顧客は検証にも本番 Org を使うしかなくなる。
+副次的に、接続先 URL を見ただけで本番かサンドボックスかが判別できる。
+
+同一ドメインで両方作った場合、2 つの Client は `allowed_rp_ids` も `redirect_uri` も同じ値に
+なりうるが問題は起きない。プラグインは自分の `client_id` から `/platform/v1/client-resolve` で
+テナントを引くため、資格情報を差し替えるだけで本番 / サンドボックスを行き来できる。
+
+組織コードは DNS ラベル 1 つ分なので 63 文字を超えられない（`MaxOrganizationCodeLength`）。
+超える申込は `invalid_site_url` で弾く。
 
 #### `wwwroot/b2b-passkey-test.html` の配信条件
 
@@ -262,10 +323,17 @@ ECCUBE_AUTHENTICATION_KEY=$(op read 'op://EcAuth/eccube4-ecauth-plugin/eccube_au
 申込フローの E2E は確認メールの本文からトークンを取り出す必要がある（トークンは本文にしか
 存在せず、DB には SHA-256 ハッシュしか残らない）。受信口は環境で変わる。
 
-| 環境 | 受信口 | 参照方法 |
+spec は受信口を直接触らず、`tests/helpers/mailbox.ts` の `Mailbox` 越しに読む。
+実装の選択は `E2E_MAILBOX_KIND`（既定 `mailpit`）。
+
+| 環境 | `E2E_MAILBOX_KIND` | 実装 |
 |---|---|---|
-| ローカル / CI | mailpit | `tests/helpers/mailpit.ts`（`MAILPIT_BASE_URL`、既定 `http://localhost:8025`） |
-| staging / production | Cloudflare Worker の E2E メールボックス | 下記（**未実装**。デプロイ後 E2E を組むときに吸収層を作る） |
+| ローカル / CI | `mailpit`（既定） | `tests/helpers/mailpit.ts`（`MAILPIT_BASE_URL`、既定 `http://localhost:8025`） |
+| production | `e2e-mailbox` | `tests/helpers/e2e-mailbox.ts`（`E2E_MAILBOX_BASE_URL` / `E2E_MAILBOX_API_TOKEN`） |
+
+後始末が「ID の配列」ではなく `cleanup(宛先)` なのは、Worker 側が宛先単位でしか削除
+できないため（1 メッセージ 1 キーで保存し ID を返さない）。mailpit 実装は全 spec で
+共有される単一インスタンスを壊さないよう、**自分が読んだ ID だけ**を覚えて消す。
 
 デプロイ済み環境は SendGrid 送信なので mailpit が使えない。代わりに
 `ecauth-infrastructure` が用意した受信口を使う（構成の詳細と設計上の制約は
@@ -283,11 +351,46 @@ ECCUBE_AUTHENTICATION_KEY=$(op read 'op://EcAuth/eccube4-ecauth-plugin/eccube_au
 呼び出し側の注意:
 
 - **Workers KV は結果整合**で、書き込みが読み出しに反映されるまで最大 1 分程度かかりうる。
-  mailpit 相当の短いポーリング間隔だと取りこぼすので、タイムアウトは余裕を持たせる。
+  そのため `e2e-mailbox` 実装の既定タイムアウトは 180 秒（mailpit は 20 秒）。
 - メッセージは 1 時間で自動失効するため、後始末の `DELETE` は必須ではない。
-- 本文のフィールド名が mailpit（`Text` / `HTML` / `Subject` / `ID`）と異なる。
-  spec からは直接触らず、`waitForMessage` / `extractToken` と同じインターフェースの
-  吸収層を挟むこと。
+- 本文のフィールド名が mailpit（`Text` / `HTML` / `Subject` / `ID`）と異なるが、
+  `Mailbox` が `{subject, text, html}` に正規化するので spec 側は意識しなくてよい。
+
+### 本番デプロイ後の申込スモーク
+
+`production.yml` の `verify` ジョブは、シード済み Client を使う
+`b2b_passkey_authentication.spec.ts` に加えて `signup_client_b2b_login.spec.ts` を
+**実本番に対して**回す。CI（`main.yml`）が守るのはコードの整合性だけで、
+「デプロイ済み環境の設定が実際の認証フローと噛み合っているか」は別物のため。
+
+| 項目 | 決め |
+|---|---|
+| 申込先テナント | `stg-accounts`。本物の顧客が入る `accounts` は汚さない |
+| `client_secret` | **必要**。`STG_ACCOUNTS_CLIENT_PUBLIC` が設定されていないので stg-accounts の管理コンソール Client は confidential。無いと「client_secretが正しくありません。」で落ちる |
+| テナント解決 | Host ヘッダの差し替えではなく実ホスト名（`E2E_TENANT_BASE_DOMAIN=ec-auth.io`）。Cloudflare 配下では SNI と Host の不一致を避ける必要があり、オリジンへの直アクセスも許可 IP で塞がれている（`environments/production/main.tf` の `cloudflare_ip_restrictions`） |
+| 疑似サイトのオリジン | `context.route` で stub。`.test` は公開解決されないため実体を持たせない |
+| EC-CUBE 実物版 | 入れない。イメージビルドで 10 分前後かかり、本番 DB に残る Organization も run あたり 2 倍になる。プラグインの実コードは CI 側で担保する |
+
+**staging には入れられない。** `AccountsOrganizationSeeder` は `ACCOUNTS_*` /
+`STG_ACCOUNTS_*` が未設定の環境では Organization を投入せず（Account 機能は本番のみ）、
+`environments/staging/main.tf` の `app_settings` にこれらは存在しない。
+つまり staging には申込 API 自体が無い。
+
+#### 残留データ
+
+このスモークは本番 DB に Organization / Client / B2BUser / パスキーを **1 run あたり 1 組**
+残す。クリーンアップコマンドは [EcAuth#487](https://github.com/EcAuth/EcAuth/issues/487) で未着手。
+それまでは run ごとの識別子（`e2e-{timestamp}-{rand}-test`）を手掛かりに手で消す。
+識別子は Playwright 出力の先頭 `[signup-smoke]` 行と、`verify` ジョブの Step Summary に出る。
+
+#### インフラ変更後の再検証
+
+`ecauth-infrastructure` の apply はアプリを再デプロイしないため、`app_settings` や DNS を
+変えても EcAuth 側では誰も検証しない。この空白を埋めるため、`terraform.yml` の
+`verify-staging` / `verify-production` ジョブが apply 成功後に
+`gh workflow run <staging|production>.yml -f action=verify-only -f dry_run=false` を撃つ。
+`verify-only` は migrate / build / deploy を skip して `verify` だけを回す入口。
+`production.yml` の `dry_run` は既定 `true` なので、明示的に `false` を渡さないと verify も skip される。
 
 ### マイグレーション設計ルール
 

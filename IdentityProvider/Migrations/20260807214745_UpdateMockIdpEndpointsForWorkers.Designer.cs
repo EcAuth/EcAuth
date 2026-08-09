@@ -4,6 +4,7 @@ using IdentityProvider.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IdentityProvider.Migrations
 {
     [DbContext(typeof(EcAuthDbContext))]
-    partial class EcAuthDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260807214745_UpdateMockIdpEndpointsForWorkers")]
+    partial class UpdateMockIdpEndpointsForWorkers
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1002,10 +1005,6 @@ namespace IdentityProvider.Migrations
                         .HasColumnName("id");
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("AllowedCredentialIdsJson")
-                        .HasColumnType("nvarchar(max)")
-                        .HasColumnName("allowed_credential_ids");
 
                     b.Property<string>("Challenge")
                         .IsRequired()

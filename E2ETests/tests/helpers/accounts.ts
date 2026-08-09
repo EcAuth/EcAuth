@@ -1,5 +1,5 @@
 import { expect, APIRequestContext, BrowserContext, Page } from '@playwright/test';
-import { waitForMessage, extractToken } from './mailpit';
+import { extractTokenFromMessage, Mailbox } from './mailbox';
 import { generatePkcePair } from './pkce';
 
 /**
@@ -16,20 +16,33 @@ import { generatePkcePair } from './pkce';
  */
 
 export interface SignupOptions {
-  /** IdP のベース URL（既定 https://localhost:8081） */
+  /**
+   * 申込 API（/api/signup/*）とトークン交換の宛先。
+   * ローカルでは IdP のベース URL（https://localhost:8081）＋ Host ヘッダでテナントを解決するが、
+   * デプロイ済み環境では実ホスト（https://stg-accounts.ec-auth.io）をそのまま渡す。
+   */
   baseUrl: string;
   /** accounts テナントに解決させる Host ヘッダ */
   accountsHost: string;
   /** accounts テナントのページ配信元（origin と rp_id を一致させる） */
   accountsPageBaseUrl: string;
-  /** 管理コンソール Client（public client） */
+  /** 管理コンソール Client */
   accountsClientId: string;
   accountsRedirectUri: string;
+  /**
+   * 管理コンソール Client が confidential の場合に渡す。
+   * 本番の accounts は public client（PKCE のみ）だが、stg-accounts は
+   * ACCOUNTS_CLIENT_PUBLIC 相当の設定を持たず confidential のままなので、
+   * こちらを指定しないとトークン交換が「client_secretが正しくありません。」で落ちる。
+   */
+  accountsClientSecret?: string;
 
   email: string;
   organizationName: string;
   /** 申込するサイトの URL。ここから Organization code / rp_id / redirect_uri が導出される */
   productionSiteUrl: string;
+  /** テストサイトの URL（任意）。渡すとサンドボックス Org が本番の子として一緒に作られる。 */
+  testSiteUrl?: string;
   /** "2" | "4" | "other" */
   ecCubeVersion: string;
 }
@@ -37,8 +50,6 @@ export interface SignupOptions {
 export interface SignupResult {
   /** SubjectType=Account のアクセストークン。/v1/account/* の認可に使う */
   accessToken: string;
-  /** mailpit 上の確認メール ID（後始末用） */
-  messageId: string;
 }
 
 /** 申込で払い出された Client。値はすべて API から取得したもので、テスト側では組み立てない。 */
@@ -49,6 +60,8 @@ export interface SignupClient {
   organizationCode: string;
   /** 申込時に登録された redirect_uri。プラグインが送る値と完全一致する必要がある */
   redirectUris: string[];
+  /** 申込時に登録された allowed_rp_ids。ブラウザの origin と一致していなければ登録・認証が通らない */
+  allowedRpIds: string[];
 }
 
 /**
@@ -61,11 +74,23 @@ export interface SignupClient {
  */
 export async function signupAndGetAccountToken(
   api: APIRequestContext,
-  mailpit: APIRequestContext,
+  mailbox: Mailbox,
   context: BrowserContext,
   options: SignupOptions
 ): Promise<SignupResult> {
   const { codeVerifier, codeChallenge } = generatePkcePair();
+
+  // 認可コードは URL から読み取るだけで、コールバック先の実体は要らない。
+  // デプロイ済み環境では redirect_uri が実在のホストを指すため、stub しないと
+  // ブラウザがそこへ本当に遷移する。相手が SPA だと同じ code を別の code_verifier で
+  // 交換しに行き、こちらのトークン交換が使えなくなる。
+  await context.route(`${options.accountsRedirectUri}**`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<html><body>auth callback stub</body></html>',
+    })
+  );
 
   // --- 申込 ---
   const requestResponse = await api.post(`${options.baseUrl}/api/signup/request`, {
@@ -74,6 +99,7 @@ export async function signupAndGetAccountToken(
       organization_name: options.organizationName,
       contact_name: 'E2E Tester',
       production_site_url: options.productionSiteUrl,
+      test_site_url: options.testSiteUrl,
       ec_cube_version: options.ecCubeVersion,
     },
   });
@@ -82,8 +108,8 @@ export async function signupAndGetAccountToken(
   }
 
   // --- 確認メール → confirm ---
-  const message = await waitForMessage(mailpit, options.email, { subjectIncludes: 'お申し込み確認' });
-  const confirmToken = extractToken(message.Text || message.HTML);
+  const message = await mailbox.waitForMessage(options.email, { subjectIncludes: 'お申し込み確認' });
+  const confirmToken = extractTokenFromMessage(message);
 
   const confirmResponse = await api.post(`${options.baseUrl}/api/signup/confirm`, {
     data: { token: confirmToken },
@@ -132,10 +158,11 @@ export async function signupAndGetAccountToken(
     const authorizationCode = new URL(page.url()).searchParams.get('code');
     expect(authorizationCode).toBeTruthy();
 
-    // --- トークン交換（public client なので PKCE 必須） ---
+    // --- トークン交換（PKCE 必須。confidential なら client_secret も添える） ---
     const tokenResponse = await api.post(`${options.baseUrl}/v1/token`, {
       form: {
         client_id: options.accountsClientId,
+        ...(options.accountsClientSecret ? { client_secret: options.accountsClientSecret } : {}),
         code: authorizationCode!,
         redirect_uri: options.accountsRedirectUri,
         grant_type: 'authorization_code',
@@ -149,7 +176,7 @@ export async function signupAndGetAccountToken(
     const accessToken = (await tokenResponse.json()).access_token as string;
     expect(accessToken).toBeTruthy();
 
-    return { accessToken, messageId: message.ID };
+    return { accessToken };
   } finally {
     await page.close();
   }
@@ -180,6 +207,7 @@ export async function fetchSignupClient(
     client_id: string;
     organization_code: string;
     redirect_uris: string[];
+    allowed_rp_ids: string[];
   }>;
 
   const client = clients.find((c) => c.organization_code === organizationCode);
@@ -205,6 +233,7 @@ export async function fetchSignupClient(
     clientSecret: (await revealResponse.json()).client_secret as string,
     organizationCode: client.organization_code,
     redirectUris: client.redirect_uris,
+    allowedRpIds: client.allowed_rp_ids ?? [],
   };
 }
 

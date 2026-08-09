@@ -11,6 +11,12 @@ namespace IdentityProvider.Models
     [Table("account")]
     public class Account : ISubjectProvider
     {
+        /// <summary>
+        /// 1 アカウントが持てる本番 Organization 数の既定上限。
+        /// サンドボックス Org は各本番に 1 つまでという別制約で縛るため、この数には含めない。
+        /// </summary>
+        public const int DefaultMaxSites = 10;
+
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
         [Column("id")]
@@ -36,6 +42,14 @@ namespace IdentityProvider.Models
 
         [Column("email_verified_at")]
         public DateTimeOffset? EmailVerifiedAt { get; set; }
+
+        /// <summary>
+        /// このアカウントが持てる本番 Organization 数の上限。
+        /// プラン変更や個別対応は DB のこのカラムを直接更新して運用する（変更 API は設けない）。
+        /// 論理削除済みの Organization は上限のカウント対象外。
+        /// </summary>
+        [Column("max_sites")]
+        public int MaxSites { get; set; } = DefaultMaxSites;
 
         [Column("created_at")]
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

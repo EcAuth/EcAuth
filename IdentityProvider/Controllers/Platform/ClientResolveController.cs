@@ -37,19 +37,26 @@ namespace IdentityProvider.Controllers.Platform
                 });
             }
 
+            // 論理削除済み Organization の Client は解決しない。プラグインは接続先 IdP の
+            // base_url をこのエンドポイントから得るため、ここで 404 にすることが
+            // 「サイトを削除したらプラグインからの認証が止まる」の実効的な担保になる。
+            // Client 自体にはクエリフィルターが無く、ここも IgnoreQueryFilters で引いているため、
+            // Organization 側の DeletedAt 条件は明示的に書く必要がある。
             var result = await _context.Clients
                 .IgnoreQueryFilters()
                 .Where(c => c.ClientId == client_id)
                 .Select(c => new
                 {
-                    TenantName = c.Organization != null ? c.Organization.TenantName : null,
+                    TenantName = c.Organization != null && c.Organization.DeletedAt == null
+                        ? c.Organization.TenantName
+                        : null,
                     OrganizationName = c.Organization != null ? c.Organization.Name : null,
                 })
                 .FirstOrDefaultAsync();
 
             if (result == null || result.TenantName == null)
             {
-                _logger.LogWarning("Client not found or has no organization: client_id={ClientId}", client_id);
+                _logger.LogWarning("Client not found, has no organization, or organization is deleted: client_id={ClientId}", client_id);
                 return NotFound(new
                 {
                     error = "not_found",

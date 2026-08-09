@@ -127,9 +127,9 @@ jobs:
           FEDERATE_OAUTH2_APP_NAME=federate-oauth2
           FEDERATE_OAUTH2_CLIENT_ID=federateclientid
           FEDERATE_OAUTH2_CLIENT_SECRET=federate-client-secret
-          FEDERATE_OAUTH2_AUTHORIZATION_ENDPOINT=https://localhost:9091/authorization?org=dev
-          FEDERATE_OAUTH2_TOKEN_ENDPOINT=https://localhost:9091/token?org=dev
-          FEDERATE_OAUTH2_USERINFO_ENDPOINT=https://localhost:9091/userinfo?org=dev
+          FEDERATE_OAUTH2_AUTHORIZATION_ENDPOINT=http://127.0.0.1:8787/authorization?org=dev
+          FEDERATE_OAUTH2_TOKEN_ENDPOINT=http://127.0.0.1:8787/token?org=dev
+          FEDERATE_OAUTH2_USERINFO_ENDPOINT=http://127.0.0.1:8787/userinfo?org=dev
           DEV_B2B_USER_SUBJECT=3f7c0ab4-b004-4102-b6ed-a730369dd237
           DEV_B2B_USER_EXTERNAL_ID=test-admin
           DEV_B2B_REDIRECT_URI=https://localhost:8081/admin/ecauth/callback
@@ -151,7 +151,7 @@ jobs:
       # docker-entrypoint.sh は /plugin のワーキングツリーから入れる。
       - name: Load EC-CUBE verification key from 1Password
         if: ${{ inputs.install_source == 'package-api' }}
-        uses: 1password/load-secrets-action@eb2efd0703da22a93c467f2d1ffbb6826c11e19c # v4.1.1
+        uses: 1password/load-secrets-action@e544b780808654ba8ceba5fb2fe2897103d92ff4 # v5.0.0
         with:
           export-env: true
         env:
@@ -164,7 +164,7 @@ jobs:
           package_json_file: E2ETests/package.json
 
       - name: Install Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
 
@@ -186,6 +186,22 @@ jobs:
           ECAUTH_PLUGIN_VERSION: ${{ inputs.plugin_version }}
           GITHUB_USERNAME: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }}
+
+      # 入ったプラグインの出どころとバージョンを **成功時にも** 残す。
+      # install_source=package-api で回す目的は「オーナーズストアが実際に配布する版が
+      # 動くか」を確かめることなので、その版が何だったかが記録に残らないと目的を果たせない。
+      # 失敗時のログ回収（Collect logs on failure）だけでは、成功した run で捨ててしまう。
+      - name: Record installed plugin version
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### インストールされたプラグイン"
+            echo '```'
+            ./E2ETests/scripts/eccube-e2e.sh logs --no-log-prefix ec-cube4 2>/dev/null \
+              | grep -iE 'Installing EcAuthLogin43|already installed|ecauthlogin43 \(' \
+              || echo '(該当ログなし)'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Run EC-CUBE plugin E2E
         run: ./E2ETests/scripts/eccube-e2e.sh test tests/specs/eccube_plugin_signup_login.spec.ts --reporter=list

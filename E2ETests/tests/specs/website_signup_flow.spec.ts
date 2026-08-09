@@ -1,5 +1,5 @@
-import { test, expect, BrowserContext, Page, APIRequestContext, request } from '@playwright/test';
-import { waitForMessage, extractToken, deleteMessages } from '../helpers/mailpit';
+import { test, expect, BrowserContext, Page } from '@playwright/test';
+import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
 
 /**
  * ecauth-website（ec-auth.io）のフロントを実バックエンドに通すフル結合 E2E。
@@ -14,12 +14,16 @@ import { waitForMessage, extractToken, deleteMessages } from '../helpers/mailpit
  *     → Frontend:BaseUrl 経由でマイページへ復帰
  *     → /mypage/ から PKCE で認可開始 → accounts で実パスキー認証 → 認可コード
  *     → /auth/callback が /v1/token でトークン交換（public client・PKCE）
- *     → /v1/account/clients で Client 一覧、secret の reveal / 再生成
+ *     → /v1/account/organizations でサイト一覧、secret の reveal / 再生成
+ *     → マイページの編集 UI から redirect_uri / allowed_rp_ids を実 API で全置換
  *     → リカバリ（マジックリンク）でも同じマイページに着地する
  *
  * 前提（CI では playwright.yml が用意する）:
  *   - IdentityProvider が https://localhost:8081 で稼働し、accounts.ec-auth.io に解決すること
  *   - ecauth-website を hugo server --tlsAuto で E2E_WEBSITE_BASE_URL に配信していること
+ *     （配信する ref に Client 設定の編集 UI が含まれること。無い場合は skip せず**失敗**させる。
+ *       DOM の有無で skip すると、削除・セレクタ変更・描画失敗という本来検出すべき回帰まで
+ *       「機能が無いだけ」と誤認し、CI が緑のまま通ってしまうため）
  *   - サーバ側が以下を website のオリジンに向けて配線していること
  *       Signup__AllowedOrigins__0 / Frontend__BaseUrl /
  *       Signup__ConfirmBaseUrl__accounts / MagicLink__BaseUrl__accounts / ACCOUNTS_REDIRECT_URI
@@ -48,17 +52,16 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
   const productionSiteHost = `web-${runSuffix}.example.com`;
   const expectedOrgCode = productionSiteHost.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
-  let mailpitCtx: APIRequestContext;
+  let mailbox: Mailbox;
   let context: BrowserContext;
   let page: Page;
 
   let confirmToken: string;
-  const messageIds: string[] = [];
 
   test.beforeAll(async ({ browser }) => {
     // 本 spec は全経路をブラウザ（フロント）から通すため、API 直叩き用のコンテキストは持たない。
-    // mailpit だけは REST でメール本文を読む必要がある。
-    mailpitCtx = await request.newContext();
+    // 確認メールの本文だけは受信口から読む必要がある。
+    mailbox = await createMailbox();
 
     context = await browser.newContext({ ignoreHTTPSErrors: true });
     await context.credentials.install();
@@ -93,9 +96,9 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
   });
 
   test.afterAll(async () => {
-    await deleteMessages(mailpitCtx, messageIds);
-    await mailpitCtx?.dispose();
-    await context?.close();
+    // 後始末は互いに独立させる（cleanup の失敗で dispose / close を落とさない）。
+    await Promise.allSettled([mailbox?.cleanup(email), context?.close()]);
+    await mailbox?.dispose();
   });
 
   test('申込フォーム（/signup/）から実 API に申し込め、確認メールの URL がフロントを指す', async () => {
@@ -114,11 +117,10 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     await expect(status).toHaveClass(/ok/, { timeout: 15000 });
     await expect(status).toContainText('確認メールを送信しました');
 
-    const message = await waitForMessage(mailpitCtx, email, { subjectIncludes: 'お申し込み確認' });
-    messageIds.push(message.ID);
+    const message = await mailbox.waitForMessage(email, { subjectIncludes: 'お申し込み確認' });
 
     // Signup:ConfirmBaseUrl がフロントに向いていること（バックエンド→フロントの URL 契約）。
-    const body = message.Text || message.HTML;
+    const body = message.text || message.html;
     expect(body).toContain(`${websiteBase}/signup/confirm?token=`);
 
     confirmToken = extractToken(body);
@@ -198,10 +200,13 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     await expect(page.locator('#login-view')).toBeHidden();
   });
 
-  test('マイページが実 API から Client 一覧を取得して表示する', async () => {
+  test('マイページが実 API からサイト一覧を取得して表示する', async () => {
     test.setTimeout(30000);
 
-    // 申込で作られた顧客 Org の Client が出ること（組織コードはサイト host から導出される）。
+    // 申込で作られた顧客 Org が出ること（組織コードはサイト host から導出される）。
+    // マイページは 1 カード = 1 サイト（Organization）で描画し、その配下に Client を出す。
+    // カードのクラス名は Client 単位だった頃から .client-item のまま
+    // （単位が変わっていないため据え置き。ecauth-website#29）。
     const item = page.locator('.client-item').filter({ hasText: expectedOrgCode });
     await expect(item).toHaveCount(1, { timeout: 15000 });
 
@@ -236,6 +241,114 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     expect(regenerated).not.toBe(revealed);
   });
 
+  /**
+   * マイページの Client 設定セクション（ecauth-website の mypage.js が data-section で出す）。
+   */
+  function settingsSection(key: 'redirect_uris' | 'allowed_rp_ids') {
+    return page
+      .locator('.client-item')
+      .filter({ hasText: expectedOrgCode })
+      .locator(`.ci-settings[data-section="${key}"]`);
+  }
+
+  /** 畳まれていれば開いて返す（reload すると details は閉じた状態に戻る）。 */
+  async function openSettings(key: 'redirect_uris' | 'allowed_rp_ids') {
+    const section = settingsSection(key);
+    await expect(section).toHaveCount(1, { timeout: 15000 });
+    if (!(await section.locator('.row-list').isVisible())) {
+      await section.locator('summary').click();
+    }
+    await expect(section.locator('.row-list')).toBeVisible();
+    return section;
+  }
+
+  /** 設定セクションの入力欄の値を表示順に取り出す。 */
+  function inputValuesOf(section: ReturnType<typeof settingsSection>): Promise<string[]> {
+    return section.locator('.row-input').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value));
+  }
+
+  /*
+   * 以下の初期値アサーションは、期待値を productionSiteHost から**意図的に**組み立てている。
+   *
+   * CLAUDE.md の「redirect_uri / rp_id をテスト側で組み立てない」が禁じているのは
+   * authenticate/verify に**送る値**（セレモニーの入力）であって、期待値ではない。
+   * 期待値まで登録値に置き換えると「UI が API の返した値を表示している」ことしか見なくなり、
+   * どんな誤った初期値が登録されていても通る恒真式になる — それは EcAuth#481 そのもの。
+   *
+   * 参照実装 signup_client_b2b_login.spec.ts も同じ使い分けをしている:
+   *   :180 / :187  期待値は siteHost から組み立てて登録値と突き合わせる（回帰検出）
+   *   :207 / :225  セレモニーに渡すのは API から取った registeredRpId / registeredRedirectUri
+   * 画面に出ている値は mypage.js が GET /v1/account/organizations を描画したものなので、
+   * 「登録値を使う」側の要請はブラウザ経由で既に満たされている。
+   */
+
+  test('マイページの編集 UI から redirect_uri を追加でき、実 API 側に残る', async () => {
+    test.setTimeout(45000);
+
+    const section = await openSettings('redirect_uris');
+
+    // 申込が作る初期値は EC-CUBE 4 系のコールバック URL。プラグインが authenticate/verify に
+    // 送る値と一致していることを、API 直叩きではなく画面越しに確認する。
+    expect(await inputValuesOf(section)).toEqual([`https://${productionSiteHost}/ecauth/callback`]);
+
+    const added = `https://${productionSiteHost}/shop/ecauth/callback`;
+    await section.locator('.row-add').click();
+    await section.locator('.row-input').nth(1).fill(added);
+    await section.getByRole('button', { name: '保存' }).click();
+
+    await expect(section.locator('[data-status="section"]')).toHaveClass(/ok/, { timeout: 15000 });
+    await expect(section.locator('.ci-count')).toHaveText('2 件');
+
+    // 画面の状態ではなく、取り直した一覧で永続化を確認する。
+    await page.reload();
+    const reloaded = await openSettings('redirect_uris');
+    // redirect_uri の取得に ORDER BY は無いため、順序ではなく集合で比較する。
+    expect((await inputValuesOf(reloaded)).slice().sort()).toEqual(
+      [`https://${productionSiteHost}/ecauth/callback`, added].sort()
+    );
+  });
+
+  test('RP ID の編集は確認ダイアログを経て保存され、サーバ側で正規化される', async () => {
+    test.setTimeout(45000);
+
+    const section = await openSettings('allowed_rp_ids');
+    expect(await inputValuesOf(section)).toEqual([productionSiteHost]);
+
+    // 大文字で入れてもサーバが小文字（Punycode）に正規化して返す。
+    page.once('dialog', (dialog) => dialog.accept());
+    await section.locator('.row-input').nth(0).fill(productionSiteHost.toUpperCase());
+    await section.getByRole('button', { name: '保存' }).click();
+
+    await expect(section.locator('[data-status="section"]')).toHaveClass(/ok/, { timeout: 15000 });
+    expect(await inputValuesOf(section)).toEqual([productionSiteHost]);
+
+    await page.reload();
+    const reloaded = await openSettings('allowed_rp_ids');
+    expect(await inputValuesOf(reloaded)).toEqual([productionSiteHost]);
+  });
+
+  test('実 API の 422 が入力値を含まない理由付きでフロントに表示される', async () => {
+    test.setTimeout(45000);
+
+    const section = await openSettings('redirect_uris');
+
+    // https 必須。サーバは入力値をエラーに載せず「N 件目」という位置だけを返す
+    // （redirect_uri は user:pass@ を含みうるため）。フロントの行番号と対応することまで見る。
+    await section.locator('.row-input').nth(0).fill(`http://${productionSiteHost}/ecauth/callback`);
+    await section.getByRole('button', { name: '保存' }).click();
+
+    const status = section.locator('[data-status="section"]');
+    await expect(status).toHaveClass(/err/, { timeout: 15000 });
+    await expect(status).toContainText('1 件目');
+    await expect(status).toContainText('https://');
+    // 入力値そのものは反映されない（ログ・エラーレポートに資格情報を残さないため）。
+    await expect(status).not.toContainText(productionSiteHost);
+
+    // 失敗しても入力は保持され、直して再送できる状態のままであること。
+    expect(await inputValuesOf(section)).toContain(`http://${productionSiteHost}/ecauth/callback`);
+    await section.getByRole('button', { name: '取り消し' }).click();
+  });
+
   test('リカバリ: /signin/ からマジックリンクを要求し、マイページに着地する', async () => {
     test.setTimeout(45000);
 
@@ -249,11 +362,10 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     await page.click('#submit-btn');
     await expect(page.locator('#status')).toHaveClass(/ok/, { timeout: 15000 });
 
-    const mail = await waitForMessage(mailpitCtx, email, { subjectIncludes: 'ログインリンク' });
-    messageIds.push(mail.ID);
+    const mail = await mailbox.waitForMessage(email, { subjectIncludes: 'ログインリンク' });
 
     // MagicLink:BaseUrl がフロントに向いていること。
-    const body = mail.Text || mail.HTML;
+    const body = mail.text || mail.html;
     expect(body).toContain(`${websiteBase}/signin/magic-link?token=`);
     const magicToken = extractToken(body);
 

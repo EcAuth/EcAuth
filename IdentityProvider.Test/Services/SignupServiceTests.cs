@@ -104,8 +104,8 @@ namespace IdentityProvider.Test.Services
                 disposableCheckerMock.Object,
                 CreateConfiguration(withConfirmBaseUrl),
                 _logger,
-                new PlaintextSecretProtector(),
-                new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()));
+                new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()),
+                new OrganizationProvisioningService(context, new PlaintextSecretProtector()));
         }
 
         /// <summary>
@@ -124,6 +124,13 @@ namespace IdentityProvider.Test.Services
             Assert.NotNull(capturedUrl);
             return ExtractTokenFromConfirmUrl(capturedUrl!);
         }
+
+        // SignupService の DNS ラベル上限（MaxOrganizationCodeLength）。
+        private const int MaxOrganizationCodeLength = 63;
+
+        // 導出後がちょうど MaxOrganizationCodeLength になるホスト。
+        // "a" * 60 + ".jp" -> "a" * 60 + "-jp" = 63 文字。
+        private static readonly string MaxLengthHost = new string('a', 60) + ".jp";
 
         private static SignupInput ValidInput() => new()
         {
@@ -224,8 +231,8 @@ namespace IdentityProvider.Test.Services
 
             var service = new SignupService(
                 context, tenantService, emailMock.Object, disposableMock.Object, config, _logger,
-                new PlaintextSecretProtector(),
-                new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()));
+                new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()),
+                new OrganizationProvisioningService(context, new PlaintextSecretProtector()));
 
             await service.RequestAsync(ValidInput());
 
@@ -334,26 +341,160 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(422, ex.StatusCode);
         }
 
+        /// <summary>
+        /// ドメインの占有判定は接尾辞を除いた導出コードで行う。site.Code をそのまま比較すると、
+        /// サンドボックス側だけコードが変わったせいで「登録済みドメインを拒否する」保証が
+        /// 失われ、他人のドメインを自分のテストサイトとして登録できてしまう。
+        /// </summary>
+        [Theory]
+        // 旧規則（接尾辞なし）で登録済みのサンドボックス Org。移行しないので必ず残る。
+        [InlineData("stg-example-jp", true)]
+        // 本番として登録済みのドメイン。別アカウントがテストサイトとして横取りできてはいけない。
+        [InlineData("stg-example-jp", false)]
+        // 新規則で登録済みのサンドボックス Org。
+        [InlineData("stg-example-jp-sandbox", true)]
+        public async Task RequestAsync_TestSiteDomainAlreadyTaken_ThrowsOrganizationAlreadyExists(
+            string existingCode, bool existingIsSandbox)
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            context.Organizations.Add(new Organization
+            {
+                Id = 2,
+                Code = existingCode,
+                Name = "Existing",
+                TenantName = existingCode,
+                IsSandbox = existingIsSandbox
+            });
+            await context.SaveChangesAsync();
+
+            var service = CreateService(context, tenantService, out _, out _);
+
+            // 別アカウントが同じドメインをテストサイトとして申し込む。
+            // 本番サイトは必須なので、衝突しない別ドメインを本番に置いてテスト側だけを衝突させる。
+            var input = ValidInput() with
+            {
+                Email = "another@example.com",
+                ProductionSiteUrl = "https://another-shop.example.jp",
+                TestSiteUrl = "https://stg.example.jp"
+            };
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
+            Assert.Equal("organization_already_exists", ex.Error);
+            Assert.Equal("test_site_url", ex.Field);
+            Assert.False(await context.SignupRequests.IgnoreQueryFilters().AnyAsync());
+        }
+
         [Fact]
-        public async Task RequestAsync_ProductionAndTestDeriveSameCode_ThrowsDuplicateSite()
+        public async Task RequestAsync_ProductionDomainAlreadyTakenBySandbox_ThrowsOrganizationAlreadyExists()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            // 逆方向: 旧規則のサンドボックス Org が居るドメインを本番として申し込む。
+            context.Organizations.Add(new Organization
+            {
+                Id = 2,
+                Code = "stg-example-jp",
+                Name = "Existing sandbox",
+                TenantName = "stg-example-jp",
+                IsSandbox = true
+            });
+            await context.SaveChangesAsync();
+
+            var service = CreateService(context, tenantService, out _, out _);
+            var input = ValidInput() with
+            {
+                Email = "another@example.com",
+                ProductionSiteUrl = "https://stg.example.jp"
+            };
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
+            Assert.Equal("organization_already_exists", ex.Error);
+            Assert.Equal("production_site_url", ex.Field);
+        }
+
+        [Theory]
+        // www. の有無だけが違うドメイン（導出後は同じ shop-example-jp になる）
+        [InlineData("https://shop.example.jp", "https://www.shop.example.jp")]
+        // 完全に同じ URL。テスト環境を別ドメインで持てない顧客がサンドボックスを得る経路。
+        [InlineData("https://shop.example.jp", "https://shop.example.jp")]
+        // 同一ホストのサブディレクトリ運用。redirect_uri も別になるので併存できる。
+        [InlineData("https://shop.example.jp", "https://shop.example.jp/stg/")]
+        public async Task ConfirmAsync_TestSiteOnSameDomain_CreatesSandboxOrganization(
+            string productionUrl, string testUrl)
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            var input = ValidInput() with { ProductionSiteUrl = productionUrl, TestSiteUrl = testUrl };
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
+            await service.ConfirmAsync(token);
+
+            // 以前はテスト Org を黙って作らずに済ませており、テスト環境を別ドメインで持たない
+            // 顧客は検証にも本番 Org を使うしかなかった（EcAuth#482 の問題 2）。
+            // サンドボックス Org には -sandbox が付くので、同じドメインでも両方作れる。
+            var customerOrgs = await context.Organizations
+                .IgnoreQueryFilters()
+                .Where(o => o.Code != Tenant)
+                .ToListAsync();
+            Assert.Equal(2, customerOrgs.Count);
+            Assert.Contains(customerOrgs, o => o.Code == "shop-example-jp" && !o.IsSandbox);
+            Assert.Contains(customerOrgs, o => o.Code == "shop-example-jp-sandbox" && o.IsSandbox);
+        }
+
+        /// <summary>
+        /// 組織コードはテナント名になり <c>{tenant}.ec-auth.io</c> の 1 ラベルを構成するため、
+        /// DNS のラベル上限（63）を超えると Org は作れてもそのサブドメインに到達できない。
+        /// 導出後ちょうど 63 文字になるホストを使い、<c>-sandbox</c> の 8 文字**だけ**で
+        /// 上限を超えることを固定する（本番として申し込めば通ることは下のテストで確認する）。
+        /// テスト URL に別のサブドメインを足すと、その分で先に上限を超えてしまい、
+        /// 接尾辞を消してもテストが通る＝接尾辞の寄与を検証できなくなる。
+        /// </summary>
+        [Fact]
+        public async Task RequestAsync_SandboxSuffixExceedsDnsLabelLimit_ThrowsInvalidSiteUrl()
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
             var service = CreateService(context, tenantService, out _, out _);
 
-            // www.shop.example.jp と shop.example.jp はいずれも shop-example-jp に導出される。
+            // 本番は上限に収まる短いドメイン。上限超過はテスト側の接尾辞だけが原因になる。
             var input = ValidInput() with
             {
                 ProductionSiteUrl = "https://shop.example.jp",
-                TestSiteUrl = "https://www.shop.example.jp"
+                TestSiteUrl = $"https://{MaxLengthHost}"
             };
 
-            // 同一コードに導出されるため、テスト Org は追加されず単一 Org として扱われる。
-            // 重複検知は EnsureOrganizationCodesAvailableAsync の seenCodes でも担保するが、
-            // ここでは導出後コード比較によりテスト Org が作られないこと（=本番のみ）を確認する。
-            await service.RequestAsync(input);
-            var stored = await context.SignupRequests.IgnoreQueryFilters().FirstAsync();
-            Assert.NotNull(stored);
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
+            Assert.Equal("invalid_site_url", ex.Error);
+            Assert.Equal(422, ex.StatusCode);
+            Assert.Equal("test_site_url", ex.Field);
+            Assert.False(await context.SignupRequests.IgnoreQueryFilters().AnyAsync());
+        }
+
+        [Fact]
+        public async Task RequestAsync_HostAtDnsLabelLimit_IsAcceptedAsProduction()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out var emailMock, out _);
+
+            // 上のテストと同じホスト。本番には接尾辞が付かないので 63 文字ちょうどで通る。
+            // これがあることで、上のテストの失敗が -sandbox に由来すると言い切れる。
+            var input = ValidInput() with
+            {
+                ProductionSiteUrl = $"https://{MaxLengthHost}",
+                TestSiteUrl = null
+            };
+
+            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
+            await service.ConfirmAsync(token);
+
+            var customerOrg = await context.Organizations
+                .IgnoreQueryFilters()
+                .SingleAsync(o => o.Code != Tenant);
+            Assert.Equal(MaxOrganizationCodeLength, customerOrg.Code.Length);
+            Assert.False(customerOrg.IsSandbox);
         }
 
         // ---- 組織コード導出 ----
@@ -472,11 +613,38 @@ namespace IdentityProvider.Test.Services
                 .ToListAsync();
             Assert.Equal(2, customerOrgs.Count);
             Assert.Contains(customerOrgs, o => o.Code == "shop-example-jp" && !o.IsSandbox);
-            Assert.Contains(customerOrgs, o => o.Code == "test-example-jp" && o.IsSandbox);
+            // ホストが分かれていてもサンドボックス側には -sandbox が付く。テナント名だけで
+            // 本番かサンドボックスかが判別でき、プラグインの接続先 URL にもそれが現れる。
+            Assert.Contains(customerOrgs, o => o.Code == "test-example-jp-sandbox" && o.IsSandbox);
+        }
+
+        /// <summary>
+        /// テストサイトだけの申込は受け付けない。許すと紐づく本番の無いサンドボックス Org
+        /// （parent_organization_id が null）ができ、「1 本番あたりテストは 1 件」の判定
+        /// （AccountController が ParentOrganizationId で数える）をすり抜けて、後から本番を
+        /// 追加したときにサンドボックスが 2 件並ぶ状態を作れてしまう。
+        /// </summary>
+        [Fact]
+        public async Task RequestAsync_TestSiteOnly_ThrowsInvalidSiteUrl()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out _, out _);
+
+            var input = ValidInput() with
+            {
+                ProductionSiteUrl = null,
+                TestSiteUrl = "https://test.example.jp"
+            };
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
+            Assert.Equal("invalid_site_url", ex.Error);
+            Assert.Equal("production_site_url", ex.Field);
+            Assert.False(await context.SignupRequests.IgnoreQueryFilters().AnyAsync());
         }
 
         [Fact]
-        public async Task ConfirmAsync_ProductionAndTestSameHost_CreatesOnlyProduction()
+        public async Task ConfirmAsync_ProductionAndTestSite_LinksSandboxToProduction()
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
@@ -485,45 +653,22 @@ namespace IdentityProvider.Test.Services
             var input = ValidInput() with
             {
                 ProductionSiteUrl = "https://shop.example.jp",
-                TestSiteUrl = "https://shop.example.jp"
+                TestSiteUrl = "https://test.example.jp"
             };
             var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
-
             await service.ConfirmAsync(token);
 
-            var customerOrgs = await context.Organizations
+            var production = await context.Organizations
                 .IgnoreQueryFilters()
-                .Where(o => o.Code != Tenant)
-                .ToListAsync();
-            Assert.Single(customerOrgs);
-            Assert.False(customerOrgs[0].IsSandbox);
-        }
-
-        [Fact]
-        public async Task ConfirmAsync_ProductionAndTestDeriveSameCode_CreatesOnlyProduction()
-        {
-            var tenantService = CreateTenantService();
-            using var context = CreateContextWithAccountsOrg(tenantService);
-            var service = CreateService(context, tenantService, out var emailMock, out _);
-
-            // www.shop.example.jp(test) と shop.example.jp(prod) はいずれも shop-example-jp に導出される。
-            // 生ホスト名は異なるが導出後コードが同一のためテスト Org は作らない。
-            var input = ValidInput() with
-            {
-                ProductionSiteUrl = "https://shop.example.jp",
-                TestSiteUrl = "https://www.shop.example.jp"
-            };
-            var token = await RequestAndCaptureTokenAsync(service, emailMock, input);
-
-            await service.ConfirmAsync(token);
-
-            var customerOrgs = await context.Organizations
+                .SingleAsync(o => o.Code == "shop-example-jp");
+            var sandbox = await context.Organizations
                 .IgnoreQueryFilters()
-                .Where(o => o.Code != Tenant)
-                .ToListAsync();
-            Assert.Single(customerOrgs);
-            Assert.Equal("shop-example-jp", customerOrgs[0].Code);
-            Assert.False(customerOrgs[0].IsSandbox);
+                .SingleAsync(o => o.Code == "test-example-jp-sandbox");
+
+            Assert.True(sandbox.IsSandbox);
+            Assert.Null(production.ParentOrganizationId);
+            // 申込時点で本番とテストが紐づくため、孤立サンドボックスは生まれない。
+            Assert.Equal(production.Id, sandbox.ParentOrganizationId);
         }
 
         // ---- ConfirmAsync: Client の初期値（redirect_uri / allowed_rp_ids）----
@@ -722,7 +867,7 @@ namespace IdentityProvider.Test.Services
                 .ToListAsync();
 
             var production = clients.Single(c => c.Organization!.Code == "shop-example-jp");
-            var sandbox = clients.Single(c => c.Organization!.Code == "test-example-jp");
+            var sandbox = clients.Single(c => c.Organization!.Code == "test-example-jp-sandbox");
             Assert.Equal("https://shop.example.jp/ecauth/callback.php", production.RedirectUris!.Single().Uri);
             Assert.Equal("https://test.example.jp/store/ecauth/callback.php", sandbox.RedirectUris!.Single().Uri);
         }
@@ -762,6 +907,47 @@ namespace IdentityProvider.Test.Services
 
             var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.ConfirmAsync("expired-token"));
             Assert.Equal("token_expired", ex.Error);
+        }
+
+        /// <summary>
+        /// 本番サイト URL 必須化（EcAuth#482）より前に保存された申込は、本番 URL を持たないまま
+        /// 確認待ちになっている可能性がある。再バリデーションに任せると「本番サイト URL を
+        /// 入力してください」が返るが、確認画面には入力欄が無いため利用者は何もできない。
+        /// 再申込しかないことが伝わる専用エラーに振り替えていることを固定する。
+        /// </summary>
+        [Fact]
+        public async Task ConfirmAsync_PendingRequestWithoutProductionUrl_ThrowsNeedsResubmission()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var service = CreateService(context, tenantService, out _, out _);
+
+            // RequestAsync は本番必須になったのでこの状態は作れない。デプロイ前に保存された
+            // 申込を再現するため、SignupRequest を直接投入する。
+            context.SignupRequests.Add(new SignupRequest
+            {
+                ConfirmTokenHash = HashToken("legacy-token"),
+                Email = "owner@example.com",
+                OrganizationName = "Example Shop",
+                ProductionSiteUrl = null,
+                TestSiteUrl = "https://test.example.jp",
+                EcCubeVersion = "4",
+                TenantName = Tenant,
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                CreatedAt = DateTimeOffset.UtcNow.AddHours(-1)
+            });
+            await context.SaveChangesAsync();
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(
+                () => service.ConfirmAsync("legacy-token"));
+
+            Assert.Equal("signup_needs_resubmission", ex.Error);
+            Assert.Equal(422, ex.StatusCode);
+            // 入力欄のある画面が無いため、指し示すのは token（＝この申込そのもの）。
+            Assert.Equal("token", ex.Field);
+            // Organization は作られず、申込も未確認のまま残る。
+            Assert.False(await context.Organizations.IgnoreQueryFilters().AnyAsync(o => o.Code != Tenant));
+            Assert.Null((await context.SignupRequests.IgnoreQueryFilters().SingleAsync()).ConfirmedAt);
         }
 
         [Fact]
