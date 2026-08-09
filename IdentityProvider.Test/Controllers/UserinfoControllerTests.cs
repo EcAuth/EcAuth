@@ -4,6 +4,7 @@ using IdentityProvider.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Primitives;
 using Moq;
 using Xunit;
 
@@ -142,10 +143,70 @@ namespace IdentityProvider.Test.Controllers
             // Act
             var result = await _controller.Get();
 
-            // Assert - 400 invalid_request
+            // Assert
             var badRequest = Assert.IsType<BadRequestObjectResult>(result);
             var error = badRequest.Value!.GetType().GetProperty("error")?.GetValue(badRequest.Value);
             Assert.Equal("invalid_request", error);
+        }
+
+        [Fact]
+        public async Task Post_AccessTokenInFormBody_ReturnsBadRequest()
+        {
+            // Arrange - RFC 6750 §2.2 のフォームボディ送信も OAuth 2.1 では禁止
+            _controller.HttpContext.Request.ContentType = "application/x-www-form-urlencoded";
+            _controller.HttpContext.Request.Form = new FormCollection(new Dictionary<string, StringValues>
+            {
+                ["access_token"] = "some-token"
+            });
+            // ヘッダー併用時は RFC 6750 §3.1 の「複数の送信方法」に該当するため拒否されること
+            _controller.HttpContext.Request.Headers["Authorization"] = "Bearer some-token";
+
+            // Act
+            var result = await _controller.Post();
+
+            // Assert
+            var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+            var error = badRequest.Value!.GetType().GetProperty("error")?.GetValue(badRequest.Value);
+            Assert.Equal("invalid_request", error);
+        }
+
+        [Fact]
+        public async Task Post_FormBodyWithoutAccessToken_ReturnsUserInfo()
+        {
+            // Arrange
+            var accessToken = "valid-access-token";
+            var subject = "test-subject";
+
+            _controller.HttpContext.Request.ContentType = "application/x-www-form-urlencoded";
+            _controller.HttpContext.Request.Form = new FormCollection(new Dictionary<string, StringValues>
+            {
+                ["scope"] = "openid"
+            });
+            _controller.HttpContext.Request.Headers["Authorization"] = $"Bearer {accessToken}";
+
+            _mockTokenService.Setup(x => x.ValidateAccessTokenWithTypeAsync(accessToken))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = true,
+                    Subject = subject,
+                    SubjectType = SubjectType.B2C
+                });
+
+            _mockUserService.Setup(x => x.GetUserBySubjectAsync(subject))
+                .ReturnsAsync(new EcAuthUser
+                {
+                    Subject = subject,
+                    EmailHash = "test-email-hash",
+                    OrganizationId = 1
+                });
+
+            // Act
+            var result = await _controller.Post();
+
+            // Assert
+            var okResult = Assert.IsType<OkObjectResult>(result);
+            var subProperty = okResult.Value!.GetType().GetProperty("sub")?.GetValue(okResult.Value);
+            Assert.Equal(subject, subProperty);
         }
 
         [Fact]

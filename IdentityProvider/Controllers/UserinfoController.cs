@@ -62,17 +62,26 @@ namespace IdentityProvider.Controllers
             {
                 _logger.LogInformation("UserInfo endpoint accessed");
 
-                // 0. OAuth 2.1 §5.3 / RFC 6750 §3.1: アクセストークンを URI クエリパラメータで
-                //    送信することは禁止（サーバーログ・ブラウザ履歴・Referer 経由の漏洩防止）。
-                //    ?access_token=... が付いている場合は無視せず明示的に 400 で拒否する。
-                if (HttpContext.Request.Query.ContainsKey("access_token"))
+                // 0. OAuth 2.1 §5.3 / RFC 6750 §3.1: アクセストークンを URI クエリパラメータや
+                //    フォームボディで送信することは禁止（サーバーログ・ブラウザ履歴・Referer 経由の漏洩防止）。
+                using (TimingScope.Begin("token_transport_check"))
                 {
-                    _logger.LogWarning("Access token supplied via query parameter - rejected (OAuth 2.1 5.3)");
-                    return BadRequest(new
+                    var tokenInQuery = HttpContext.Request.Query.ContainsKey("access_token");
+                    var tokenInForm = !tokenInQuery
+                        && IsFormUrlEncodedRequest(HttpContext.Request)
+                        && (await HttpContext.Request.ReadFormAsync()).ContainsKey("access_token");
+
+                    if (tokenInQuery || tokenInForm)
                     {
-                        error = "invalid_request",
-                        error_description = "アクセストークンを URI クエリパラメータで送信することは許可されていません。Authorization ヘッダーを使用してください。"
-                    });
+                        _logger.LogWarning(
+                            "Access token supplied via {Transport} - rejected (OAuth 2.1 5.3)",
+                            tokenInQuery ? "query parameter" : "form body");
+                        return BadRequest(new
+                        {
+                            error = "invalid_request",
+                            error_description = "アクセストークンを URI クエリパラメータまたはフォームボディで送信することは許可されていません。Authorization ヘッダーを使用してください。"
+                        });
+                    }
                 }
 
                 // 1. Authorization ヘッダーの取得 + Bearer Token 解析
@@ -191,6 +200,18 @@ namespace IdentityProvider.Controllers
                 _logger.LogInformation("UserInfo request processed successfully for subject: {Subject}, SubjectType: {SubjectType}", subject, subjectType);
                 return Ok(new { sub = userSubject });
             }
+            catch (InvalidDataException ex)
+            {
+                // ReadFormAsync はフォームの件数・長さ制限超過などで送出する。認証前に到達しうるため
+                // server_error ではなく invalid_request として扱う。
+                _logger.LogWarning(ex, "Malformed request body in UserInfo endpoint");
+
+                return BadRequest(new
+                {
+                    error = "invalid_request",
+                    error_description = "リクエストボディの形式が正しくありません。"
+                });
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error occurred in UserInfo endpoint - Message: {Message}", ex.Message);
@@ -202,5 +223,16 @@ namespace IdentityProvider.Controllers
                 });
             }
         }
+
+        /// <summary>
+        /// RFC 6750 §2.2 のフォームボディ送信に該当するリクエストかを判定する。
+        /// </summary>
+        /// <remarks>
+        /// multipart/form-data も HasFormContentType では true になるが、RFC 6750 §2.2 の対象外であり、
+        /// 認証前に大きなボディをバッファリングさせないため application/x-www-form-urlencoded に限定する。
+        /// </remarks>
+        private static bool IsFormUrlEncodedRequest(HttpRequest request)
+            => MediaTypeHeaderValue.TryParse(request.ContentType, out var mediaType)
+               && string.Equals(mediaType?.MediaType, "application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase);
     }
 }
