@@ -81,14 +81,14 @@ jobs:
       # ビルド引数、プラグインの composer install はコンテナ内で完結する）。
       # 認証情報を runner に残す必要が無いので 3 つとも persist-credentials: false にする。
       - name: Checkout EcAuth
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # プラグインは docker build のコンテキストとして使う。ref を切り替えると
       # Dockerfile の FROM ごと変わるため、EC-CUBE 本体のバージョンもこれで決まる。
       - name: Checkout ec-cube4-ecauth
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: EcAuth/ec-cube4-ecauth
           ref: ${{ inputs.plugin4_ref }}
@@ -97,7 +97,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout ec-cube2-ecauth
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: EcAuth/ec-cube2-ecauth
           ref: ${{ inputs.plugin2_ref }}
@@ -159,7 +159,7 @@ jobs:
           ECCUBE_AUTHENTICATION_KEY: op://EcAuth/eccube4-ecauth-plugin/eccube_authentication_key
 
       - name: Install pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           package_json_file: E2ETests/package.json
 
