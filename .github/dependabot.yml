@@ -2,16 +2,31 @@ version: 2
 
 # プライベートレジストリの認証設定
 #
-# ここだけは PAT が要る。dependabot.yml は静的な ${{secrets.X}} しか解決できず、
-# GitHub App の installation token を発行する step を挟めないため、ワークフロー側で
-# 進めた GITHUB_TOKEN 化と同じ方法が使えない。
-# 権限は EcAuth.IdpUtilities の packages: read だけに絞った fine-grained PAT が望ましい。
+# ここだけは PAT が要る。理由は 2 つある。
+#
+#   1. dependabot.yml は静的な ${{secrets.X}} しか解決できず、GitHub App の
+#      installation token を発行する step を挟めない。ワークフロー側で進めた
+#      GITHUB_TOKEN 化・App token 化と同じ手が使えない。
+#   2. GitHub Packages は fine-grained PAT に非対応。fine-grained PAT の権限一覧に
+#      Packages は repository / organization どちらにも存在せず、NuGet レジストリの
+#      ドキュメントも "only supports authentication using a personal access token
+#      (classic)" と明記している。
+#      https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-nuget-registry
+#
+# そのため classic PAT を使う。スコープは read:packages のみ（repo は不要 — private
+# リポジトリのパッケージでも read:packages だけで読める）。classic PAT のスコープは
+# リポジトリ単位に絞れないため、これが現時点での到達範囲の下限。GitHub が
+# fine-grained PAT に Packages 権限を追加したら差し替える。
+#
+# 一次情報は 1Password の op://EcAuth/dependabot-packages-read/credential。
+# PACKAGES_READ_TOKEN は EcAuth/EcAuth の repo レベル Dependabot secret
+# （registries を使うのはこのリポジトリだけなので org レベルにはしない）。
 registries:
   github-packages:
     type: nuget-feed
     url: https://nuget.pkg.github.com/EcAuth/index.json
     username: x-access-token
-    password: ${{secrets.ORG_PAT}}
+    password: ${{secrets.PACKAGES_READ_TOKEN}}
 
 updates:
   # GitHub Actions の自動更新
