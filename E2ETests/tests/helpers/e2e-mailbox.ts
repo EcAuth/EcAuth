@@ -17,13 +17,17 @@ import type { Mailbox, MailboxMessage, WaitForMessageOptions } from './mailbox';
 const DEFAULT_BASE_URL = 'https://e2e-mail.ec-auth.io';
 
 /**
- * 既定のタイムアウトが mailpit（20 秒）よりずっと長いのは、経路が根本的に違うため:
- *   SendGrid の送信キュー → MX 受信 → Inbound Parse の POST → Workers KV への書き込み
- *   → **Workers KV は結果整合**で、別ロケーションの読み出しに反映されるまで最大 1 分程度
- * かかりうる。短いポーリングだと「送れているのに見つからない」で落ちる。
+ * 既定のタイムアウトが mailpit（20 秒）より長いのは、経路が違うため:
+ *   SendGrid の送信キュー → MX 受信 → Inbound Parse の POST → D1 への書き込み
+ * を待つ必要がある。ただし **D1 は強整合なので、書き込まれた直後から読める**。
+ *
+ * KV 時代はここが 180 秒 / 5 秒だった。書き込みが読み出しに反映されるまで数十秒かかり、
+ * その伝播を待つ必要があったため。D1 へ移行して待つ対象が配送だけになったので縮めた
+ * （EcAuth/ecauth-infrastructure#167）。移行直後の production verify の実測では、
+ * 申込 → 確認メール → Account トークン取得が 38.5 秒 → 12.3 秒になっている。
  */
-const DEFAULT_TIMEOUT_MS = 180000;
-const DEFAULT_INTERVAL_MS = 5000;
+const DEFAULT_TIMEOUT_MS = 60000;
+const DEFAULT_INTERVAL_MS = 2000;
 
 interface WorkerMessage {
   to?: string;
@@ -57,7 +61,7 @@ export async function createE2EMailbox(): Promise<Mailbox> {
     if (!response.ok()) {
       const detail = `(${response.status()}): ${await response.text()}`;
       // 401/403 はトークン不一致・設定ミスで、待っても直らない。
-      // 180 秒粘ってから同じ理由で落ちるより、即座に理由を出す方が早く直せる。
+      // タイムアウトまで粘ってから同じ理由で落ちるより、即座に理由を出す方が早く直せる。
       // 本文に読み出しトークンは含まれない。
       if (response.status() === 401 || response.status() === 403) {
         throw new FatalMailboxError(`E2E メールボックスの認証に失敗しました ${detail}`);
@@ -89,8 +93,7 @@ export async function createE2EMailbox(): Promise<Mailbox> {
             throw e;
           }
           // ネットワーク瞬断や Worker の一時的な 5xx で待機を打ち切らない。
-          // 既定タイムアウトが 180 秒なのは KV の結果整合を待つためで、
-          // その途中の 1 回の失敗で落ちると本番スモークが偽陰性になる
+          // 途中の 1 回の失敗で落ちると本番スモークが偽陰性になる
           // （本番スモークは retries: 0 で回るため取り返しがきかない）。
           lastTransientError = (e as Error).message;
           await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -127,7 +130,7 @@ export async function createE2EMailbox(): Promise<Mailbox> {
     },
 
     async cleanup(toEmail: string): Promise<void> {
-      // 失効（expirationTtl 1 時間）に任せても残骸は消えるが、
+      // 保持期間（1 時間）を過ぎた行は Worker が投入のついでに消すが、
       // 同一宛先での再実行に備えて明示的に消す。
       await ctx.delete(`${baseUrl}/messages`, { params: { to: toEmail } });
     },
