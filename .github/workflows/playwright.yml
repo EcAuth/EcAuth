@@ -23,6 +23,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # NuGet restore は GITHUB_TOKEN で GitHub Packages を読む。パッケージ側の
+    # Actions access に EcAuth/EcAuth を追加してあるため、PAT は要らない。
+    permissions:
+      contents: read
+      packages: read
+
     env:
       DB_PASSWORD: <YourStrong@Passw0rd>
       MOCK_IDP_ORG: dev
@@ -181,12 +187,12 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          # ecauth-website は public なので token 指定は要らない（既定の github.token で読める）。
           repository: EcAuth/ecauth-website
           # 空文字ならデフォルトブランチ。申込／マイページが未マージの間は
           # workflow_dispatch で website_ref にそのブランチを指定して検証する。
           ref: ${{ inputs.website_ref }}
           path: ecauth-website
-          token: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN || github.token }}
 
       # checkout できても、その ref に申込／マイページのテンプレートが無ければ
       # 結合 E2E は回せない（未マージのデフォルトブランチなど）。ここで判定しておかないと
@@ -247,7 +253,7 @@ jobs:
           dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
             --name github \
             --username ${{ github.actor }} \
-            --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+            --password ${{ secrets.GITHUB_TOKEN }} \
             --store-password-in-clear-text
 
       - name: Restore .NET tools

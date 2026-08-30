@@ -39,12 +39,6 @@ on:
     # シークレット未設定のリポジトリでも（プラグインを public として取得できる範囲で）
     # 起動自体は成立させるため。未設定なら空文字になり、各所のフォールバックが効く。
     secrets:
-      ORG_PAT:
-        description: 'プラグインリポジトリの checkout と GitHub Packages の NuGet 認証に使う Organization トークン'
-        required: false
-      PACKAGES_READ_TOKEN:
-        description: 'ORG_PAT が無い場合のフォールバック（後方互換）'
-        required: false
       OP_SERVICE_ACCOUNT_TOKEN:
         description: 'install_source=package-api のときだけ使う 1Password Service Account トークン'
         required: false
@@ -76,6 +70,12 @@ jobs:
     name: EC-CUBE 4系 / 2系 プラグイン結合 E2E
     runs-on: ubuntu-latest
 
+    # identityprovider イメージのビルド内で GitHub Packages から restore するため
+    # packages: read が要る。プラグイン 2 つの checkout は public なので contents: read で足りる。
+    permissions:
+      contents: read
+      packages: read
+
     steps:
       # checkout 後に git 操作をするステップは無い（イメージビルドの NuGet 認証は
       # ビルド引数、プラグインの composer install はコンテナ内で完結する）。
@@ -87,13 +87,13 @@ jobs:
 
       # プラグインは docker build のコンテキストとして使う。ref を切り替えると
       # Dockerfile の FROM ごと変わるため、EC-CUBE 本体のバージョンもこれで決まる。
+      # どちらも public リポジトリなので token 指定は要らない（既定の github.token で読める）。
       - name: Checkout ec-cube4-ecauth
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: EcAuth/ec-cube4-ecauth
           ref: ${{ inputs.plugin4_ref }}
           path: plugins/ec-cube4-ecauth
-          token: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN || github.token }}
           persist-credentials: false
 
       - name: Checkout ec-cube2-ecauth
@@ -102,7 +102,6 @@ jobs:
           repository: EcAuth/ec-cube2-ecauth
           ref: ${{ inputs.plugin2_ref }}
           path: plugins/ec-cube2-ecauth
-          token: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN || github.token }}
           persist-credentials: false
 
       - name: Load base environment variables
@@ -185,7 +184,7 @@ jobs:
         env:
           ECAUTH_PLUGIN_VERSION: ${{ inputs.plugin_version }}
           GITHUB_USERNAME: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # 入ったプラグインの出どころとバージョンを **成功時にも** 残す。
       # install_source=package-api で回す目的は「オーナーズストアが実際に配布する版が

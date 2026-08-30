@@ -31,7 +31,9 @@ jobs:
       - name: Checkout EcAuthDocs repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: nanasess/EcAuthDocs
+          # EcAuthDocs は private なので token が要る。ここだけ PAT が残っており、
+          # GitHub App (contents: read を EcAuthDocs に限定) への移行対象。
+          repository: EcAuth/EcAuthDocs
           path: docs
           fetch-depth: 1
           token: ${{ secrets.ORG_PAT }}
@@ -45,7 +47,7 @@ jobs:
           dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
             --name github \
             --username ${{ github.actor }} \
-            --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+            --password ${{ secrets.GITHUB_TOKEN }} \
             --store-password-in-clear-text
       - name: Restore .NET tools
         run: dotnet tool restore
