@@ -1,7 +1,11 @@
 version: 2
 
 # プライベートレジストリの認証設定
-# GitHub Packages へのアクセスには ORG_PAT が必要（Dependabot secrets に登録済み）
+#
+# ここだけは PAT が要る。dependabot.yml は静的な ${{secrets.X}} しか解決できず、
+# GitHub App の installation token を発行する step を挟めないため、ワークフロー側で
+# 進めた GITHUB_TOKEN 化と同じ方法が使えない。
+# 権限は EcAuth.IdpUtilities の packages: read だけに絞った fine-grained PAT が望ましい。
 registries:
   github-packages:
     type: nuget-feed

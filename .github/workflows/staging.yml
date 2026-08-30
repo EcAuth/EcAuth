@@ -50,7 +50,7 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_NONPROD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           # Azure SQL Database credentials
           SQL_HOST: op://EcAuth/ecauth-staging-sql/hostname
           SQL_DATABASE: op://EcAuth/ecauth-staging-sql/database
@@ -68,7 +68,6 @@ jobs:
           STAGING_MOCK_IDP_APP_NAME: op://EcAuth/ecauth-staging-mockidp/app_name
           STAGING_MOCK_IDP_CLIENT_ID: op://EcAuth/ecauth-staging-mockidp/client_id
           STAGING_MOCK_IDP_CLIENT_SECRET: op://EcAuth/ecauth-staging-mockidp/client_secret
-          MOCK_IDP_BASE_URL: op://EcAuth/mockidp-staging/base_url
           STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT: op://EcAuth/mockidp-staging/authorization_endpoint
           STAGING_MOCK_IDP_TOKEN_ENDPOINT: op://EcAuth/mockidp-staging/token_endpoint
           STAGING_MOCK_IDP_USERINFO_ENDPOINT: op://EcAuth/mockidp-staging/userinfo_endpoint
@@ -95,7 +94,7 @@ jobs:
           dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
             --name github \
             --username ${{ github.actor }} \
-            --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+            --password ${{ secrets.GITHUB_TOKEN }} \
             --store-password-in-clear-text
 
       - name: Restore .NET tools
@@ -184,7 +183,7 @@ jobs:
           dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
             --name github \
             --username ${{ github.actor }} \
-            --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+            --password ${{ secrets.GITHUB_TOKEN }} \
             --store-password-in-clear-text
 
       - name: Restore dependencies
@@ -230,7 +229,7 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_NONPROD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           AZURE_CLIENT_ID: op://EcAuth/ecauth-workload-identity/AZURE_CLIENT_ID
           AZURE_TENANT_ID: op://EcAuth/ecauth-workload-identity/AZURE_TENANT_ID
           AZURE_SUBSCRIPTION_ID: op://EcAuth/ecauth-workload-identity/AZURE_SUBSCRIPTION_ID
@@ -310,7 +309,7 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_NONPROD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           MOCK_USER: op://EcAuth/mockidp-staging/default_user_email
           MOCK_PASS: op://EcAuth/mockidp-staging/default_user_password
           CLIENT_ID: op://EcAuth/ecauth-staging-app/client_id

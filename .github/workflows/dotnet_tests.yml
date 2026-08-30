@@ -31,7 +31,7 @@ jobs:
         dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
           --name github \
           --username ${{ github.actor }} \
-          --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+          --password ${{ secrets.GITHUB_TOKEN }} \
           --store-password-in-clear-text
 
     - name: Restore .NET tools
@@ -88,7 +88,7 @@ jobs:
         dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
           --name github \
           --username ${{ github.actor }} \
-          --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+          --password ${{ secrets.GITHUB_TOKEN }} \
           --store-password-in-clear-text
 
     - name: Restore .NET tools

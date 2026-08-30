@@ -23,10 +23,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # NuGet restore は GITHUB_TOKEN で GitHub Packages を読む。パッケージ側の
+    # Actions access に EcAuth/EcAuth を追加してあるため、PAT は要らない。
+    permissions:
+      contents: read
+      packages: read
+
     env:
       DB_PASSWORD: <YourStrong@Passw0rd>
-      # MockIdP URL は secrets から取得（リポジトリにはコミットしない）
-      MOCK_IDP_BASE_URL: ${{ secrets.MOCK_IDP_BASE_URL }}
       MOCK_IDP_ORG: dev
 
     services:
@@ -59,12 +63,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # MockIdP dev テナントのベース URL。GitHub Secrets ではなく 1Password を一次情報と
+      # する（staging.yml / production.yml が op://EcAuth/mockidp-{staging,production}/base_url
+      # から取っているのと供給源を揃える）。export-env: true で $GITHUB_ENV に載るため、
+      # 後続 step は通常の環境変数として参照する（step の env での再指定は不要）。
+      - name: Load MockIdP dev endpoint from 1Password
+        uses: 1password/load-secrets-action@e544b780808654ba8ceba5fb2fe2897103d92ff4 # v5.0.0
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          MOCK_IDP_BASE_URL: op://EcAuth/mockidp-dev/base_url
+
       - name: Load base environment variables
         run: |
           # E2E 用の非機密のローカル/ダミー設定値（旧 .env.dist 相当）。
-          # クレデンシャルは含まない。MOCK_IDP_BASE_URL はジョブレベルの env で
-          # secrets から供給する（ここに既定値を書くと $GITHUB_ENV が
-          # ジョブレベル env を上書きしてしまい、供給元が二重化する）。変数展開を含む値（FEDERATE_OAUTH2_* / STAGING_MOCK_IDP_*_ENDPOINT）は
+          # クレデンシャルは含まない。MOCK_IDP_BASE_URL は直前の 1Password step が
+          # $GITHUB_ENV に載せるため、ここには書かない（供給元を一本に保つ）。
+          # 変数展開を含む値（FEDERATE_OAUTH2_* / STAGING_MOCK_IDP_*_ENDPOINT）は
           # 旧 .env.dist でも除外されていたため、ここでも展開済みの値を後続 step で組み立てる。
           # 注意: 以下の heredoc は $GITHUB_ENV に追記されるため KEY=value 行のみ許容。
           # コメント行を混ぜると「Invalid format」で step が失敗する（Account/mailpit 系の
@@ -159,8 +175,6 @@ jobs:
           DB_PASSWORD: ${{ env.DB_PASSWORD }}
           MOCK_IDP_FEDERATE_CLIENT_ID: ${{ env.MOCK_IDP_FEDERATE_CLIENT_ID }}
           MOCK_IDP_FEDERATE_CLIENT_SECRET: ${{ env.MOCK_IDP_FEDERATE_CLIENT_SECRET }}
-          # 供給元は secrets の一本のみ（ジョブレベル env と同じ値を明示）
-          MOCK_IDP_BASE_URL: ${{ secrets.MOCK_IDP_BASE_URL }}
           MOCK_IDP_ORG: ${{ env.MOCK_IDP_ORG }}
 
       # --- ecauth-website（フロント）の配信 ---
@@ -173,12 +187,12 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          # ecauth-website は public なので token 指定は要らない（既定の github.token で読める）。
           repository: EcAuth/ecauth-website
           # 空文字ならデフォルトブランチ。申込／マイページが未マージの間は
           # workflow_dispatch で website_ref にそのブランチを指定して検証する。
           ref: ${{ inputs.website_ref }}
           path: ecauth-website
-          token: ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN || github.token }}
 
       # checkout できても、その ref に申込／マイページのテンプレートが無ければ
       # 結合 E2E は回せない（未マージのデフォルトブランチなど）。ここで判定しておかないと
@@ -239,7 +253,7 @@ jobs:
           dotnet nuget add source https://nuget.pkg.github.com/EcAuth/index.json \
             --name github \
             --username ${{ github.actor }} \
-            --password ${{ secrets.ORG_PAT || secrets.PACKAGES_READ_TOKEN }} \
+            --password ${{ secrets.GITHUB_TOKEN }} \
             --store-password-in-clear-text
 
       - name: Restore .NET tools
@@ -351,8 +365,6 @@ jobs:
         working-directory: E2ETests
         run: pnpm exec playwright test
         env:
-          # secrets から直接参照（env経由では空になるため）
-          MOCK_IDP_BASE_URL: ${{ secrets.MOCK_IDP_BASE_URL }}
           MOCK_IDP_ORG: ${{ env.MOCK_IDP_ORG }}
           E2E_MOCK_IDP_REDIRECT_URI: ${{ env.E2E_MOCK_IDP_REDIRECT_URI }}
 
