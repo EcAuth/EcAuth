@@ -332,7 +332,7 @@ spec は受信口を直接触らず、`tests/helpers/mailbox.ts` の `Mailbox` �
 | production | `e2e-mailbox` | `tests/helpers/e2e-mailbox.ts`（`E2E_MAILBOX_BASE_URL` / `E2E_MAILBOX_API_TOKEN`） |
 
 後始末が「ID の配列」ではなく `cleanup(宛先)` なのは、Worker 側が宛先単位でしか削除
-できないため（1 メッセージ 1 キーで保存し ID を返さない）。mailpit 実装は全 spec で
+できないため（1 メッセージ 1 行で保存し ID を返さない）。mailpit 実装は全 spec で
 共有される単一インスタンスを壊さないよう、**自分が読んだ ID だけ**を覚えて消す。
 
 デプロイ済み環境は SendGrid 送信なので mailpit が使えない。代わりに
@@ -350,9 +350,12 @@ spec は受信口を直接触らず、`tests/helpers/mailbox.ts` の `Mailbox` �
 
 呼び出し側の注意:
 
-- **Workers KV は結果整合**で、書き込みが読み出しに反映されるまで最大 1 分程度かかりうる。
-  そのため `e2e-mailbox` 実装の既定タイムアウトは 180 秒（mailpit は 20 秒）。
-- メッセージは 1 時間で自動失効するため、後始末の `DELETE` は必須ではない。
+- 保存先は **D1**（以前は Workers KV）。KV は結果整合で、書き込みが読み出しに反映される
+  まで数十秒かかるため既定タイムアウトを 180 秒にしていた。D1 は強整合なので待つ対象は
+  SendGrid の配送だけになり、既定は **60 秒 / ポーリング 2 秒**（mailpit は 20 秒）。
+  移行（EcAuth/ecauth-infrastructure#167）直後の production verify の実測で、
+  申込 → 確認メール → Account トークン取得が **38.5 秒 → 12.3 秒**になった。
+- メッセージは 1 時間で失効するため、後始末の `DELETE` は必須ではない。
 - 本文のフィールド名が mailpit（`Text` / `HTML` / `Subject` / `ID`）と異なるが、
   `Mailbox` が `{subject, text, html}` に正規化するので spec 側は意識しなくてよい。
 
