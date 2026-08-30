@@ -48,7 +48,7 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_PROD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           # Azure SQL Database credentials
           SQL_HOST: op://EcAuth/ecauth-prod-sql/hostname
           SQL_DATABASE: op://EcAuth/ecauth-prod-sql/database
@@ -263,7 +263,7 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_PROD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           AZURE_CLIENT_ID: op://EcAuth/ecauth-workload-identity/AZURE_CLIENT_ID
           AZURE_TENANT_ID: op://EcAuth/ecauth-workload-identity/AZURE_TENANT_ID
           AZURE_SUBSCRIPTION_ID: op://EcAuth/ecauth-workload-identity/AZURE_SUBSCRIPTION_ID
@@ -339,7 +339,7 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_PROD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           MOCK_USER: op://EcAuth/mockidp-production/default_user_email
           MOCK_PASS: op://EcAuth/mockidp-production/default_user_password
           CLIENT_ID: op://EcAuth/ecauth-prod-app/client_id

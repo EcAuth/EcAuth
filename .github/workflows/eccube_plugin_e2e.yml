@@ -45,7 +45,7 @@ on:
       PACKAGES_READ_TOKEN:
         description: 'ORG_PAT が無い場合のフォールバック（後方互換）'
         required: false
-      OP_SERVICE_ACCOUNT_TOKEN_NONPROD:
+      OP_SERVICE_ACCOUNT_TOKEN:
         description: 'install_source=package-api のときだけ使う 1Password Service Account トークン'
         required: false
   workflow_dispatch:
@@ -155,7 +155,7 @@ jobs:
         with:
           export-env: true
         env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_NONPROD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           ECCUBE_AUTHENTICATION_KEY: op://EcAuth/eccube4-ecauth-plugin/eccube_authentication_key
 
       - name: Install pnpm

@@ -45,4 +45,4 @@ jobs:
     secrets:
       ORG_PAT: ${{ secrets.ORG_PAT }}
       PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
-      OP_SERVICE_ACCOUNT_TOKEN_NONPROD: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN_NONPROD }}
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
