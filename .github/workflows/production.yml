@@ -66,7 +66,6 @@ jobs:
           PROD_MOCK_IDP_APP_NAME: op://EcAuth/ecauth-prod-mockidp/app_name
           PROD_MOCK_IDP_CLIENT_ID: op://EcAuth/ecauth-prod-mockidp/client_id
           PROD_MOCK_IDP_CLIENT_SECRET: op://EcAuth/ecauth-prod-mockidp/client_secret
-          MOCK_IDP_BASE_URL: op://EcAuth/mockidp-production/base_url
           PROD_MOCK_IDP_AUTHORIZATION_ENDPOINT: op://EcAuth/mockidp-production/authorization_endpoint
           PROD_MOCK_IDP_TOKEN_ENDPOINT: op://EcAuth/mockidp-production/token_endpoint
           PROD_MOCK_IDP_USERINFO_ENDPOINT: op://EcAuth/mockidp-production/userinfo_endpoint

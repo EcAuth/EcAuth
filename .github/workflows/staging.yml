@@ -68,7 +68,6 @@ jobs:
           STAGING_MOCK_IDP_APP_NAME: op://EcAuth/ecauth-staging-mockidp/app_name
           STAGING_MOCK_IDP_CLIENT_ID: op://EcAuth/ecauth-staging-mockidp/client_id
           STAGING_MOCK_IDP_CLIENT_SECRET: op://EcAuth/ecauth-staging-mockidp/client_secret
-          MOCK_IDP_BASE_URL: op://EcAuth/mockidp-staging/base_url
           STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT: op://EcAuth/mockidp-staging/authorization_endpoint
           STAGING_MOCK_IDP_TOKEN_ENDPOINT: op://EcAuth/mockidp-staging/token_endpoint
           STAGING_MOCK_IDP_USERINFO_ENDPOINT: op://EcAuth/mockidp-staging/userinfo_endpoint
