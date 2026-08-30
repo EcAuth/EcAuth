@@ -35,15 +35,51 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
+      # EcAuthDocs は private なので checkout に token が要る。GITHUB_TOKEN は自リポジトリ
+      # にしか効かないため、contents: read を EcAuthDocs 1 つだけに絞った GitHub App
+      # (EcAuth Docs Reader) の installation token を使う。秘密鍵は 1Password が一次情報で、
+      # GitHub 側にはサービスアカウントトークンしか置かない。
+      #
+      # actions: write を持つ App (EcAuth Workflow Dispatcher) と分けてあるのは、この
+      # ジョブが public リポジトリで issue 本文を LLM に読ませる構造だからで、仮に
+      # プロンプトインジェクションが通っても最悪ケースが「EcAuthDocs を読む」= 本来の
+      # 用途に留まる。1 つの App にまとめて発行時に絞る形では、鍵そのものが両方の権限を
+      # 持つため、この境界は成立しない。
+      # export-env は false（既定）にする。true にすると秘密鍵が $GITHUB_ENV 経由で
+      # 後続の全ステップの環境変数に載り、Bash を許可された Claude 実行ステップから
+      # `env` で読めてしまう。このジョブは issue / PR 本文という信頼できない入力を
+      # LLM に渡すため、prompt injection で App の秘密鍵そのものを持ち出される経路に
+      # なる。installation token は 1 時間で失効しジョブ終了時に revoke されるが、
+      # 秘密鍵は長命で何度でもトークンを再発行できるため、露出の意味がまったく違う。
+      # ステップ出力なら後続ステップの環境には載らず、明示的に参照した場所にだけ渡る。
+      - name: Load GitHub App credentials from 1Password
+        id: op
+        uses: 1password/load-secrets-action@e544b780808654ba8ceba5fb2fe2897103d92ff4 # v5.0.0
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          DOCS_READER_CLIENT_ID: op://EcAuth/github-app-docs-reader/client_id
+          DOCS_READER_PRIVATE_KEY: op://EcAuth/github-app-docs-reader/private_key
+      - name: Create EcAuthDocs access token
+        id: docs-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ steps.op.outputs.DOCS_READER_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.DOCS_READER_PRIVATE_KEY }}
+          owner: EcAuth
+          # App は EcAuthDocs にしか install していないが、発行するトークン側でも対象と
+          # 権限を明示する。install 先が将来増えても、この 2 行を直さない限りトークンの
+          # 届く範囲は広がらない。
+          repositories: EcAuthDocs
+          permission-contents: read
       - name: Checkout EcAuthDocs repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # EcAuthDocs は private なので token が要る。ここだけ PAT が残っており、
-          # GitHub App (contents: read を EcAuthDocs に限定) への移行対象。
           repository: EcAuth/EcAuthDocs
           path: docs
           fetch-depth: 1
-          token: ${{ secrets.ORG_PAT }}
+          token: ${{ steps.docs-token.outputs.token }}
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
