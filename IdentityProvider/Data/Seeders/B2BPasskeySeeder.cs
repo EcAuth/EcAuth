@@ -194,15 +194,45 @@ public class B2BPasskeySeeder : IDbSeeder
             return false;
         }
 
+        // external_id は個人情報を含み得るため、書き込み経路と同じく正規化 + ハッシュ化して保持する。
+        // 環境変数 {prefix}_B2B_USER_EXTERNAL_ID には従来どおり平文 login_id を設定する。
+        var externalIdHash = ExternalIdHasher.Hash(b2bUserExternalId);
+
         context.B2BUsers.Add(new B2BUser
         {
             Subject = b2bUserSubject,
-            // external_id は個人情報を含み得るため、書き込み経路と同じく正規化 + ハッシュ化して保持する。
-            // 環境変数 {prefix}_B2B_USER_EXTERNAL_ID には従来どおり平文 login_id を設定する。
-            ExternalId = ExternalIdHasher.Hash(b2bUserExternalId),
+            ExternalId = externalIdHash,
             UserType = "admin",
             OrganizationId = organization.Id
         });
+
+        // 発行元ごとの識別子（EcAuthDocs#110）。シードする B2BUser は EC-CUBE プラグイン経由の
+        // 一般管理者を模したものなので、その Organization の B2B Client を発行元とする。
+        // 本シーダーは OrganizationClientSeeder の後に走るため通常は解決できる。
+        var b2bClientId = await context.Clients
+            .IgnoreQueryFilters()
+            .Where(c => c.OrganizationId == organization.Id && c.SubjectType == SubjectType.B2B)
+            .Select(c => c.ClientId)
+            .FirstOrDefaultAsync();
+
+        if (b2bClientId == null)
+        {
+            // identity 無しでも b2b_user.external_id 経由のフォールバックで解決できるため、
+            // シード自体は続行する（移行前データと同じ状態になる）。
+            logger.LogWarning(
+                "B2BUserIdentity creation skipped - no B2B client found for organization {OrgCode}",
+                organizationCode);
+        }
+        else
+        {
+            context.B2BUserIdentities.Add(new B2BUserIdentity
+            {
+                B2BSubject = b2bUserSubject,
+                IssuerKey = B2BIssuerKey.ForClient(b2bClientId),
+                ExternalId = externalIdHash,
+                ClientId = b2bClientId
+            });
+        }
 
         logger.LogInformation("Created B2BUser {Subject} for organization {OrgCode}",
             b2bUserSubject, organizationCode);

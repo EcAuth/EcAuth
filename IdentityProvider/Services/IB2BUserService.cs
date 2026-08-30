@@ -23,6 +23,16 @@ namespace IdentityProvider.Services
             public string ExternalId { get; set; } = string.Empty;
 
             /// <summary>
+            /// 発行元識別子（EcAuthDocs#110）- 必須。<see cref="Models.B2BIssuerKey"/> で構成する。
+            /// </summary>
+            public string IssuerKey { get; set; } = string.Empty;
+
+            /// <summary>
+            /// 補助カラム。Client 由来の発行元の場合に client_id を保持する（それ以外は null）。
+            /// </summary>
+            public string? ClientId { get; set; }
+
+            /// <summary>
             /// ユーザータイプ（"admin", "staff" 等）
             /// </summary>
             public string UserType { get; set; } = "admin";
@@ -81,11 +91,38 @@ namespace IdentityProvider.Services
 
         /// <summary>
         /// 外部IDでB2Bユーザーを取得する
+        ///
+        /// EcAuthDocs#110 により、識別子の正となる置き場は b2b_user_identity へ移した。
+        /// 本メソッドは移行期間中のフォールバック経路であり、通常は
+        /// <see cref="GetByIdentityAsync"/> を先に試すこと。
         /// </summary>
         /// <param name="externalId">外部ID（EC-CUBEのlogin_id等）</param>
         /// <param name="organizationId">Organization ID</param>
         /// <returns>B2Bユーザー（存在しない場合はnull）</returns>
         Task<B2BUser?> GetByExternalIdAsync(string externalId, int organizationId);
+
+        /// <summary>
+        /// 発行元識別子と外部IDでB2Bユーザーを取得する（EcAuthDocs#110）。
+        ///
+        /// external_id は発行元をまたぐと衝突しうるため、必ず issuer_key と組で引く。
+        /// </summary>
+        /// <param name="issuerKey">発行元識別子（<see cref="Models.B2BIssuerKey"/>）</param>
+        /// <param name="externalId">発行元における不変キー（平文。内部でハッシュ化する）</param>
+        /// <returns>B2Bユーザー（存在しない場合はnull）</returns>
+        Task<B2BUser?> GetByIdentityAsync(string issuerKey, string externalId);
+
+        /// <summary>
+        /// 指定の発行元における識別子行が無ければ作成する（既にあれば何もしない）。
+        ///
+        /// EcAuthDocs#110 の決定により、識別子が変わっても旧行は削除せず共存させる。
+        /// 同一 issuer_key の下に旧 hash と新 hash が並ぶことで、プラグイン更新前に
+        /// 登録済みのユーザーも解決でき、ハードカットオーバーが不要になる。
+        /// </summary>
+        /// <param name="subject">紐づける B2BUser の subject</param>
+        /// <param name="issuerKey">発行元識別子</param>
+        /// <param name="externalId">発行元における不変キー（平文。内部でハッシュ化する）</param>
+        /// <param name="clientId">Client 由来の発行元の場合の client_id（それ以外は null）</param>
+        Task EnsureIdentityAsync(string subject, string issuerKey, string externalId, string? clientId);
 
         /// <summary>
         /// B2Bユーザーを更新する

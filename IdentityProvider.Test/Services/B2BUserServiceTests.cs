@@ -9,6 +9,11 @@ namespace IdentityProvider.Test.Services
 {
     public class B2BUserServiceTests : IDisposable
     {
+        /// <summary>
+        /// テスト用の発行元識別子（EcAuthDocs#110）。実運用と同じく client_id から構成する。
+        /// </summary>
+        private const string TestIssuerKey = "client:test-client";
+
         private readonly EcAuthDbContext _context;
         private readonly B2BUserService _service;
         private readonly Mock<ILogger<B2BUserService>> _mockLogger;
@@ -42,6 +47,7 @@ namespace IdentityProvider.Test.Services
             var request = new IB2BUserService.CreateUserRequest
             {
                 ExternalId = "admin@example.com",
+                IssuerKey = TestIssuerKey,
                 UserType = "admin",
                 OrganizationId = 1
             };
@@ -74,6 +80,7 @@ namespace IdentityProvider.Test.Services
             var request = new IB2BUserService.CreateUserRequest
             {
                 ExternalId = "",
+                IssuerKey = TestIssuerKey,
                 UserType = "staff",
                 OrganizationId = 1
             };
@@ -91,6 +98,7 @@ namespace IdentityProvider.Test.Services
             var requests = Enumerable.Range(0, 5).Select(i => new IB2BUserService.CreateUserRequest
             {
                 ExternalId = $"unique-admin-{i}",
+                IssuerKey = TestIssuerKey,
                 UserType = "admin",
                 OrganizationId = 1
             }).ToList();
@@ -114,6 +122,7 @@ namespace IdentityProvider.Test.Services
             var request = new IB2BUserService.CreateUserRequest
             {
                 ExternalId = "uuid-test-admin",
+                IssuerKey = TestIssuerKey,
                 UserType = "admin",
                 OrganizationId = 1
             };
@@ -134,6 +143,7 @@ namespace IdentityProvider.Test.Services
             {
                 Subject = explicitSubject,
                 ExternalId = "explicit-subject-admin",
+                IssuerKey = TestIssuerKey,
                 UserType = "admin",
                 OrganizationId = 1
             };
@@ -154,6 +164,7 @@ namespace IdentityProvider.Test.Services
             {
                 Subject = null,
                 ExternalId = "auto-uuid-admin",
+                IssuerKey = TestIssuerKey,
                 UserType = "admin",
                 OrganizationId = 1
             };
@@ -177,6 +188,7 @@ namespace IdentityProvider.Test.Services
             {
                 Subject = invalidSubject,
                 ExternalId = "invalid-uuid-admin",
+                IssuerKey = TestIssuerKey,
                 UserType = "admin",
                 OrganizationId = 1
             };
@@ -196,6 +208,7 @@ namespace IdentityProvider.Test.Services
             var request = new IB2BUserService.CreateUserRequest
             {
                 ExternalId = "invalid-org-admin",
+                IssuerKey = TestIssuerKey,
                 UserType = "admin",
                 OrganizationId = organizationId
             };
@@ -215,6 +228,7 @@ namespace IdentityProvider.Test.Services
             var request = new IB2BUserService.CreateUserRequest
             {
                 ExternalId = "empty-usertype-admin",
+                IssuerKey = TestIssuerKey,
                 UserType = userType,
                 OrganizationId = 1
             };
@@ -313,6 +327,7 @@ namespace IdentityProvider.Test.Services
             var created = await _service.CreateAsync(new IB2BUserService.CreateUserRequest
             {
                 ExternalId = plaintextExternalId,
+                IssuerKey = TestIssuerKey,
                 UserType = "admin",
                 OrganizationId = 1
             });

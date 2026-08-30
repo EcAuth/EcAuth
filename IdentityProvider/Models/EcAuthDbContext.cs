@@ -26,6 +26,7 @@ namespace IdentityProvider.Models
         public DbSet<AccessToken> AccessTokens { get; set; }
         public DbSet<ExternalIdpToken> ExternalIdpTokens { get; set; }
         public DbSet<B2BUser> B2BUsers { get; set; }
+        public DbSet<B2BUserIdentity> B2BUserIdentities { get; set; }
         public DbSet<B2BPasskeyCredential> B2BPasskeyCredentials { get; set; }
         public DbSet<WebAuthnChallenge> WebAuthnChallenges { get; set; }
         public DbSet<AccountOrganization> AccountOrganizations { get; set; }
@@ -175,6 +176,10 @@ namespace IdentityProvider.Models
             modelBuilder.Entity<B2BPasskeyCredential>()
                 .HasQueryFilter(c => c.B2BUser != null && c.B2BUser.Organization != null && c.B2BUser.Organization.TenantName == _tenantService.TenantName && c.B2BUser.Organization.DeletedAt == null);
 
+            // B2BUserIdentity テナントフィルター（B2BUser経由）
+            modelBuilder.Entity<B2BUserIdentity>()
+                .HasQueryFilter(i => i.B2BUser != null && i.B2BUser.Organization != null && i.B2BUser.Organization.TenantName == _tenantService.TenantName && i.B2BUser.Organization.DeletedAt == null);
+
             // WebAuthnChallenge テナントフィルター（Client経由）
             modelBuilder.Entity<WebAuthnChallenge>()
                 .HasQueryFilter(wc => wc.Client != null && wc.Client.Organization != null && wc.Client.Organization.TenantName == _tenantService.TenantName && wc.Client.Organization.DeletedAt == null);
@@ -202,6 +207,27 @@ namespace IdentityProvider.Models
             modelBuilder.Entity<B2BUser>()
                 .HasIndex(u => new { u.OrganizationId, u.ExternalId })
                 .IsUnique();
+
+            // B2BUserIdentity 関連の設定（EcAuthDocs#110）
+            //
+            // 一意性は (issuer_key, external_id) の複合で担保する。external_id は発行元をまたぐと
+            // 衝突しうる（EC-CUBE の member_id=1 と WordPress の user_id=1 は同一ハッシュ）が、
+            // issuer_key が名前空間として分離する。issuer_key はグローバル一意な値
+            // （client_id / IdP テナント ID）から構成されるため organization_id は不要。
+            modelBuilder.Entity<B2BUser>()
+                .HasMany(u => u.Identities)
+                .WithOne(i => i.B2BUser)
+                .HasForeignKey(i => i.B2BSubject)
+                .HasPrincipalKey(u => u.Subject)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<B2BUserIdentity>()
+                .HasIndex(i => new { i.IssuerKey, i.ExternalId })
+                .IsUnique();
+
+            // Client 解約時に該当 identity を一括で引くための索引（EcAuthDocs#110 / #111）。
+            modelBuilder.Entity<B2BUserIdentity>()
+                .HasIndex(i => i.ClientId);
 
             // B2BPasskeyCredential 関連の設定
             modelBuilder.Entity<B2BPasskeyCredential>()
