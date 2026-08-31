@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # ChromeDriver のセットアップ。ubuntu ランナーには Google Chrome がプリインストール
       # されているため、その Chrome に一致する ChromeDriver を導入して PATH に通す
@@ -74,7 +74,7 @@ jobs:
       # 上の ChromeDriver step のコメントと同じ方針で、third-party action の実行時点では
       # $GITHUB_ENV に値を載せず、万一の汚染時の露出窓を縮める。
       - name: Load MockIdP dev endpoint from 1Password
-        uses: 1password/load-secrets-action@e544b780808654ba8ceba5fb2fe2897103d92ff4 # v5.0.0
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
         with:
           export-env: true
         env:
