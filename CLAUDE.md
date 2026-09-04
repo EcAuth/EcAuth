@@ -409,9 +409,13 @@ spec は受信口を直接触らず、`tests/helpers/mailbox.ts` の `Mailbox` �
 
 ### マイグレーションのデプロイ順序
 
-`production.yml` / `staging.yml` の既定は `migrate` → `deploy` → `verify`。この順序は**追加のみの
+`production.yml` / `staging.yml` のジョブ順は `migrate` → `deploy` → `verify`。この順序は**追加のみの
 マイグレーションでは正しく、値の変換や削除では危険**。マイグレーションを書いた時点で種別を判定し、
 PR 説明に明記すること。
+
+なお `dry_run` の既定値は環境で違う。`staging.yml` は `false`（main への push でそのまま
+migrate → deploy → verify が走る）だが、**`production.yml` は `true`** なので、本番で実際に流すには
+`dry_run=false` を明示する必要がある。
 
 | 種別 | 安全な順序 | 理由 |
 |------|-----------|------|
@@ -419,12 +423,42 @@ PR 説明に明記すること。
 | **値の変換**（ハッシュ化・形式変更・既存カラムの書き換え） | `deploy-only` → ロールアウト確認 → `migrate-only` | 旧コードが変換後 DB に旧形式を書き込む窓を塞ぐ |
 | **削除・制約強化**（カラム / テーブル削除、リネーム、UNIQUE 追加） | `deploy-only` → ロールアウト確認 → `migrate-only` | 旧コードが存在しない列を参照して落ちる。制約強化は旧コードが違反データを書き得る |
 
-1 つのマイグレーションが複数種別を含む場合、および未適用マイグレーションが複数溜まっている場合は
-**最も厳しい行に合わせる**。
+**追加と削除を同じリリースに混在させないこと。** 混在すると、どちらの順序を選んでも安全にならない。
+
+- `deploy-only` 先行 → 新コードが必要とする追加分がまだ存在せず `Invalid object name` で落ちる
+- `migrate-and-deploy` → 削除分が旧インスタンスを壊す
+
+`migrate-only` は未適用マイグレーションを**全部**適用するため、片方だけ先に流すこともできない。
+したがってリリースを分割する。
+
+| リリース | 内容 | 順序 |
+|---------|------|------|
+| 1（expand） | 追加のみのマイグレーション + 旧構造を参照しなくなったコード | `migrate-and-deploy` |
+| 2（contract） | 削除・制約強化のみのマイグレーション | `deploy-only`（コード変更があれば）→ ロールアウト確認 → `migrate-only` |
+
+リリース 2 の時点で「旧構造を参照しないコード」は既に本番で動いているため、削除しても壊れない。
+EcAuthDocs#110 がこの形（#521 が expand、`b2b_user.external_id` の削除が contract）。
+
+**未適用マイグレーションを溜めないこと。** 複数溜まると種別が混ざり、この分割ができなくなる。
 
 > ⚠️ **「常に deploy 先行」にしてはいけない。** 追加のみを deploy 先行にすると逆向きに壊れる。
 > EcAuth#521（`b2b_user_identity` の新設）を `deploy-only` 先行でやっていたら、新コードが
 > `Invalid object name 'b2b_user_identity'` で落ち、B2B パスキー登録と申込が全滅していた。
+
+**UNIQUE を追加するときは順序だけでは足りない。** 既存データに重複があると `CREATE UNIQUE INDEX`
+自体が失敗し、`migrate-only` がそこで止まる。デプロイ順序とは独立に、事前に実 SQL Server で重複を
+検査して解消しておくこと。
+
+```sql
+SELECT col_a, col_b, COUNT(*) AS dup
+FROM dbo.some_table
+GROUP BY col_a, col_b
+HAVING COUNT(*) > 1;
+```
+
+EcAuth#521 では、`b2b_user` の `(organization_id, external_id)` を UNIQUE へ戻す `Down` が
+まさにこれで失敗することを実測している（`duplicate key value is (2, DUP-HASH)`）。この Down は
+非一意で再作成する形に変更した。
 
 効いているのは順序そのものではなく、**データが変わる瞬間に両形式を扱えるコードだけが動いている**
 という状態。したがって `migrate-only` の前の**ロールアウト完了確認を省略しない**こと。`deploy` ジョブの
