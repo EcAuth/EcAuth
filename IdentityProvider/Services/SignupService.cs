@@ -245,6 +245,34 @@ namespace IdentityProvider.Services
                 };
                 _context.B2BUsers.Add(b2bUser);
 
+                // 発行元ごとの識別子（EcAuthDocs#110）。発行元は受付テナントの管理コンソール
+                // Client（SubjectType.Account）。accounts と stg-accounts は別 Organization なので、
+                // 固定値ではなく client_id を使うことで同一人物が両方に申し込んでも衝突しない。
+                var accountsClientId = await _context.Clients
+                    .IgnoreQueryFilters()
+                    .Where(c => c.OrganizationId == accountsOrg.Id && c.SubjectType == SubjectType.Account)
+                    .Select(c => c.ClientId)
+                    .FirstOrDefaultAsync(ct);
+
+                if (accountsClientId == null)
+                {
+                    // identity 無しでも b2b_user.external_id 経由のフォールバックで解決できるため、
+                    // 申込自体は継続する（移行前データと同じ状態になる）。
+                    _logger.LogWarning(
+                        "B2BUserIdentity の作成をスキップしました: 受付テナントに Account 型 Client がありません Tenant={Tenant}",
+                        signupRequest.TenantName);
+                }
+                else
+                {
+                    _context.B2BUserIdentities.Add(new B2BUserIdentity
+                    {
+                        B2BSubject = subject,
+                        IssuerKey = B2BIssuerKey.ForClient(accountsClientId),
+                        ExternalId = b2bUser.ExternalId,
+                        ClientId = accountsClientId
+                    });
+                }
+
                 // 顧客 Organization を入力 URL に応じて 1〜2 件作成し、
                 // 各 Org に Client / RsaKeyPair / AccountOrganization を作成する。
                 //

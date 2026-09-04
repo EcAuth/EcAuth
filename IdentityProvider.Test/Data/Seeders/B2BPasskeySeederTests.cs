@@ -59,11 +59,17 @@ namespace IdentityProvider.Test.Data.Seeders
 
         #region RequiredMigration Tests
 
+        /// <summary>
+        /// 本シーダーは b2b_user_identity へ書き込むため、identity 表を作るマイグレーションで
+        /// ゲートされていなければならない（EcAuthDocs#110）。旧マイグレーション名のままだと、
+        /// マイグレーションがデプロイに遅れた環境で表が無いまま INSERT に到達し、
+        /// 起動初期化が invalid object name で落ちる。
+        /// </summary>
         [Fact]
         public void RequiredMigration_ShouldBeCorrectMigrationName()
         {
             // Assert
-            Assert.Equal("20260111034146_AddB2BPasskeyEntities", _seeder.RequiredMigration);
+            Assert.Equal("20260828230716_AddB2BUserIdentity", _seeder.RequiredMigration);
         }
 
         [Fact]
@@ -306,6 +312,81 @@ namespace IdentityProvider.Test.Data.Seeders
             Assert.Equal(ExternalIdHasher.Hash(externalId), user.ExternalId);
             Assert.Equal("admin", user.UserType);
             Assert.Equal(_organization.Id, user.OrganizationId);
+        }
+
+        /// <summary>
+        /// identity の発行元は「構成された Client」でなければならない（EcAuthDocs#110）。
+        ///
+        /// B2BPasskeyService は認証時に request.client_id から解決した Client で IssuerKey を
+        /// 組み立てるため、シーダーが Organization 内の別 B2B Client を選ぶと identity 検索が
+        /// 外れ、毎回フォールバック経路に落ちる。
+        /// </summary>
+        [Fact]
+        public async Task SeedAsync_ShouldBindIdentityToConfiguredClient_NotAnotherB2BClientInOrg()
+        {
+            // Arrange: 同一 Organization に、構成された Client より先に見つかる別の B2B Client を置く
+            _client.SubjectType = SubjectType.B2B;
+            _context.Clients.Add(new Client
+            {
+                Id = 2,
+                ClientId = "another-b2b-client-id",
+                ClientSecret = "another-secret",
+                AppName = "Another App",
+                OrganizationId = _organization.Id,
+                SubjectType = SubjectType.B2B,
+                AllowedRpIds = new List<string>()
+            });
+            await _context.SaveChangesAsync();
+
+            var subject = "test-subject-uuid";
+            var externalId = "test-admin";
+            var configuration = CreateDevConfiguration(new Dictionary<string, string?>
+            {
+                ["DEV_B2B_USER_SUBJECT"] = subject,
+                ["DEV_B2B_USER_EXTERNAL_ID"] = externalId
+            });
+
+            // Act
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert
+            var identity = await _context.B2BUserIdentities
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(i => i.B2BSubject == subject);
+
+            Assert.NotNull(identity);
+            Assert.Equal(TestClientId, identity.ClientId);
+            Assert.Equal(B2BIssuerKey.ForClient(TestClientId), identity.IssuerKey);
+            Assert.Equal(ExternalIdHasher.Hash(externalId), identity.ExternalId);
+        }
+
+        /// <summary>
+        /// 構成された Client が B2B でない場合は identity を作らず、
+        /// b2b_user.external_id 経由のフォールバックに委ねる（移行前データと同じ状態）。
+        /// </summary>
+        [Fact]
+        public async Task SeedAsync_WhenConfiguredClientIsNotB2B_ShouldSkipIdentity()
+        {
+            // Arrange: _client の SubjectType は既定の B2C のまま
+            var subject = "test-subject-uuid";
+            var configuration = CreateDevConfiguration(new Dictionary<string, string?>
+            {
+                ["DEV_B2B_USER_SUBJECT"] = subject,
+                ["DEV_B2B_USER_EXTERNAL_ID"] = "test-admin"
+            });
+
+            // Act
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert: B2BUser は作られるが identity は作られない
+            Assert.NotNull(await _context.B2BUsers
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(u => u.Subject == subject));
+
+            Assert.Empty(await _context.B2BUserIdentities
+                .IgnoreQueryFilters()
+                .Where(i => i.B2BSubject == subject)
+                .ToListAsync());
         }
 
         [Fact]

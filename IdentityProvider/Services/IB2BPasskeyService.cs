@@ -45,6 +45,18 @@ namespace IdentityProvider.Services
             /// 外部ID（EC-CUBEのlogin_id等）- 必須
             /// </summary>
             public string ExternalId { get; set; } = string.Empty;
+
+            /// <summary>
+            /// <see cref="ExternalId"/> が平文ではなく、既に
+            /// <see cref="ExternalIdHasher"/> で正規化 + ハッシュ化された値であることを示す。
+            ///
+            /// 登録トークン経路（B2BPasskeyController.AuthorizeByRegistrationTokenAsync）は
+            /// b2b_user に保存済みのハッシュ値をそのまま渡す。EcAuth は個人情報非保持要件により
+            /// 平文の external_id を保持しないため、この経路では平文を復元できない。
+            /// フラグを立てずに渡すと SHA-256 が二重に掛かり、SHA256(SHA256(email)) という
+            /// 偽の識別子で identity 行が作られ、旧カラムもリクエストのたびに世代が進む。
+            /// </summary>
+            public bool ExternalIdIsPreHashed { get; set; }
         }
 
         /// <summary>

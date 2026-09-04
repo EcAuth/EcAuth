@@ -13,7 +13,11 @@ namespace IdentityProvider.Data.Seeders;
 public class B2BPasskeySeeder : IDbSeeder
 {
     /// <inheritdoc />
-    public string RequiredMigration => "20260111034146_AddB2BPasskeyEntities";
+    // b2b_user_identity へ書き込むため、identity 表を作るマイグレーションでゲートする
+    // （EcAuthDocs#110）。DbInitializer は RequiredMigration が適用済みなら本シーダーを走らせるため、
+    // 旧マイグレーション名のままだと、マイグレーションがデプロイに遅れた環境で
+    // 表が存在しないまま INSERT に到達し、起動初期化が invalid object name で落ちる。
+    public string RequiredMigration => "20260828230716_AddB2BUserIdentity";
 
     /// <inheritdoc />
     public int Order => 100;
@@ -79,7 +83,8 @@ public class B2BPasskeySeeder : IDbSeeder
         }
         else
         {
-            hasChanges |= await SeedB2BUserAsync(context, b2bUserSubject, b2bUserExternalId, organizationCode, logger);
+            hasChanges |= await SeedB2BUserAsync(
+                context, client, b2bUserSubject, b2bUserExternalId, organizationCode, logger);
         }
 
         if (hasChanges)
@@ -169,6 +174,7 @@ public class B2BPasskeySeeder : IDbSeeder
 
     private static async Task<bool> SeedB2BUserAsync(
         EcAuthDbContext context,
+        Client client,
         string b2bUserSubject,
         string b2bUserExternalId,
         string? organizationCode,
@@ -194,15 +200,48 @@ public class B2BPasskeySeeder : IDbSeeder
             return false;
         }
 
+        // external_id は個人情報を含み得るため、書き込み経路と同じく正規化 + ハッシュ化して保持する。
+        // 環境変数 {prefix}_B2B_USER_EXTERNAL_ID には従来どおり平文 login_id を設定する。
+        var externalIdHash = ExternalIdHasher.Hash(b2bUserExternalId);
+
         context.B2BUsers.Add(new B2BUser
         {
             Subject = b2bUserSubject,
-            // external_id は個人情報を含み得るため、書き込み経路と同じく正規化 + ハッシュ化して保持する。
-            // 環境変数 {prefix}_B2B_USER_EXTERNAL_ID には従来どおり平文 login_id を設定する。
-            ExternalId = ExternalIdHasher.Hash(b2bUserExternalId),
+            ExternalId = externalIdHash,
             UserType = "admin",
             OrganizationId = organization.Id
         });
+
+        // 発行元ごとの識別子（EcAuthDocs#110）。発行元は「構成された Client」そのものでなければ
+        // ならない。B2BPasskeyService は認証時に request.client_id から解決した Client で
+        // IssuerKey を組み立てるため、ここで Organization 内の別 Client（最初に見つかった B2B
+        // Client 等）を選ぶと identity 検索が外れ、毎回フォールバック経路に落ちる。
+        if (client.SubjectType != SubjectType.B2B)
+        {
+            // identity 無しでも b2b_user.external_id 経由のフォールバックで解決できるため、
+            // シード自体は続行する（移行前データと同じ状態になる）。
+            logger.LogWarning(
+                "B2BUserIdentity creation skipped - client {ClientId} is not a B2B client (SubjectType={SubjectType})",
+                client.ClientId, client.SubjectType);
+        }
+        else if (client.OrganizationId != organization.Id)
+        {
+            // 別 Organization の Client を発行元にすると、B2BPasskeyService の Organization
+            // 境界チェックで弾かれる identity を作ってしまう。
+            logger.LogWarning(
+                "B2BUserIdentity creation skipped - client {ClientId} does not belong to organization {OrgCode}",
+                client.ClientId, organizationCode);
+        }
+        else
+        {
+            context.B2BUserIdentities.Add(new B2BUserIdentity
+            {
+                B2BSubject = b2bUserSubject,
+                IssuerKey = B2BIssuerKey.ForClient(client.ClientId),
+                ExternalId = externalIdHash,
+                ClientId = client.ClientId
+            });
+        }
 
         logger.LogInformation("Created B2BUser {Subject} for organization {OrgCode}",
             b2bUserSubject, organizationCode);

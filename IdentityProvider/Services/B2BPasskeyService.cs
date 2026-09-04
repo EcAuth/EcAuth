@@ -98,6 +98,12 @@ namespace IdentityProvider.Services
             if (!client.AllowedRpIds.Contains(rpId, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"RpId is not allowed for this client: {rpId}");
 
+            // 発行元識別子（EcAuthDocs#110）。external_id は発行元をまたぐと衝突しうる
+            // （EC-CUBE の member_id=1 と WordPress の user_id=1 は同一ハッシュになる）ため、
+            // 解決も登録も必ずこの名前空間の下で行う。
+            var issuerKey = B2BIssuerKey.ForClient(client.ClientId);
+            var issuerClientId = client.ClientId;
+
             // B2Bユーザー取得、存在しない場合は JIT プロビジョニング
             var user = await _userService.GetBySubjectAsync(b2bSubject);
             bool isProvisioned = false;
@@ -110,16 +116,41 @@ namespace IdentityProvider.Services
                 // これを許すと cross-organization での external_id 上書きや credential 紐付けが可能になるため遮断する。
                 EnsureUserBelongsToClientOrganization(user, client.OrganizationId.Value, b2bSubject);
 
-                // Subject が一致: external_id が変わっていたら自動同期（EC-CUBE login_id 変更への追随）
-                user = await SyncExternalIdIfChangedAsync(user, request.ExternalId, client.OrganizationId.Value);
+                if (request.ExternalIdIsPreHashed)
+                {
+                    // 登録トークン経路: request.ExternalId は b2b_user に保存済みのハッシュ値そのもの。
+                    // 平文として扱うと二重ハッシュになるため、identity 行の作成だけを行い
+                    // 旧カラムの同期はしない（同期すべき変化が定義上存在しない）。
+                    await _userService.EnsureIdentityByHashAsync(
+                        user.Subject, issuerKey, request.ExternalId, issuerClientId);
+                }
+                else
+                {
+                    // Subject が一致: external_id が変わっていたら自動同期（EC-CUBE login_id 変更への追随）
+                    user = await SyncExternalIdIfChangedAsync(
+                        user, request.ExternalId, client.OrganizationId.Value, issuerKey, issuerClientId);
+                }
                 subjectResolution = IB2BPasskeyService.SubjectResolutions.AsRequested;
+            }
+            else if (request.ExternalIdIsPreHashed)
+            {
+                // 登録トークンは既存 B2BUser から発行されるため、通常ここには到達しない。
+                // 到達した場合（トークン発行後の削除など）にフォールバック / JIT へ進むと、
+                // ハッシュ値を平文として扱った検索・作成をしてしまうため、明示的に失敗させる。
+                throw new InvalidOperationException(
+                    $"B2BUser for registration token no longer exists: {b2bSubject}");
             }
             else
             {
                 // ExternalId で既存ユーザーを検索（EC-CUBEプラグイン再インストール時の復旧）
-                user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
+                user = await ResolveByExternalIdAsync(issuerKey, request.ExternalId, client.OrganizationId.Value);
                 if (user != null)
                 {
+                    // 旧カラム経由で解決された場合（移行前データ）は、この機会に identity 行を作って
+                    // 以降は名前空間つきで解決できるようにする（EcAuthDocs#110 の遅延移行）。
+                    await _userService.EnsureIdentityAsync(
+                        user.Subject, issuerKey, request.ExternalId, issuerClientId);
+
                     // external_id は login_id 等 PII を含み得るため Information ログには含めない
                     _logger.LogInformation(
                         "Resolved B2BUser via ExternalId fallback: RequestedSubject={RequestedSubject}, ResolvedSubject={ResolvedSubject}, OrganizationId={OrganizationId}",
@@ -138,6 +169,8 @@ namespace IdentityProvider.Services
                         {
                             Subject = b2bSubject,
                             ExternalId = request.ExternalId,
+                            IssuerKey = issuerKey,
+                            ClientId = issuerClientId,
                             UserType = "admin",
                             OrganizationId = client.OrganizationId.Value
                         });
@@ -158,7 +191,7 @@ namespace IdentityProvider.Services
                         user = await _userService.GetBySubjectAsync(b2bSubject);
                         if (user == null)
                         {
-                            user = await _userService.GetByExternalIdAsync(request.ExternalId, client.OrganizationId.Value);
+                            user = await ResolveByExternalIdAsync(issuerKey, request.ExternalId, client.OrganizationId.Value);
                             subjectResolution = user != null
                                 ? IB2BPasskeyService.SubjectResolutions.FallbackByExternalId
                                 : throw new InvalidOperationException($"Failed to create or retrieve B2BUser: {b2bSubject}");
@@ -170,7 +203,8 @@ namespace IdentityProvider.Services
 
                             // 並行リクエストが先に書き込んだ external_id と、今回のリクエストの external_id が
                             // 異なる場合があるため、メインフローと同じく同期ロジックを適用する。
-                            user = await SyncExternalIdIfChangedAsync(user, request.ExternalId, client.OrganizationId.Value);
+                            user = await SyncExternalIdIfChangedAsync(
+                                user, request.ExternalId, client.OrganizationId.Value, issuerKey, issuerClientId);
                             subjectResolution = IB2BPasskeyService.SubjectResolutions.AsRequested;
                         }
                     }
@@ -273,29 +307,80 @@ namespace IdentityProvider.Services
         }
 
         /// <summary>
-        /// 既存 B2BUser の external_id が引数の requestedExternalId と異なる場合、
-        /// 同一 Organization 内の衝突を確認したうえで external_id を同期する。
-        /// 衝突がある場合は <see cref="ExternalIdConflictException"/> をスロー。
+        /// 発行元識別子で B2BUser を解決する（EcAuthDocs#110）。
+        ///
+        /// b2b_user_identity を先に引き、見つからない場合のみ移行前データ向けに
+        /// b2b_user.external_id（organization_id 単位の旧名前空間）へフォールバックする。
+        /// フォールバック経路は b2b_user.external_id カラムを落とす際に削除する。
+        ///
+        /// フォールバックは「まだどの発行元にも取られていない（または自分の発行元が既に持つ）」
+        /// ユーザーに限る。Organization 単位の旧名前空間をそのまま引くと、発行元 B のリクエストに
+        /// 対して発行元 A のユーザーを返してしまい、呼び出し元が EnsureIdentityAsync で B の
+        /// identity を足した結果、別人が 1 つの b2b_subject に恒久統合される。
         /// </summary>
-        private async Task<B2BUser> SyncExternalIdIfChangedAsync(
-            B2BUser user, string requestedExternalId, int organizationId)
+        private async Task<B2BUser?> ResolveByExternalIdAsync(
+            string issuerKey, string externalId, int organizationId)
         {
-            // user.ExternalId はハッシュ値で保持されているため、リクエストの平文 external_id も
-            // 同じく正規化 + ハッシュ化してから比較・同期する。
-            var requestedExternalIdHash = ExternalIdHasher.Hash(requestedExternalId);
-            if (string.Equals(user.ExternalId, requestedExternalIdHash, StringComparison.Ordinal))
+            var user = await _userService.GetByIdentityAsync(issuerKey, externalId);
+            if (user != null)
             {
                 return user;
             }
 
-            // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409
-            var conflictingUser = await _userService.GetByExternalIdAsync(requestedExternalId, organizationId);
-            if (conflictingUser != null
-                && !string.Equals(conflictingUser.Subject, user.Subject, StringComparison.Ordinal))
+            return await _userService.GetUnclaimedByExternalIdAsync(
+                externalId, organizationId, issuerKey);
+        }
+
+        /// <summary>
+        /// 既存 B2BUser について、発行元における識別子を最新化する。
+        ///
+        /// EcAuthDocs#110 の決定により、b2b_user_identity 側は「差し替え」ではなく「追加」する。
+        /// 同一 issuer_key の下に旧 hash と新 hash を共存させることで、プラグイン更新前に
+        /// 登録されたユーザーも引き続き解決でき、ハードカットオーバーが不要になる。
+        ///
+        /// あわせて移行期間中の b2b_user.external_id も従来どおり同期する（同一 Organization 内の
+        /// 衝突を確認したうえで更新し、衝突時は <see cref="ExternalIdConflictException"/> をスロー）。
+        /// </summary>
+        private async Task<B2BUser> SyncExternalIdIfChangedAsync(
+            B2BUser user, string requestedExternalId, int organizationId,
+            string issuerKey, string? issuerClientId)
+        {
+            // user.ExternalId はハッシュ値で保持されているため、リクエストの平文 external_id も
+            // 同じく正規化 + ハッシュ化してから比較・同期する。
+            var requestedExternalIdHash = ExternalIdHasher.Hash(requestedExternalId);
+            var isExternalIdChanged =
+                !string.Equals(user.ExternalId, requestedExternalIdHash, StringComparison.Ordinal);
+
+            if (isExternalIdChanged)
             {
-                // 例外メッセージはサーバーログに残るため、平文 external_id ではなくハッシュ値を含める。
-                throw new ExternalIdConflictException(
-                    $"ExternalId (hash '{requestedExternalIdHash}') is already used by another user in this organization.");
+                // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409。
+                // ただし別の発行元が保有しているユーザーは「同一ハッシュの別人」として共存が正しいので
+                // 衝突とみなさない（(organization_id, external_id) の一意制約は EcAuthDocs#110 で外した）。
+                //
+                // このチェックは必ず EnsureIdentityAsync より前に行う。EnsureIdentityAsync は内部で
+                // SaveChangesAsync して即コミットするため、identity を先に入れてから 409 を投げると
+                // 挿入済みの行だけが残り、以降 GetByIdentityAsync が「登録を拒否した subject」に
+                // 解決してしまう（identity 側は衝突していないので EnsureIdentityAsync は成功する）。
+                var conflictingUser = await _userService.GetUnclaimedByExternalIdAsync(
+                    requestedExternalId, organizationId, issuerKey);
+                if (conflictingUser != null
+                    && !string.Equals(conflictingUser.Subject, user.Subject, StringComparison.Ordinal))
+                {
+                    // 例外メッセージはサーバーログに残るため、平文 external_id ではなくハッシュ値を含める。
+                    throw new ExternalIdConflictException(
+                        $"ExternalId (hash '{requestedExternalIdHash}') is already used by another user in this organization.");
+                }
+            }
+
+            // 正となる置き場（b2b_user_identity）を更新する。同一発行元で別人が保有していれば
+            // ここで ExternalIdConflictException が飛び、旧カラムには手を付けない。
+            // external_id が変わっていない場合も呼ぶ（移行前ユーザーの identity 行をこの機会に作る）。
+            await _userService.EnsureIdentityAsync(
+                user.Subject, issuerKey, requestedExternalId, issuerClientId);
+
+            if (!isExternalIdChanged)
+            {
+                return user;
             }
 
             // external_id の具体値は PII を含み得るため Information ログには含めない。
@@ -323,12 +408,19 @@ namespace IdentityProvider.Services
             catch (DbUpdateException ex)
             {
                 // DB 更新失敗の原因を実状態で再確認する。
-                // UNIQUE 制約違反（race で別ユーザーが同じ external_id を取得）なら 409 相当として
+                // race で別ユーザーが同じ external_id を取得していた場合は 409 相当として
                 // ExternalIdConflictException にラップするが、それ以外（タイムアウト、接続断、
                 // 別制約違反など 500 相当 / 再試行対象）の障害までは 409 に吸収せず元例外を再スローする。
                 // SQL エラーコード判定ではなく「現時点で別ユーザーが当該 external_id を保有しているか」で
                 // 判定することで、DB プロバイダー非依存に race condition を検出できる。
-                var owner = await _userService.GetByExternalIdAsync(requestedExternalId, organizationId);
+                //
+                // 注: (organization_id, external_id) の一意制約は EcAuthDocs#110 で外したため、
+                //     旧カラムの重複を理由にこの経路へ来ることは無くなった。先行チェックと
+                //     UpdateAsync の間に別ユーザーが割り込む極めて狭い race のための保険として残す。
+                //     この経路では identity 行が既にコミット済みだが、その行は「今回同期しようとした
+                //     正しい対応」であり、後続の解決先も同じ user になるため矛盾は生じない。
+                var owner = await _userService.GetUnclaimedByExternalIdAsync(
+                    requestedExternalId, organizationId, issuerKey);
                 if (owner != null
                     && !string.Equals(owner.Subject, user.Subject, StringComparison.Ordinal))
                 {
