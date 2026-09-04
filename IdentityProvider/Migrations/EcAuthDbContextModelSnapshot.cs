@@ -342,8 +342,7 @@ namespace IdentityProvider.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("OrganizationId", "ExternalId")
-                        .IsUnique();
+                    b.HasIndex("OrganizationId", "ExternalId");
 
                     b.ToTable("b2b_user");
                 });

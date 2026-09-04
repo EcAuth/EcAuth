@@ -204,9 +204,15 @@ namespace IdentityProvider.Models
                 .HasPrincipalKey(u => u.Subject)
                 .OnDelete(DeleteBehavior.Cascade);
 
+            // b2b_user.external_id の一意性は意図的に外してある（EcAuthDocs#110）。
+            // 識別子の一意性は b2b_user_identity の (issuer_key, external_id) が担保する。
+            // ここを UNIQUE のまま残すと、同一 Organization に発行元の異なる Client が
+            // ぶら下がる構成で「別発行元の同一 external_id」を作れず、本移行の目的
+            //（EC-CUBE の member_id=1 と WordPress の user_id=1 の共存）が実 DB では成立しない。
+            // 索引自体は移行期間中のフォールバック検索（GetByExternalIdAsync /
+            // GetUnclaimedByExternalIdAsync）のために非一意で残す。
             modelBuilder.Entity<B2BUser>()
-                .HasIndex(u => new { u.OrganizationId, u.ExternalId })
-                .IsUnique();
+                .HasIndex(u => new { u.OrganizationId, u.ExternalId });
 
             // B2BUserIdentity 関連の設定（EcAuthDocs#110）
             //

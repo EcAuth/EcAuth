@@ -14,6 +14,8 @@ namespace IdentityProvider.Test.Services
 {
     public class B2BPasskeyServiceTests : IDisposable
     {
+        // 発行元識別子（EcAuthDocs#110）。本テストの Client は一貫して "test-client-id"。
+        private const string TestIssuerKey = "client:test-client-id";
         private const string TestB2BSubject = "550e8400-e29b-41d4-a716-446655440000";
         private const string TestB2BSubject2 = "550e8400-e29b-41d4-a716-446655440001";
 
@@ -262,7 +264,7 @@ namespace IdentityProvider.Test.Services
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(newSubject))
                 .ReturnsAsync((B2BUser?)null);
-            _mockUserService.Setup(x => x.GetByExternalIdAsync("new-admin@example.com", 1))
+            _mockUserService.Setup(x => x.GetUnclaimedByExternalIdAsync("new-admin@example.com", 1, TestIssuerKey))
                 .ReturnsAsync((B2BUser?)null);
 
             var provisionedUser = new B2BUser
@@ -519,7 +521,7 @@ namespace IdentityProvider.Test.Services
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(newSubject))
                 .ReturnsAsync((B2BUser?)null);
-            _mockUserService.Setup(x => x.GetByExternalIdAsync("admin@example.com", 1))
+            _mockUserService.Setup(x => x.GetUnclaimedByExternalIdAsync("admin@example.com", 1, TestIssuerKey))
                 .ReturnsAsync(_testUser);
 
             IWebAuthnChallengeService.ChallengeRequest? capturedChallengeRequest = null;
@@ -598,7 +600,7 @@ namespace IdentityProvider.Test.Services
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
                 .ReturnsAsync(_testUser);
             // 衝突する他ユーザーはいない
-            _mockUserService.Setup(x => x.GetByExternalIdAsync("renamed-admin@example.com", 1))
+            _mockUserService.Setup(x => x.GetUnclaimedByExternalIdAsync("renamed-admin@example.com", 1, TestIssuerKey))
                 .ReturnsAsync((B2BUser?)null);
 
             var updatedUser = new B2BUser
@@ -657,7 +659,7 @@ namespace IdentityProvider.Test.Services
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
                 .ReturnsAsync(_testUser);
-            _mockUserService.Setup(x => x.GetByExternalIdAsync("other-admin@example.com", 1))
+            _mockUserService.Setup(x => x.GetUnclaimedByExternalIdAsync("other-admin@example.com", 1, TestIssuerKey))
                 .ReturnsAsync(otherUser);
 
             // Act & Assert
@@ -686,7 +688,7 @@ namespace IdentityProvider.Test.Services
                 .ReturnsAsync(_testUser);
 
             // 事前チェック・再確認の両方で別ユーザーは見つからない
-            _mockUserService.Setup(x => x.GetByExternalIdAsync("renamed-admin@example.com", 1))
+            _mockUserService.Setup(x => x.GetUnclaimedByExternalIdAsync("renamed-admin@example.com", 1, TestIssuerKey))
                 .ReturnsAsync((B2BUser?)null);
 
             var transientError = new DbUpdateException(
@@ -729,7 +731,7 @@ namespace IdentityProvider.Test.Services
                 .ReturnsAsync(_testUser);
 
             // 1回目(事前チェック): null、2回目(DbUpdateException 後の再確認): raceWinner
-            _mockUserService.SetupSequence(x => x.GetByExternalIdAsync("race-target@example.com", 1))
+            _mockUserService.SetupSequence(x => x.GetUnclaimedByExternalIdAsync("race-target@example.com", 1, TestIssuerKey))
                 .ReturnsAsync((B2BUser?)null)
                 .ReturnsAsync(raceWinner);
 
@@ -784,7 +786,9 @@ namespace IdentityProvider.Test.Services
 
             // 同期・衝突チェックは一切呼ばれないこと
             _mockUserService.Verify(x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()), Times.Never);
-            _mockUserService.Verify(x => x.GetByExternalIdAsync(It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+            _mockUserService.Verify(
+                x => x.GetUnclaimedByExternalIdAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()),
+                Times.Never);
         }
 
         [Fact]
@@ -802,7 +806,7 @@ namespace IdentityProvider.Test.Services
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(newSubject))
                 .ReturnsAsync((B2BUser?)null);
-            _mockUserService.Setup(x => x.GetByExternalIdAsync("admin@example.com", 1))
+            _mockUserService.Setup(x => x.GetUnclaimedByExternalIdAsync("admin@example.com", 1, TestIssuerKey))
                 .ReturnsAsync(_testUser);
 
             var challengeResult = new IWebAuthnChallengeService.ChallengeResult
@@ -839,7 +843,7 @@ namespace IdentityProvider.Test.Services
 
             _mockUserService.Setup(x => x.GetBySubjectAsync(newSubject))
                 .ReturnsAsync((B2BUser?)null);
-            _mockUserService.Setup(x => x.GetByExternalIdAsync("brand-new@example.com", 1))
+            _mockUserService.Setup(x => x.GetUnclaimedByExternalIdAsync("brand-new@example.com", 1, TestIssuerKey))
                 .ReturnsAsync((B2BUser?)null);
 
             var newUser = new B2BUser
@@ -903,7 +907,7 @@ namespace IdentityProvider.Test.Services
                 .ReturnsAsync(preExistingUser);
 
             // JIT 前の external_id fallback 検索は null（まだ書かれていないタイミング）
-            _mockUserService.Setup(x => x.GetByExternalIdAsync("winner@example.com", 1))
+            _mockUserService.Setup(x => x.GetUnclaimedByExternalIdAsync("winner@example.com", 1, TestIssuerKey))
                 .ReturnsAsync((B2BUser?)null);
 
             // CreateAsync は並行リクエストが先に書いたため UNIQUE 違反

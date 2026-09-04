@@ -293,6 +293,11 @@ namespace IdentityProvider.Services
         /// b2b_user_identity を先に引き、見つからない場合のみ移行前データ向けに
         /// b2b_user.external_id（organization_id 単位の旧名前空間）へフォールバックする。
         /// フォールバック経路は b2b_user.external_id カラムを落とす際に削除する。
+        ///
+        /// フォールバックは「まだどの発行元にも取られていない（または自分の発行元が既に持つ）」
+        /// ユーザーに限る。Organization 単位の旧名前空間をそのまま引くと、発行元 B のリクエストに
+        /// 対して発行元 A のユーザーを返してしまい、呼び出し元が EnsureIdentityAsync で B の
+        /// identity を足した結果、別人が 1 つの b2b_subject に恒久統合される。
         /// </summary>
         private async Task<B2BUser?> ResolveByExternalIdAsync(
             string issuerKey, string externalId, int organizationId)
@@ -303,7 +308,8 @@ namespace IdentityProvider.Services
                 return user;
             }
 
-            return await _userService.GetByExternalIdAsync(externalId, organizationId);
+            return await _userService.GetUnclaimedByExternalIdAsync(
+                externalId, organizationId, issuerKey);
         }
 
         /// <summary>
@@ -333,8 +339,11 @@ namespace IdentityProvider.Services
                 return user;
             }
 
-            // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409
-            var conflictingUser = await _userService.GetByExternalIdAsync(requestedExternalId, organizationId);
+            // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409。
+            // ただし別の発行元が保有しているユーザーは「同一ハッシュの別人」として共存が正しいので
+            // 衝突とみなさない（(organization_id, external_id) の一意制約は EcAuthDocs#110 で外した）。
+            var conflictingUser = await _userService.GetUnclaimedByExternalIdAsync(
+                requestedExternalId, organizationId, issuerKey);
             if (conflictingUser != null
                 && !string.Equals(conflictingUser.Subject, user.Subject, StringComparison.Ordinal))
             {
@@ -373,7 +382,8 @@ namespace IdentityProvider.Services
                 // 別制約違反など 500 相当 / 再試行対象）の障害までは 409 に吸収せず元例外を再スローする。
                 // SQL エラーコード判定ではなく「現時点で別ユーザーが当該 external_id を保有しているか」で
                 // 判定することで、DB プロバイダー非依存に race condition を検出できる。
-                var owner = await _userService.GetByExternalIdAsync(requestedExternalId, organizationId);
+                var owner = await _userService.GetUnclaimedByExternalIdAsync(
+                    requestedExternalId, organizationId, issuerKey);
                 if (owner != null
                     && !string.Equals(owner.Subject, user.Subject, StringComparison.Ordinal))
                 {

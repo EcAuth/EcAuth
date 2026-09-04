@@ -11,6 +11,22 @@ namespace IdentityProvider.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // b2b_user の (organization_id, external_id) を非一意に緩和する（EcAuthDocs#110）。
+            //
+            // 識別子の一意性は b2b_user_identity の (issuer_key, external_id) へ移す。旧索引を
+            // UNIQUE のまま残すと、同一 Organization に発行元の異なる Client がぶら下がる構成で
+            // 2 人目の b2b_user INSERT が一意違反で落ち、本移行の目的（EC-CUBE の member_id=1 と
+            // WordPress の user_id=1 の共存）が実 DB では成立しない。
+            // 索引自体は移行期間中のフォールバック検索のために非一意で残す。
+            migrationBuilder.DropIndex(
+                name: "IX_b2b_user_organization_id_external_id",
+                table: "b2b_user");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_b2b_user_organization_id_external_id",
+                table: "b2b_user",
+                columns: new[] { "organization_id", "external_id" });
+
             migrationBuilder.CreateTable(
                 name: "b2b_user_identity",
                 columns: table => new
@@ -126,6 +142,16 @@ namespace IdentityProvider.Migrations
         {
             migrationBuilder.DropTable(
                 name: "b2b_user_identity");
+
+            migrationBuilder.DropIndex(
+                name: "IX_b2b_user_organization_id_external_id",
+                table: "b2b_user");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_b2b_user_organization_id_external_id",
+                table: "b2b_user",
+                columns: new[] { "organization_id", "external_id" },
+                unique: true);
         }
     }
 }

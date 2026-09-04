@@ -126,6 +126,57 @@ namespace IdentityProvider.Services
         }
 
         /// <inheritdoc />
+        public async Task<B2BUser?> GetUnclaimedByExternalIdAsync(
+            string externalId, int organizationId, string issuerKey)
+        {
+            if (string.IsNullOrWhiteSpace(externalId) || string.IsNullOrWhiteSpace(issuerKey))
+            {
+                return null;
+            }
+
+            // external_id はハッシュ化して保持しているため、検索キーも同じく正規化 + ハッシュ化する。
+            var externalIdHash = ExternalIdHasher.Hash(externalId);
+
+            // (organization_id, external_id) は非一意になったため（EcAuthDocs#110）、
+            // 発行元の異なる同一ハッシュが複数並びうる。先頭 1 件で打ち切らず候補を走査する。
+            var candidates = await _context.B2BUsers
+                .Include(u => u.Organization)
+                .Include(u => u.PasskeyCredentials)
+                .Where(u => u.ExternalId == externalIdHash && u.OrganizationId == organizationId)
+                .ToListAsync();
+
+            foreach (var candidate in candidates)
+            {
+                var issuerKeys = await _context.B2BUserIdentities
+                    .IgnoreQueryFilters()
+                    .Where(i => i.B2BSubject == candidate.Subject)
+                    .Select(i => i.IssuerKey)
+                    .ToListAsync();
+
+                if (issuerKeys.Count == 0 || issuerKeys.Contains(issuerKey, StringComparer.Ordinal))
+                {
+                    return candidate;
+                }
+
+                // 別の発行元が既に取得済みのユーザー。ここで返すと呼び出し元が
+                // EnsureIdentityAsync で自分の identity を足し、別人を 1 つの b2b_subject へ
+                // 統合してしまうため、フォールバック対象から外す。
+                _logger.LogInformation(
+                    "ExternalId フォールバックを見送りました（別の発行元が保有済み）: " +
+                    "Subject={Subject}, RequestedIssuerKey={IssuerKey}",
+                    candidate.Subject, issuerKey);
+            }
+
+            // 平文 external_id は PII を含み得るためログにはハッシュ値のみ残す。
+            _logger.LogDebug(
+                "引き継ぎ可能な B2Bユーザーが見つかりません: ExternalIdHash={ExternalIdHash}, " +
+                "OrganizationId={OrganizationId}, IssuerKey={IssuerKey}",
+                externalIdHash, organizationId, issuerKey);
+
+            return null;
+        }
+
+        /// <inheritdoc />
         public async Task<B2BUser?> GetByIdentityAsync(string issuerKey, string externalId)
         {
             if (string.IsNullOrWhiteSpace(issuerKey) || string.IsNullOrWhiteSpace(externalId))

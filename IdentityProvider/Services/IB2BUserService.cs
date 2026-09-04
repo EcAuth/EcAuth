@@ -112,6 +112,29 @@ namespace IdentityProvider.Services
         Task<B2BUser?> GetByIdentityAsync(string issuerKey, string externalId);
 
         /// <summary>
+        /// 旧 b2b_user.external_id 経由のフォールバック検索（EcAuthDocs#110）。
+        /// 指定の発行元が引き継いでよいユーザーだけを返す。
+        ///
+        /// <see cref="GetByExternalIdAsync"/> は Organization 単位でしか絞れないため、
+        /// 同一 Organization に発行元の異なる Client がぶら下がる構成では
+        /// 「別の発行元のユーザー」を返してしまう。呼び出し元はその戻り値に対して
+        /// <see cref="EnsureIdentityAsync"/> を実行するため、別人が 1 つの b2b_subject へ
+        /// 恒久的に統合される（本移行が防ごうとしている衝突そのもの）。
+        ///
+        /// そこで返す対象を次のいずれかに限定する:
+        /// <list type="bullet">
+        ///   <item>identity 行を 1 つも持たない（移行対象外だった未移行ユーザー）</item>
+        ///   <item>既に <paramref name="issuerKey"/> の identity を持つ（自分の発行元のユーザー）</item>
+        /// </list>
+        /// </summary>
+        /// <param name="externalId">外部ID（平文。内部でハッシュ化する）</param>
+        /// <param name="organizationId">Organization ID</param>
+        /// <param name="issuerKey">引き継ぎ元となる発行元識別子</param>
+        /// <returns>引き継ぎ可能な B2Bユーザー（存在しない場合は null）</returns>
+        Task<B2BUser?> GetUnclaimedByExternalIdAsync(
+            string externalId, int organizationId, string issuerKey);
+
+        /// <summary>
         /// 指定の発行元における識別子行が無ければ作成する（既にあれば何もしない）。
         ///
         /// EcAuthDocs#110 の決定により、識別子が変わっても旧行は削除せず共存させる。
