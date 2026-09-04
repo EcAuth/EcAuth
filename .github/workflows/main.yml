@@ -24,12 +24,30 @@ jobs:
     secrets: inherit
 
   # E2E スイート。dotnet-tests がグリーンになってから起動するが、互いには並列実行。
+  #
+  # Dependabot が起動した run では skip する。GitHub は Dependabot イベントの run に
+  # Actions secrets を渡さず Dependabot secrets だけを渡すため、この 2 つが MockIdP の
+  # エンドポイントを取りに行く load-secrets-action が OP_SERVICE_ACCOUNT_TOKEN 未設定で
+  # 必ず失敗する（"Authentication error with environment variables"）。
+  # https://docs.github.com/en/code-security/dependabot/troubleshooting-dependabot/troubleshooting-dependabot-on-github-actions
+  #
+  # 解決策として OP のサービスアカウントトークンを Dependabot secrets に置くことはしない。
+  # 依存更新 PR の CI は「更新後の third-party コードを実行する」場であり、そこに
+  # EcAuth vault 全体の読み取りを与えることになる。E2E はマージ後の main への push
+  # （Dependabot 起動ではないので Actions secrets が渡る）で回るため、検知が事後になる
+  # だけで検証自体は失われない。
+  #
+  # dotnet-tests と eccube-plugin-e2e は Dependabot run でも通るのでガードしない。前者は
+  # GITHUB_TOKEN と Dependabot secret の PACKAGES_READ_TOKEN だけで足り、後者は
+  # 1Password の step が install_source == 'package-api' のときしか動かないため。
   playwright:
     needs: dotnet-tests
+    if: github.actor != 'dependabot[bot]'
     uses: ./.github/workflows/playwright.yml
     secrets: inherit
   selenium:
     needs: dotnet-tests
+    if: github.actor != 'dependabot[bot]'
     uses: ./.github/workflows/selenium.yml
     secrets: inherit
   # EC-CUBE 4系 / 2系のプラグインを実際に動かす結合 E2E。
