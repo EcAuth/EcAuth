@@ -177,6 +177,9 @@ namespace IdentityProvider.Controllers
                 Client client;
                 string b2bSubject;
                 string externalId;
+                // 登録トークン経路の external_id は b2b_user 保存済みのハッシュ値で、平文は復元できない
+                // （個人情報非保持要件）。サービス側で再ハッシュさせないためにフラグで区別する。
+                var externalIdIsPreHashed = false;
                 if (!string.IsNullOrWhiteSpace(request.RegistrationToken))
                 {
                     var authz = await AuthorizeByRegistrationTokenAsync(request.ClientId, request.RegistrationToken);
@@ -193,6 +196,7 @@ namespace IdentityProvider.Controllers
                     client = authz.Value.Client;
                     b2bSubject = authz.Value.Subject;
                     externalId = authz.Value.ExternalId;
+                    externalIdIsPreHashed = true;
                 }
                 else
                 {
@@ -240,7 +244,8 @@ namespace IdentityProvider.Controllers
                     B2BSubject = b2bSubject,
                     DisplayName = request.DisplayName,
                     DeviceName = request.DeviceName,
-                    ExternalId = externalId
+                    ExternalId = externalId,
+                    ExternalIdIsPreHashed = externalIdIsPreHashed
                 };
 
                 var result = await _passkeyService.CreateRegistrationOptionsAsync(serviceRequest);

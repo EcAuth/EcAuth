@@ -116,10 +116,29 @@ namespace IdentityProvider.Services
                 // これを許すと cross-organization での external_id 上書きや credential 紐付けが可能になるため遮断する。
                 EnsureUserBelongsToClientOrganization(user, client.OrganizationId.Value, b2bSubject);
 
-                // Subject が一致: external_id が変わっていたら自動同期（EC-CUBE login_id 変更への追随）
-                user = await SyncExternalIdIfChangedAsync(
-                    user, request.ExternalId, client.OrganizationId.Value, issuerKey, issuerClientId);
+                if (request.ExternalIdIsPreHashed)
+                {
+                    // 登録トークン経路: request.ExternalId は b2b_user に保存済みのハッシュ値そのもの。
+                    // 平文として扱うと二重ハッシュになるため、identity 行の作成だけを行い
+                    // 旧カラムの同期はしない（同期すべき変化が定義上存在しない）。
+                    await _userService.EnsureIdentityByHashAsync(
+                        user.Subject, issuerKey, request.ExternalId, issuerClientId);
+                }
+                else
+                {
+                    // Subject が一致: external_id が変わっていたら自動同期（EC-CUBE login_id 変更への追随）
+                    user = await SyncExternalIdIfChangedAsync(
+                        user, request.ExternalId, client.OrganizationId.Value, issuerKey, issuerClientId);
+                }
                 subjectResolution = IB2BPasskeyService.SubjectResolutions.AsRequested;
+            }
+            else if (request.ExternalIdIsPreHashed)
+            {
+                // 登録トークンは既存 B2BUser から発行されるため、通常ここには到達しない。
+                // 到達した場合（トークン発行後の削除など）にフォールバック / JIT へ進むと、
+                // ハッシュ値を平文として扱った検索・作成をしてしまうため、明示的に失敗させる。
+                throw new InvalidOperationException(
+                    $"B2BUser for registration token no longer exists: {b2bSubject}");
             }
             else
             {
@@ -326,30 +345,42 @@ namespace IdentityProvider.Services
             B2BUser user, string requestedExternalId, int organizationId,
             string issuerKey, string? issuerClientId)
         {
-            // 正となる置き場（b2b_user_identity）を先に更新する。衝突していればここで
-            // ExternalIdConflictException が飛び、旧カラムには手を付けない。
-            await _userService.EnsureIdentityAsync(
-                user.Subject, issuerKey, requestedExternalId, issuerClientId);
-
             // user.ExternalId はハッシュ値で保持されているため、リクエストの平文 external_id も
             // 同じく正規化 + ハッシュ化してから比較・同期する。
             var requestedExternalIdHash = ExternalIdHasher.Hash(requestedExternalId);
-            if (string.Equals(user.ExternalId, requestedExternalIdHash, StringComparison.Ordinal))
+            var isExternalIdChanged =
+                !string.Equals(user.ExternalId, requestedExternalIdHash, StringComparison.Ordinal);
+
+            if (isExternalIdChanged)
             {
-                return user;
+                // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409。
+                // ただし別の発行元が保有しているユーザーは「同一ハッシュの別人」として共存が正しいので
+                // 衝突とみなさない（(organization_id, external_id) の一意制約は EcAuthDocs#110 で外した）。
+                //
+                // このチェックは必ず EnsureIdentityAsync より前に行う。EnsureIdentityAsync は内部で
+                // SaveChangesAsync して即コミットするため、identity を先に入れてから 409 を投げると
+                // 挿入済みの行だけが残り、以降 GetByIdentityAsync が「登録を拒否した subject」に
+                // 解決してしまう（identity 側は衝突していないので EnsureIdentityAsync は成功する）。
+                var conflictingUser = await _userService.GetUnclaimedByExternalIdAsync(
+                    requestedExternalId, organizationId, issuerKey);
+                if (conflictingUser != null
+                    && !string.Equals(conflictingUser.Subject, user.Subject, StringComparison.Ordinal))
+                {
+                    // 例外メッセージはサーバーログに残るため、平文 external_id ではなくハッシュ値を含める。
+                    throw new ExternalIdConflictException(
+                        $"ExternalId (hash '{requestedExternalIdHash}') is already used by another user in this organization.");
+                }
             }
 
-            // 先行チェック: 同一 Organization 内で他ユーザーが既にその external_id を使っていれば 409。
-            // ただし別の発行元が保有しているユーザーは「同一ハッシュの別人」として共存が正しいので
-            // 衝突とみなさない（(organization_id, external_id) の一意制約は EcAuthDocs#110 で外した）。
-            var conflictingUser = await _userService.GetUnclaimedByExternalIdAsync(
-                requestedExternalId, organizationId, issuerKey);
-            if (conflictingUser != null
-                && !string.Equals(conflictingUser.Subject, user.Subject, StringComparison.Ordinal))
+            // 正となる置き場（b2b_user_identity）を更新する。同一発行元で別人が保有していれば
+            // ここで ExternalIdConflictException が飛び、旧カラムには手を付けない。
+            // external_id が変わっていない場合も呼ぶ（移行前ユーザーの identity 行をこの機会に作る）。
+            await _userService.EnsureIdentityAsync(
+                user.Subject, issuerKey, requestedExternalId, issuerClientId);
+
+            if (!isExternalIdChanged)
             {
-                // 例外メッセージはサーバーログに残るため、平文 external_id ではなくハッシュ値を含める。
-                throw new ExternalIdConflictException(
-                    $"ExternalId (hash '{requestedExternalIdHash}') is already used by another user in this organization.");
+                return user;
             }
 
             // external_id の具体値は PII を含み得るため Information ログには含めない。
@@ -377,11 +408,17 @@ namespace IdentityProvider.Services
             catch (DbUpdateException ex)
             {
                 // DB 更新失敗の原因を実状態で再確認する。
-                // UNIQUE 制約違反（race で別ユーザーが同じ external_id を取得）なら 409 相当として
+                // race で別ユーザーが同じ external_id を取得していた場合は 409 相当として
                 // ExternalIdConflictException にラップするが、それ以外（タイムアウト、接続断、
                 // 別制約違反など 500 相当 / 再試行対象）の障害までは 409 に吸収せず元例外を再スローする。
                 // SQL エラーコード判定ではなく「現時点で別ユーザーが当該 external_id を保有しているか」で
                 // 判定することで、DB プロバイダー非依存に race condition を検出できる。
+                //
+                // 注: (organization_id, external_id) の一意制約は EcAuthDocs#110 で外したため、
+                //     旧カラムの重複を理由にこの経路へ来ることは無くなった。先行チェックと
+                //     UpdateAsync の間に別ユーザーが割り込む極めて狭い race のための保険として残す。
+                //     この経路では identity 行が既にコミット済みだが、その行は「今回同期しようとした
+                //     正しい対応」であり、後続の解決先も同じ user になるため矛盾は生じない。
                 var owner = await _userService.GetUnclaimedByExternalIdAsync(
                     requestedExternalId, organizationId, issuerKey);
                 if (owner != null

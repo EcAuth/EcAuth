@@ -205,7 +205,20 @@ namespace IdentityProvider.Services
         }
 
         /// <inheritdoc />
-        public async Task EnsureIdentityAsync(string subject, string issuerKey, string externalId, string? clientId)
+        public Task EnsureIdentityAsync(string subject, string issuerKey, string externalId, string? clientId)
+        {
+            if (string.IsNullOrWhiteSpace(externalId))
+            {
+                throw new ArgumentException("ExternalId は必須です。", nameof(externalId));
+            }
+
+            return EnsureIdentityByHashAsync(
+                subject, issuerKey, ExternalIdHasher.Hash(externalId), clientId);
+        }
+
+        /// <inheritdoc />
+        public async Task EnsureIdentityByHashAsync(
+            string subject, string issuerKey, string externalIdHash, string? clientId)
         {
             if (string.IsNullOrWhiteSpace(subject))
             {
@@ -217,12 +230,10 @@ namespace IdentityProvider.Services
                 throw new ArgumentException("IssuerKey は必須です。", nameof(issuerKey));
             }
 
-            if (string.IsNullOrWhiteSpace(externalId))
+            if (string.IsNullOrWhiteSpace(externalIdHash))
             {
-                throw new ArgumentException("ExternalId は必須です。", nameof(externalId));
+                throw new ArgumentException("ExternalIdHash は必須です。", nameof(externalIdHash));
             }
-
-            var externalIdHash = ExternalIdHasher.Hash(externalId);
 
             // 同一 (issuer_key, external_id) が既にあれば何もしない。EcAuthDocs#110 の決定により
             // 旧識別子は削除せず共存させるため、ここは insert-if-missing であって update ではない。

@@ -148,6 +148,20 @@ namespace IdentityProvider.Services
         Task EnsureIdentityAsync(string subject, string issuerKey, string externalId, string? clientId);
 
         /// <summary>
+        /// <see cref="EnsureIdentityAsync"/> のハッシュ値受け取り版。
+        ///
+        /// 呼び出し元が既に <see cref="ExternalIdHasher"/> 済みの値しか持たない場合に使う
+        /// （登録トークン経路は b2b_user.external_id をそのまま渡すため、平文が存在しない）。
+        /// 平文として再ハッシュすると SHA256(SHA256(...)) の偽識別子になる。
+        /// </summary>
+        /// <param name="subject">紐づける B2BUser の subject</param>
+        /// <param name="issuerKey">発行元識別子</param>
+        /// <param name="externalIdHash">正規化 + ハッシュ化済みの external_id</param>
+        /// <param name="clientId">Client 由来の発行元の場合の client_id（それ以外は null）</param>
+        Task EnsureIdentityByHashAsync(
+            string subject, string issuerKey, string externalIdHash, string? clientId);
+
+        /// <summary>
         /// B2Bユーザーを更新する
         /// </summary>
         /// <param name="request">更新リクエスト</param>

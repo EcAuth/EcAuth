@@ -143,6 +143,11 @@ namespace IdentityProvider.Migrations
             migrationBuilder.DropTable(
                 name: "b2b_user_identity");
 
+            // 索引は非一意のまま再作成する。UNIQUE へ戻すと、本機能が使われた後
+            //（同一 Organization に発行元の異なる同一 external_id が並んだ後）は重複キーで
+            // CREATE UNIQUE INDEX が失敗し、ロールバックしたい局面でこそ Down が通らない。
+            // 重複は identity 側で名前空間分離された正当なデータであり、機械的に潰せない。
+            // UNIQUE を復元する必要が生じた場合は、先に重複行を業務判断で整理すること。
             migrationBuilder.DropIndex(
                 name: "IX_b2b_user_organization_id_external_id",
                 table: "b2b_user");
@@ -150,8 +155,7 @@ namespace IdentityProvider.Migrations
             migrationBuilder.CreateIndex(
                 name: "IX_b2b_user_organization_id_external_id",
                 table: "b2b_user",
-                columns: new[] { "organization_id", "external_id" },
-                unique: true);
+                columns: new[] { "organization_id", "external_id" });
         }
     }
 }

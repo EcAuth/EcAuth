@@ -668,6 +668,98 @@ namespace IdentityProvider.Test.Services
             // 例外メッセージには平文ではなくハッシュ値が含まれる（PII をログに残さないため）。
             Assert.Contains(ExternalIdHasher.Hash("other-admin@example.com"), ex.Message);
             _mockUserService.Verify(x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()), Times.Never);
+
+            // 旧カラム側の衝突で 409 を返す場合、identity 行を作ってはならない。
+            // EnsureIdentityAsync は内部で即コミットするため、先に呼んでから 409 を投げると
+            // 挿入済みの行だけが残り、以降 GetByIdentityAsync が「登録を拒否した subject」へ
+            // 解決してしまう（identity 側は衝突していないので挿入自体は成功する）。
+            _mockUserService.Verify(
+                x => x.EnsureIdentityAsync(
+                    It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()),
+                Times.Never);
+        }
+
+        /// <summary>
+        /// 登録トークン経路の external_id は b2b_user 保存済みのハッシュ値そのもの。
+        /// 平文として再ハッシュすると SHA256(SHA256(email)) の偽 identity を作り、
+        /// 旧カラムもリクエストのたびに世代が進んでしまう。
+        /// </summary>
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_PreHashedExternalId_ShouldNotRehashOrSyncLegacyColumn()
+        {
+            var storedHash = ExternalIdHasher.Hash("admin@example.com");
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = storedHash,
+                ExternalIdIsPreHashed = true
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(_testUser);
+
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(new IWebAuthnChallengeService.ChallengeResult
+                {
+                    SessionId = "sess-prehashed",
+                    Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                    ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+                });
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert
+            Assert.Equal(TestB2BSubject, result.ResolvedSubject);
+
+            // 保存済みハッシュがそのまま identity になる（再ハッシュされない）
+            _mockUserService.Verify(
+                x => x.EnsureIdentityByHashAsync(
+                    TestB2BSubject, TestIssuerKey, storedHash, "test-client-id"),
+                Times.Once);
+
+            // 平文用の経路は使わない
+            _mockUserService.Verify(
+                x => x.EnsureIdentityAsync(
+                    It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()),
+                Times.Never);
+
+            // 旧カラムの同期は行わない（同期すべき変化が定義上存在しない）
+            _mockUserService.Verify(
+                x => x.UpdateAsync(It.IsAny<IB2BUserService.UpdateUserRequest>()), Times.Never);
+        }
+
+        /// <summary>
+        /// 登録トークンは既存 B2BUser から発行されるため subject は必ず引ける。
+        /// 引けない場合にフォールバック / JIT へ進むと、ハッシュ値を平文として扱った
+        /// 検索・作成をしてしまうため、明示的に失敗させる。
+        /// </summary>
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_PreHashedExternalId_SubjectMissing_ShouldThrow()
+        {
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = ExternalIdHasher.Hash("admin@example.com"),
+                ExternalIdIsPreHashed = true
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync((B2BUser?)null);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+
+            _mockUserService.Verify(
+                x => x.CreateAsync(It.IsAny<IB2BUserService.CreateUserRequest>()), Times.Never);
+            _mockUserService.Verify(
+                x => x.GetUnclaimedByExternalIdAsync(
+                    It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()),
+                Times.Never);
         }
 
         [Fact]
