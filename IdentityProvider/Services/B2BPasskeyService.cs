@@ -87,6 +87,12 @@ namespace IdentityProvider.Services
                 throw new ArgumentException("DisplayName must be 128 characters or less", nameof(request));
             if (request.DeviceName != null && request.DeviceName.Length > 128)
                 throw new ArgumentException("DeviceName must be 128 characters or less", nameof(request));
+            if (request.UserName != null && request.UserName.Length > 128)
+                throw new ArgumentException("UserName must be 128 characters or less", nameof(request));
+            // 空白のみは「未指定」として扱い、フォールバックさせる（user_name は external_id へ、
+            // display_name は user_name へ。旧プラグイン互換と同じ経路）。
+            var userName = string.IsNullOrWhiteSpace(request.UserName) ? null : request.UserName;
+            var displayName = string.IsNullOrWhiteSpace(request.DisplayName) ? null : request.DisplayName;
 
             // クライアント取得
             var client = await _context.Clients
@@ -125,7 +131,9 @@ namespace IdentityProvider.Services
 
                 if (externalId != null)
                 {
-                    // Subject が一致: 発行元における識別子を最新化する（EC-CUBE login_id 変更への追随）。
+                    // Subject が一致: 発行元における識別子を insert-if-missing で補完する。
+                    // プラグインが送る値が変わった場合（EcAuthDocs#110 の login_id → member_id 移行）は
+                    // 同一 subject の下に新旧の identity 行が共存する（旧行はフォールバック用に残す）。
                     // 登録トークン経路は identity が申込確定時に作成済みで、同期する平文も持たないため何もしない。
                     await EnsureIdentityAsync(user, externalId, issuerKey, issuerClientId);
                 }
@@ -145,7 +153,7 @@ namespace IdentityProvider.Services
                 user = await _userService.GetByIdentityAsync(issuerKey, externalId);
                 if (user != null)
                 {
-                    // external_id は login_id 等 PII を含み得るため Information ログには含めない
+                    // external_id は login_id / メールアドレス等 PII を含み得るため Information ログには含めない
                     _logger.LogInformation(
                         "Resolved B2BUser via ExternalId fallback: RequestedSubject={RequestedSubject}, ResolvedSubject={ResolvedSubject}, OrganizationId={OrganizationId}",
                         b2bSubject, user.Subject, user.OrganizationId);
@@ -240,15 +248,17 @@ namespace IdentityProvider.Services
                 });
 
             // Fido2ユーザー作成
-            // WebAuthn の name/displayName にはリクエスト由来の平文 external_id（login_id 等）を用いる
-            // （EcAuth はハッシュしか保持しないため DB から復元はできない）。external_id を受け取らない
-            // 登録トークン経路では subject を name に使う（不透明な識別子である点は従来と同じ）。
-            var webAuthnUserName = externalId ?? resolvedSubject;
+            // WebAuthn の user.name は認証器・パスキー管理画面に表示されるアカウント名なので、
+            // リクエスト由来の平文を使う（EcAuth はハッシュしか保持しないため DB から復元はできない）。
+            // 優先順位: user_name（EcAuthDocs#110 以降のプラグインが login_id を送る）
+            //   → external_id（user_name を送らない旧プラグイン。login_id がそのまま入っていた）
+            //   → subject（external_id を受け取らない登録トークン経路。不透明な識別子である点は従来と同じ）
+            var webAuthnUserName = userName ?? externalId ?? resolvedSubject;
             var fido2User = new Fido2User
             {
                 Id = Encoding.UTF8.GetBytes(resolvedSubject),
                 Name = webAuthnUserName,
-                DisplayName = request.DisplayName ?? webAuthnUserName
+                DisplayName = displayName ?? webAuthnUserName
             };
 
             // 認証器選択オプション
