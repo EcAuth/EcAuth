@@ -32,9 +32,19 @@ namespace IdentityProvider.Services
             public string B2BSubject { get; set; } = string.Empty;
 
             /// <summary>
-            /// ユーザー表示名
+            /// ユーザー表示名（WebAuthn の user.displayName）。省略時は <see cref="UserName"/>
+            /// （それも無ければ external_id）を用いる。
             /// </summary>
             public string? DisplayName { get; set; }
+
+            /// <summary>
+            /// WebAuthn の user.name（認証器・パスキー管理画面に表示されるアカウント名）。任意。
+            ///
+            /// EcAuthDocs#110 で external_id は不変キー（EC-CUBE の member_id 等）になり、
+            /// 人が読める値ではなくなった。表示用の値はこの項目で別に受け取り、省略時は
+            /// 従来どおり external_id を用いる（login_id を送る旧プラグインとの互換）。
+            /// </summary>
+            public string? UserName { get; set; }
 
             /// <summary>
             /// デバイス名（"MacBook Pro", "iPhone" 等）
@@ -42,8 +52,9 @@ namespace IdentityProvider.Services
             public string? DeviceName { get; set; }
 
             /// <summary>
-            /// 外部ID（EC-CUBEのlogin_id等）。client_secret 経路では必須。
-            /// 登録トークン経路（<see cref="ResolvedByRegistrationToken"/>）では null。
+            /// 外部ID（発行元アプリケーションにおける不変キー。EC-CUBE の member_id 等）。
+            /// client_secret 経路では必須。登録トークン経路（<see cref="ResolvedByRegistrationToken"/>）では null。
+            /// EcAuth は中身を解釈せず、正規化 + ハッシュ化して identity として保持する。
             /// </summary>
             public string? ExternalId { get; set; }
 

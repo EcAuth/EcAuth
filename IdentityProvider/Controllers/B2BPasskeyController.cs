@@ -84,6 +84,13 @@ namespace IdentityProvider.Controllers
             public string? DeviceName { get; set; }
             [JsonPropertyName("external_id")]
             public string ExternalId { get; set; } = string.Empty;
+            /// <summary>
+            /// WebAuthn の user.name（認証器・パスキー管理画面に表示されるアカウント名）。任意。
+            /// 省略時は external_id を用いる（旧プラグイン互換）。EcAuthDocs#110 で external_id が
+            /// 不変キー（EC-CUBE の member_id 等）になったため、表示名は別項目として受け取る。
+            /// </summary>
+            [JsonPropertyName("user_name")]
+            public string? UserName { get; set; }
         }
 
         /// <summary>
@@ -245,6 +252,7 @@ namespace IdentityProvider.Controllers
                     DisplayName = request.DisplayName,
                     DeviceName = request.DeviceName,
                     ExternalId = externalId,
+                    UserName = request.UserName,
                     ResolvedByRegistrationToken = resolvedByRegistrationToken
                 };
 

@@ -33,9 +33,18 @@ export interface RegisterParams {
   clientSecret: string;
   rpId: string;
   b2bSubject: string;
+  /** 発行元における不変キー（EC-CUBE プラグインは member_id）。EcAuth はハッシュ化して identity に保持する。 */
   externalId: string;
+  /** WebAuthn の user.name（認証器に表示されるアカウント名。EC-CUBE プラグインは login_id）。省略時は external_id。 */
+  userName?: string;
   displayName?: string;
   deviceName?: string;
+}
+
+/** register/options が返した WebAuthn の user（認証器に渡る表示名の検証用）。 */
+export interface RegisteredWebAuthnUser {
+  name: string;
+  displayName: string;
 }
 
 export interface AuthenticateParams {
@@ -72,12 +81,13 @@ async function postJson(
 }
 
 /**
- * パスキーを登録する。戻り値は register/verify のレスポンスボディ。
+ * パスキーを登録する。戻り値は register/verify のレスポンスボディに、
+ * register/options が返した WebAuthn の user（name / displayName）を添えたもの。
  */
 export async function registerB2BPasskey(
   ctx: B2BContext,
   params: RegisterParams
-): Promise<{ success: boolean; credential_id: string }> {
+): Promise<{ success: boolean; credential_id: string; user: RegisteredWebAuthnUser }> {
   const optionsBody = await postJson(
     ctx,
     '/v1/b2b/passkey/register/options',
@@ -87,6 +97,7 @@ export async function registerB2BPasskey(
       rp_id: params.rpId,
       b2b_subject: params.b2bSubject,
       external_id: params.externalId,
+      user_name: params.userName,
       display_name: params.displayName,
       device_name: params.deviceName,
     },
@@ -95,7 +106,7 @@ export async function registerB2BPasskey(
 
   const credential = await runCreateCeremony(ctx.page, optionsBody.options);
 
-  return (await postJson(
+  const verifyBody = (await postJson(
     ctx,
     '/v1/b2b/passkey/register/verify',
     {
@@ -107,6 +118,14 @@ export async function registerB2BPasskey(
     },
     'register/verify'
   )) as { success: boolean; credential_id: string };
+
+  return {
+    ...verifyBody,
+    user: {
+      name: optionsBody.options?.user?.name,
+      displayName: optionsBody.options?.user?.displayName,
+    },
+  };
 }
 
 /**

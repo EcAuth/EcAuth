@@ -168,6 +168,104 @@ namespace IdentityProvider.Test.Services
         }
 
         [Theory]
+        [InlineData(null, "admin")]
+        [InlineData("店舗管理者", "店舗管理者")]
+        public async Task CreateRegistrationOptionsAsync_UserName_UsesUserNameForWebAuthnUser(string? displayName, string expectedDisplayName)
+        {
+            // Arrange: EcAuthDocs#110 以降のプラグインは external_id に不変キー（EC-CUBE の member_id）、
+            // user_name に人が読める値（login_id）を送る。認証器・パスキー管理画面に表示される
+            // user.name は user_name であり、不変キーが表示に漏れないこと。
+            // displayName は display_name → user_name の順で決まる。
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = "1",
+                UserName = "admin",
+                DisplayName = displayName
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(_testUser);
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(new IWebAuthnChallengeService.ChallengeResult
+                {
+                    SessionId = "session-user-name",
+                    Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                    ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+                });
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert
+            Assert.Equal("admin", result.Options.User.Name);
+            Assert.Equal(expectedDisplayName, result.Options.User.DisplayName);
+            // identity の補完には external_id（不変キー）だけが使われ、user_name は識別に関与しない
+            _mockUserService.Verify(
+                x => x.EnsureIdentityAsync(TestB2BSubject, TestIssuerKey, "1", "test-client-id"),
+                Times.Once);
+            _mockUserService.Verify(
+                x => x.EnsureIdentityAsync(It.IsAny<string>(), It.IsAny<string>(), "admin", It.IsAny<string?>()),
+                Times.Never);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        public async Task CreateRegistrationOptionsAsync_UserNameOmitted_FallsBackToExternalId(string? userName)
+        {
+            // Arrange: user_name を送らない旧プラグイン（external_id に login_id が入る）との互換。
+            // 空白のみも未指定として扱う。
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = "admin",
+                UserName = userName
+            };
+
+            _mockUserService.Setup(x => x.GetBySubjectAsync(TestB2BSubject))
+                .ReturnsAsync(_testUser);
+            _mockChallengeService.Setup(x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()))
+                .ReturnsAsync(new IWebAuthnChallengeService.ChallengeResult
+                {
+                    SessionId = "session-user-name-fallback",
+                    Challenge = "dGVzdC1jaGFsbGVuZ2U",
+                    ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5)
+                });
+
+            // Act
+            var result = await _service.CreateRegistrationOptionsAsync(request);
+
+            // Assert
+            Assert.Equal("admin", result.Options.User.Name);
+            Assert.Equal("admin", result.Options.User.DisplayName);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_UserNameTooLong_ShouldThrowArgumentException()
+        {
+            // Arrange
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = TestB2BSubject,
+                ExternalId = "1",
+                UserName = new string('a', 129)
+            };
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+            Assert.Contains("UserName", ex.Message);
+        }
+
+        [Theory]
         [InlineData("")]
         [InlineData("   ")]
         public async Task CreateRegistrationOptionsAsync_EmptyClientId_ShouldThrowArgumentException(string clientId)

@@ -105,6 +105,42 @@ namespace IdentityProvider.Test.Controllers
         }
 
         [Fact]
+        public async Task RegisterOptions_UserName_IsPassedToServiceSeparatelyFromExternalId()
+        {
+            // Arrange: EcAuthDocs#110 以降のプラグインは external_id（不変キー）と user_name（表示名）を
+            // 別項目で送る。コントローラは両者を混同せずサービスへ渡すこと。
+            var client = await CreateTestClientAsync();
+
+            var request = new B2BPasskeyController.RegisterOptionsRequest
+            {
+                ClientId = client.ClientId,
+                ClientSecret = client.ClientSecret!,
+                RpId = "shop.example.com",
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                ExternalId = "1",
+                UserName = "admin"
+            };
+
+            RegistrationOptionsRequest? captured = null;
+            _mockPasskeyService.Setup(x => x.CreateRegistrationOptionsAsync(It.IsAny<RegistrationOptionsRequest>()))
+                .Callback<RegistrationOptionsRequest>(r => captured = r)
+                .ReturnsAsync(new RegistrationOptionsResult
+                {
+                    SessionId = "test-session-id",
+                    Options = CreateMockCredentialCreateOptions()
+                });
+
+            // Act
+            var result = await _controller.RegisterOptions(request);
+
+            // Assert
+            Assert.IsType<OkObjectResult>(result);
+            Assert.NotNull(captured);
+            Assert.Equal("1", captured!.ExternalId);
+            Assert.Equal("admin", captured.UserName);
+        }
+
+        [Fact]
         public async Task RegisterOptions_InvalidClientSecret_ReturnsUnauthorized()
         {
             // Arrange

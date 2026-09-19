@@ -207,12 +207,18 @@ test.describe.serial('申込で作られた Client での B2B パスキーログ
       rpId: registeredRpId,
       b2bSubject,
       externalId,
+      // EcAuthDocs#110: external_id は不変キー、user_name は認証器に表示するアカウント名。
+      // プラグインは前者に member_id、後者に login_id を送る。
+      userName: 'e2e-admin',
       displayName: 'E2E Admin',
       deviceName: 'E2E Test Device',
     });
 
     expect(result.success).toBe(true);
     expect(typeof result.credential_id).toBe('string');
+    // 認証器に渡る表示名は user_name / display_name であり、不変キー（external_id）が漏れないこと
+    expect(result.user.name).toBe('e2e-admin');
+    expect(result.user.displayName).toBe('E2E Admin');
   });
 
   test('登録済み redirect_uri のままパスキー認証が通り、認可コードが返る', async () => {
