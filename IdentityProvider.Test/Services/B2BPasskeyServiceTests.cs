@@ -169,13 +169,15 @@ namespace IdentityProvider.Test.Services
 
         [Theory]
         [InlineData(null, "admin")]
+        [InlineData("", "admin")]
+        [InlineData("   ", "admin")]
         [InlineData("店舗管理者", "店舗管理者")]
         public async Task CreateRegistrationOptionsAsync_UserName_UsesUserNameForWebAuthnUser(string? displayName, string expectedDisplayName)
         {
             // Arrange: EcAuthDocs#110 以降のプラグインは external_id に不変キー（EC-CUBE の member_id）、
             // user_name に人が読める値（login_id）を送る。認証器・パスキー管理画面に表示される
             // user.name は user_name であり、不変キーが表示に漏れないこと。
-            // displayName は display_name → user_name の順で決まる。
+            // displayName は display_name → user_name の順で決まる（空白のみは未指定扱い）。
             var request = new IB2BPasskeyService.RegistrationOptionsRequest
             {
                 ClientId = "test-client-id",

@@ -89,8 +89,10 @@ namespace IdentityProvider.Services
                 throw new ArgumentException("DeviceName must be 128 characters or less", nameof(request));
             if (request.UserName != null && request.UserName.Length > 128)
                 throw new ArgumentException("UserName must be 128 characters or less", nameof(request));
-            // 空白のみは「未指定」として扱い、external_id へフォールバックさせる（旧プラグイン互換と同じ経路）。
+            // 空白のみは「未指定」として扱い、フォールバックさせる（user_name は external_id へ、
+            // display_name は user_name へ。旧プラグイン互換と同じ経路）。
             var userName = string.IsNullOrWhiteSpace(request.UserName) ? null : request.UserName;
+            var displayName = string.IsNullOrWhiteSpace(request.DisplayName) ? null : request.DisplayName;
 
             // クライアント取得
             var client = await _context.Clients
@@ -256,7 +258,7 @@ namespace IdentityProvider.Services
             {
                 Id = Encoding.UTF8.GetBytes(resolvedSubject),
                 Name = webAuthnUserName,
-                DisplayName = request.DisplayName ?? webAuthnUserName
+                DisplayName = displayName ?? webAuthnUserName
             };
 
             // 認証器選択オプション
