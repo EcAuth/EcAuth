@@ -319,10 +319,15 @@ jobs:
           B2B_USER_SUBJECT: op://EcAuth/ecauth-staging-app/b2b_user_subject
           B2B_REDIRECT_URI: op://EcAuth/ecauth-staging-app/b2b_redirect_uri
           WEB_APP_SUFFIX: op://EcAuth/ecauth-staging-app/web_app_suffix
+          # B2C フェデレーション検証の redirect_uri。/v1/authorization が登録値と完全一致で
+          # 検証する（EcAuthDocs#100）ため、Terraform が DEFAULT_ORGANIZATION_REDIRECT_URI として
+          # 配線し OrganizationClientSeeder が client に登録するのと同じフィールドを渡す。
+          REDIRECT_URI: op://EcAuth/ecauth-staging-app/redirect_uri
 
       - name: Federation authentication verification
         id: federation_verify
         env:
+          ECAUTH_REDIRECT_URI: ${{ env.REDIRECT_URI }}
           ECAUTH_BASE_URL: https://ecauth-staging-${{ env.WEB_APP_SUFFIX }}.azurewebsites.net
         run: ./.github/scripts/verify-federation-auth.sh
 

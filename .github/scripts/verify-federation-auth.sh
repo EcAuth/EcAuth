@@ -11,6 +11,11 @@
 #   MOCK_IDP_PROVIDER_NAME - MockIdP のプロバイダー名
 #
 # オプション環境変数:
+#   ECAUTH_REDIRECT_URI - 認可リクエスト / トークン交換に使う redirect_uri。
+#                         /v1/authorization は client に登録済みの RedirectUris と完全一致で検証する
+#                         （EcAuthDocs#100）ため、対象環境の client に登録された値を渡すこと。
+#                         既定は ${ECAUTH_BASE_URL}/v1/auth/callback（OrganizationClientSeeder が
+#                         DEFAULT_ORGANIZATION_REDIRECT_URI から登録する、EcAuth 自身のコールバック URL）。
 #   GITHUB_OUTPUT    - GitHub Actions の output ファイル（設定されていれば出力を書き込む）
 #   GITHUB_STEP_SUMMARY - GitHub Actions の step summary ファイル
 #
@@ -135,9 +140,15 @@ main() {
   CODE_VERIFIER=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
   CODE_CHALLENGE=$(printf '%s' "$CODE_VERIFIER" | openssl dgst -sha256 -binary | openssl base64 | tr '+/' '-_' | tr -d '=')
 
+  # redirect_uri は client の登録値と完全一致でなければ /v1/authorization で 400 になる。
+  # 以前ここにあった https://localhost:8081/v1/auth/callback の固定値は、検証が無かった頃の名残で
+  # staging / 本番の client には登録されていない（EcAuth#546 の staging verify で判明）。
+  REDIRECT_URI="${ECAUTH_REDIRECT_URI:-${ECAUTH_BASE_URL}/v1/auth/callback}"
+  REDIRECT_URI_ENCODED=$(jq -rn --arg v "$REDIRECT_URI" '$v | @uri')
+
   # Step 1: EcAuth 認可エンドポイント
   log_step "Step 1: EcAuth 認可エンドポイント"
-  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/v1/authorization?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Flocalhost%3A8081%2Fv1%2Fauth%2Fcallback&response_type=code&scope=openid%20profile%20email&provider_name=${MOCK_IDP_PROVIDER_NAME}&state=test123&code_challenge=${CODE_CHALLENGE}&code_challenge_method=S256" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+  MOCKIDP_URL=$(curl -s -i "${ECAUTH_BASE_URL}/v1/authorization?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI_ENCODED}&response_type=code&scope=openid%20profile%20email&provider_name=${MOCK_IDP_PROVIDER_NAME}&state=test123&code_challenge=${CODE_CHALLENGE}&code_challenge_method=S256" 2>/dev/null | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
 
   if [ -z "$MOCKIDP_URL" ]; then
     log_error "Failed to get MockIdP redirect URL"
@@ -202,7 +213,7 @@ main() {
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=authorization_code" \
     -d "code=${ECAUTH_CODE}" \
-    -d "redirect_uri=https://localhost:8081/v1/auth/callback" \
+    --data-urlencode "redirect_uri=${REDIRECT_URI}" \
     -d "client_id=${CLIENT_ID}" \
     -d "client_secret=${CLIENT_SECRET}" \
     -d "code_verifier=${CODE_VERIFIER}")
