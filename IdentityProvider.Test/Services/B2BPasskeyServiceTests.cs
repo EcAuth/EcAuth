@@ -859,11 +859,12 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
-        public async Task CreateRegistrationOptionsAsync_SubjectHit_UserBelongsToDifferentOrganization_ThrowsInvalidOperation()
+        public async Task CreateRegistrationOptionsAsync_SubjectHit_UserBelongsToDifferentOrganization_ThrowsSubjectConflict()
         {
             // Arrange: B2BUser の QueryFilter は TenantName ベースなので、
             // 同一テナント内の別 Organization の subject が GetBySubjectAsync で返り得る。
             // このクロス組織ケースで external_id の自動同期や credential 発行を許してはならない。
+            // 別テナントに存在するケース（JIT の一意制約違反経由）と同じ SubjectConflictException（409）で返す。
             var crossOrgUser = new B2BUser
             {
                 Id = 999,
@@ -891,7 +892,7 @@ namespace IdentityProvider.Test.Services
                 .ReturnsAsync(crossOrgUser);
 
             // Act & Assert
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var ex = await Assert.ThrowsAsync<SubjectConflictException>(() =>
                 _service.CreateRegistrationOptionsAsync(request));
             Assert.Contains("not associated with this client's organization", ex.Message);
 
@@ -1075,6 +1076,61 @@ namespace IdentityProvider.Test.Services
                 _service.CreateRegistrationOptionsAsync(request));
             Assert.Contains("Failed to create or retrieve B2BUser", ex.Message);
             Assert.Same(transientError, ex.InnerException);
+        }
+
+        [Fact]
+        public async Task CreateRegistrationOptionsAsync_JitFailsBecauseSubjectExistsInAnotherTenant_ThrowsSubjectConflict()
+        {
+            // Arrange（EcAuth#505 の本番事例）: subject が別テナントの Organization に既に存在する。
+            // B2BUser.Subject はグローバル一意なので CreateAsync は一意制約違反で失敗し、
+            // 再取得（テナントフィルター配下）でも identity でも引けない。並行リクエストではないので
+            // 「Failed to create or retrieve」ではなく、原因の分かる SubjectConflictException で返す。
+            var contestedSubject = "bb0e8400-e29b-41d4-a716-446655440099";
+            var otherTenantOrg = new Organization
+            {
+                Id = 777,
+                Code = "other-tenant-org",
+                Name = "別テナントの組織",
+                TenantName = "other-tenant"
+            };
+            _context.Organizations.Add(otherTenantOrg);
+            _context.B2BUsers.Add(new B2BUser
+            {
+                Id = 70,
+                Subject = contestedSubject,
+                UserType = "admin",
+                OrganizationId = otherTenantOrg.Id,
+                Organization = otherTenantOrg
+            });
+            await _context.SaveChangesAsync();
+
+            var request = new IB2BPasskeyService.RegistrationOptionsRequest
+            {
+                ClientId = "test-client-id",
+                RpId = "shop.example.com",
+                B2BSubject = contestedSubject,
+                ExternalId = "moved-to-production@example.com"
+            };
+
+            // テナントフィルター配下の取得は（別テナントなので）どちらも null
+            _mockUserService.Setup(x => x.GetBySubjectAsync(contestedSubject))
+                .ReturnsAsync((B2BUser?)null);
+            _mockUserService.Setup(x => x.GetByIdentityAsync(TestIssuerKey, "moved-to-production@example.com"))
+                .ReturnsAsync((B2BUser?)null);
+
+            var uniqueViolation = new DbUpdateException("AK_b2b_user_subject violated", new Exception("inner"));
+            _mockUserService.Setup(x => x.CreateAsync(It.IsAny<IB2BUserService.CreateUserRequest>()))
+                .ThrowsAsync(uniqueViolation);
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<SubjectConflictException>(() =>
+                _service.CreateRegistrationOptionsAsync(request));
+            Assert.Same(uniqueViolation, ex.InnerException);
+
+            // credential 発行（チャレンジ生成）まで進まないこと
+            _mockChallengeService.Verify(
+                x => x.GenerateChallengeAsync(It.IsAny<IWebAuthnChallengeService.ChallengeRequest>()),
+                Times.Never);
         }
 
         [Fact]

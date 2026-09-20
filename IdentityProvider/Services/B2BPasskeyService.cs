@@ -198,10 +198,27 @@ namespace IdentityProvider.Services
                         if (user == null)
                         {
                             user = await _userService.GetByIdentityAsync(issuerKey, externalId);
-                            subjectResolution = user != null
-                                ? IB2BPasskeyService.SubjectResolutions.FallbackByExternalId
-                                : throw new InvalidOperationException(
+                            if (user != null)
+                            {
+                                subjectResolution = IB2BPasskeyService.SubjectResolutions.FallbackByExternalId;
+                            }
+                            else if (await SubjectExistsInAnyOrganizationAsync(b2bSubject))
+                            {
+                                // 並行リクエストではなく、subject が別テナントの Organization に既に存在する
+                                // （Subject はグローバル一意、再取得はテナントフィルター配下なので見つからない）。
+                                // 実運用ではテスト用テナントで登録した後に本番 client_id へ差し替えた
+                                // ケースが大半（EcAuth#505）。原因が分かる専用エラーで返す。
+                                _logger.LogWarning(
+                                    "B2BSubject already exists in another organization: Subject={Subject}, ClientOrganizationId={ClientOrganizationId}",
+                                    b2bSubject, client.OrganizationId);
+                                throw new SubjectConflictException(
+                                    "B2BSubject already exists in another organization.", ex);
+                            }
+                            else
+                            {
+                                throw new InvalidOperationException(
                                     $"Failed to create or retrieve B2BUser: {b2bSubject}", ex);
+                            }
                         }
                         else
                         {
@@ -310,6 +327,17 @@ namespace IdentityProvider.Services
         /// subject がヒットする可能性があり、それを許すと cross-organization 書き換えに繋がるため遮断する。
         /// ログ・例外メッセージには requestedSubject の値を含めない（別組織 subject の存在有無を漏らさないため）。
         /// </summary>
+        /// <summary>
+        /// subject が（テナントを問わず）いずれかの Organization に存在するかを返す。
+        /// JIT の一意制約違反が「並行リクエスト」か「別テナントに既存」かを切り分けるための読み取り専用プローブ。
+        /// </summary>
+        private Task<bool> SubjectExistsInAnyOrganizationAsync(string b2bSubject)
+        {
+            return _context.B2BUsers
+                .IgnoreQueryFilters()
+                .AnyAsync(u => u.Subject == b2bSubject);
+        }
+
         private void EnsureUserBelongsToClientOrganization(B2BUser user, int clientOrganizationId, string requestedSubject)
         {
             if (user.OrganizationId == clientOrganizationId)
@@ -321,7 +349,10 @@ namespace IdentityProvider.Services
                 "B2BSubject does not belong to the client's organization. ClientOrganizationId={ClientOrganizationId}, UserOrganizationId={UserOrganizationId}",
                 clientOrganizationId, user.OrganizationId);
 
-            throw new InvalidOperationException("B2BSubject is not associated with this client's organization.");
+            // 同一テナント内の別 Organization に存在する場合。別テナントに存在する場合（JIT の
+            // 一意制約違反経由）と同じ 409 subject_conflict に揃え、プラグイン側の対処
+            //（ecauth_subject のクリア）を一本化する。
+            throw new SubjectConflictException("B2BSubject is not associated with this client's organization.");
         }
 
         /// <summary>
