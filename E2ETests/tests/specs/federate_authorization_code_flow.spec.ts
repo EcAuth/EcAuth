@@ -348,6 +348,61 @@ test.describe.serial('認可コードフローフェデレーションのテス�
     expect(body.token_type).toBe('Bearer');
   });
 
+  test('同じ認可コードの並行トークン交換は 1 件だけ成功します（Compare-And-Set）', async ({ browser }) => {
+    // EcAuth#461: 認可コードの使用済みマーキングは「未使用かつ未期限切れ」を条件にした
+    // アトミック UPDATE（AuthorizationCodeService.TryMarkAsUsedAsync）。ユニットテストは
+    // InMemory のため逐次の単発使用しか検証できず、原子性は実 DB でしか担保できない。
+    // 同じ code を複数本同時に /v1/token へ投げ、200 がちょうど 1 件、残りが invalid_grant で
+    // トークンを発行しないことを検証する。TokenController 手順 7 の事前チェック（IsUsed 読み取り）を
+    // すり抜けた要求が CAS で弾かれる（サーバーログ "lost the mark-as-used race"）ことをローカルで確認済み。
+    // CAS を read-then-write に戻すと、その要求が二重交換に成功して複数 200 になりうる。
+    const { codeVerifier, codeChallenge } = generatePkcePair();
+    const code = await obtainAuthorizationCode(browser, {
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+    });
+
+    // 1 つの APIRequestContext は接続を共有して要求が直列化されやすいため、コンテキストを分けて
+    // 別コネクションから同時に投げる。
+    const parallelism = 10;
+    const tokenRequests = await Promise.all(
+      Array.from({ length: parallelism }, () => request.newContext({ ignoreHTTPSErrors: true }))
+    );
+    try {
+      const responses = await Promise.all(
+        tokenRequests.map((tokenRequest) =>
+          tokenRequest.post(tokenEndpoint, {
+            form: {
+              client_id: clientId,
+              client_secret: clientSecret,
+              code,
+              scope: scopes,
+              redirect_uri: redirectUri,
+              grant_type: 'authorization_code',
+              code_verifier: codeVerifier,
+            },
+          })
+        )
+      );
+      const results = await Promise.all(
+        responses.map(async (r) => ({ status: r.status(), body: await r.json() }))
+      );
+
+      const winners = results.filter((r) => r.status === 200);
+      const losers = results.filter((r) => r.status !== 200);
+      expect(winners, JSON.stringify(results.map((r) => r.status))).toHaveLength(1);
+      expect(winners[0].body.access_token).toBeTruthy();
+      expect(losers).toHaveLength(parallelism - 1);
+      for (const loser of losers) {
+        expect(loser.status).toBe(400);
+        expect(loser.body.error).toBe('invalid_grant');
+        expect(loser.body.access_token).toBeUndefined();
+      }
+    } finally {
+      await Promise.all(tokenRequests.map((tokenRequest) => tokenRequest.dispose()));
+    }
+  });
+
   test('PKCE ありで code_verifier が一致しない場合は invalid_grant を返します', async ({ browser }) => {
     const { codeChallenge } = generatePkcePair();
 
