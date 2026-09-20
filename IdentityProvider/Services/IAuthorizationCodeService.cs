@@ -46,7 +46,10 @@ namespace IdentityProvider.Services
         Task<AuthorizationCode?> GetAuthorizationCodeAsync(string code);
 
         /// <summary>
-        /// 認可コードを使用済みにマークする
+        /// 認可コードを使用済みにマークする（Compare-And-Set）。
+        /// 「未使用かつ未期限切れ」の行だけをアトミックに更新し、更新できたときのみ true を返す。
+        /// false のときは未存在・使用済み・期限切れ・並行交換に負けた のいずれかで、呼び出し側は
+        /// トークンを発行してはならない。
         /// </summary>
         Task<bool> MarkAsUsedAsync(string code);
 

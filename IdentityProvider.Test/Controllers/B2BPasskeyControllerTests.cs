@@ -331,6 +331,45 @@ namespace IdentityProvider.Test.Controllers
         }
 
         [Fact]
+        public async Task RegisterOptions_SubjectConflict_Returns409Conflict()
+        {
+            // Arrange（EcAuth#505）: subject が別 Organization に既に存在する
+            var client = await CreateTestClientAsync();
+
+            var request = new B2BPasskeyController.RegisterOptionsRequest
+            {
+                ClientId = client.ClientId,
+                ClientSecret = client.ClientSecret!,
+                RpId = "shop.example.com",
+                B2BSubject = "550e8400-e29b-41d4-a716-446655440000",
+                ExternalId = "admin@example.com"
+            };
+
+            _mockPasskeyService.Setup(x => x.CreateRegistrationOptionsAsync(It.IsAny<RegistrationOptionsRequest>()))
+                .ThrowsAsync(new SubjectConflictException(
+                    "B2BSubject already exists in another organization."));
+
+            // Act
+            var result = await _controller.RegisterOptions(request);
+
+            // Assert
+            var conflictResult = Assert.IsType<ConflictObjectResult>(result);
+            Assert.Equal(409, conflictResult.StatusCode);
+
+            var response = conflictResult.Value;
+            Assert.NotNull(response);
+
+            var error = response.GetType().GetProperty("error")?.GetValue(response);
+            Assert.Equal("subject_conflict", error);
+
+            // どの Organization に存在するかは含めず、プラグイン側の対処（ecauth_subject のクリア）を案内する固定文言
+            var errorDescription = response.GetType().GetProperty("error_description")?.GetValue(response) as string;
+            Assert.NotNull(errorDescription);
+            Assert.Contains("ecauth_subject", errorDescription);
+            Assert.DoesNotContain("organization", errorDescription, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public async Task RegisterOptions_MissingExternalId_ReturnsBadRequest()
         {
             // Arrange

@@ -217,6 +217,8 @@ E2E でこれを一体にして「ブラウザから直接 API を叩く」と�
 #### `redirect_uri` / `rp_id` をテスト側で組み立てない
 
 `authenticate/verify` の `redirect_uri` は登録値と**完全一致**で検証される（`Controllers/B2BPasskeyController.cs`）。
+B2C の `/v1/authorization` も同じく登録済み `RedirectUris` と完全一致で検証し、不一致は State に封緘する前に
+400 で返す（`Controllers/AuthorizationController.cs`、EcAuthDocs#100）。
 テストで期待値を組み立てると「申込が登録した初期値」と「プラグインが送る値」のズレ（EcAuth#481 の本体）が
 検出できない。`GET /v1/account/clients` で取得した登録済みの値をそのまま使うこと。
 
@@ -227,6 +229,16 @@ E2E でこれを一体にして「ブラウザから直接 API を叩く」と�
 テナント名として扱うのは **3 セグメント以上**のときだけなので、`e2e-{RUN}.test` の 2 セグメントに
 保てば既定テナントに解決される。Playwright 側は `playwright.config.ts` の
 `--host-resolver-rules` に `MAP *.test 127.0.0.1` を入れて解決させる。
+
+#### IdP を叩くホスト名は `AllowedHosts` にも載せる
+
+`Host` ヘッダは `appsettings*.json` の `AllowedHosts` で許可リスト制（EcAuthDocs#102。`*` だと任意の
+`Host` で discovery の `issuer` / `jwks_uri` が攻撃者ドメインに書き換わる）。本番は `*.ec-auth.io`、
+Development は `localhost` / `127.0.0.1` / `ec-auth.io` / `*.ec-auth.io` / `*.test`。App Service の既定ホスト
+（`{app}.azurewebsites.net`）は `WEBSITE_HOSTNAME` から `Security/HostFilteringSetup.cs` が補完する
+（health check と staging の verify がこのホストで来るため。Terraform / CI には配線しない）。
+E2E で新しいホスト名の IdP を開くときは `--host-resolver-rules` と併せて
+`appsettings.Development.json` の `AllowedHosts` にも足すこと。漏れると 400 で落ちる。
 
 #### 申込が作る Organization と組織コードの導出
 

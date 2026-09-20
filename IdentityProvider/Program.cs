@@ -6,9 +6,11 @@ using IdentityProvider.Data.Seeders;
 using IdentityProvider.Filters;
 using IdentityProvider.Middlewares;
 using IdentityProvider.Models;
+using IdentityProvider.Security;
 using IdentityProvider.Services;
 using Asp.Versioning;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
+using Microsoft.AspNetCore.HostFiltering;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry;
@@ -50,6 +52,12 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
 });
+// Host ヘッダの許可リスト（EcAuthDocs#102）。基本は appsettings の AllowedHosts
+//（本番: *.ec-auth.io、Development: localhost 等）で、App Service の既定ホスト
+//（WEBSITE_HOSTNAME）だけはコードで補完する。詳細は HostFilteringSetup を参照。
+builder.Services.PostConfigure<HostFilteringOptions>(options =>
+    HostFilteringSetup.AddWebsiteHostname(options, builder.Configuration));
+
 builder.Services.AddScoped<IIssuerResolver, IssuerResolver>();
 builder.Services.AddScoped<ITenantService, TenantService>();
 builder.Services.AddScoped<IUserService, UserService>();
@@ -92,7 +100,7 @@ builder.Services.Configure<MagicLinkOptions>(
     builder.Configuration.GetSection(MagicLinkOptions.SectionName));
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
 builder.Services.AddScoped<IPasskeyRegistrationTokenService, PasskeyRegistrationTokenService>();
-// 期限切れトークンの日次クリーンアップ（既定の保持期間 7 日）
+// 期限切れトークン（マジックリンク / パスキー登録トークン）の日次クリーンアップ（既定の保持期間 7 日）
 builder.Services.AddHostedService<MagicLinkCleanupService>();
 
 // client_secret 等の保存時暗号化（EcAuthDocs#106）。

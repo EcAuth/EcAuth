@@ -17,7 +17,8 @@ namespace IdentityProvider.Test.Services
         {
             _context = TestDbContextHelper.CreateInMemoryContext();
             _mockLogger = new Mock<ILogger<AuthorizationCodeService>>();
-            _service = new AuthorizationCodeService(_context, _mockLogger.Object);
+            // MarkAsUsedAsync の CAS（ExecuteUpdate）は InMemory 非対応のため、逐次版に差し替えたサブクラスで検証する
+            _service = new TestableAuthorizationCodeService(_context, _mockLogger.Object);
 
             // テスト用のテナントとクライアントをセットアップ
             SetupTestData();
@@ -294,6 +295,46 @@ namespace IdentityProvider.Test.Services
 
             // Assert
             Assert.False(result);
+        }
+
+        [Fact]
+        public async Task MarkAsUsedAsync_ExpiredCode_ReturnsFalseAndLeavesUnused()
+        {
+            // CAS の条件は「未使用かつ未期限切れ」。期限切れは使用済みにもしない
+            var authorizationCode = new AuthorizationCode
+            {
+                Code = "expired-code",
+                Subject = "test-subject",
+                ClientId = 1,
+                RedirectUri = "https://example.com/callback",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+                IsUsed = false,
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-11)
+            };
+            _context.AuthorizationCodes.Add(authorizationCode);
+            await _context.SaveChangesAsync();
+
+            var result = await _service.MarkAsUsedAsync("expired-code");
+
+            Assert.False(result);
+            var stored = await _context.AuthorizationCodes.FirstAsync(ac => ac.Code == "expired-code");
+            Assert.False(stored.IsUsed);
+            Assert.Null(stored.UsedAt);
+        }
+
+        [Fact]
+        public async Task MarkAsUsedAsync_SecondCallOnSameCode_ReturnsFalse()
+        {
+            // 単発使用の契約: 1 回目だけ true、2 回目以降は false（並行交換に負けた側と同じ経路）
+            var generated = await _service.GenerateAuthorizationCodeAsync(new IAuthorizationCodeService.AuthorizationCodeRequest
+            {
+                Subject = "test-subject",
+                ClientId = 1,
+                RedirectUri = "https://example.com/callback"
+            });
+
+            Assert.True(await _service.MarkAsUsedAsync(generated.Code));
+            Assert.False(await _service.MarkAsUsedAsync(generated.Code));
         }
 
         [Fact]

@@ -294,6 +294,18 @@ namespace IdentityProvider.Controllers
                     error_description = "The requested external_id is already associated with another user in this organization."
                 });
             }
+            catch (SubjectConflictException ex)
+            {
+                // 要求された subject が別の Organization に既に存在する（EcAuth#505）。
+                // どの Organization かは漏らさず、プラグイン側の対処（EC-CUBE の ecauth_subject を
+                // クリアして再登録）だけを案内する固定文言にする。サポート初動で本番ログを引かずに済むようにするため。
+                _logger.LogWarning("Subject conflict in RegisterOptions: {Message}", ex.Message);
+                return Conflict(new
+                {
+                    error = "subject_conflict",
+                    error_description = "この subject は既に別の環境で登録されています。EC-CUBE 側の ecauth_subject をクリアしてから登録し直してください。"
+                });
+            }
             catch (ArgumentException ex)
             {
                 _logger.LogWarning("Validation error in RegisterOptions: {Message}", ex.Message);

@@ -498,12 +498,53 @@ namespace IdentityProvider.Test.Data.Seeders
         }
 
         [Fact]
-        public async Task SeedAsync_WithoutRedirectUri_ShouldSkipRedirectUri()
+        public async Task SeedAsync_WithoutPrefixedRedirectUri_FallsBackToDefaultOrganizationRedirectUri()
         {
-            // Arrange
+            // Arrange: ローカル / CI の実配線は DEFAULT_REDIRECT_URI を持たず、
+            // DEFAULT_ORGANIZATION_REDIRECT_URI（controllers が外部 IdP に渡す自身のコールバック）だけを持つ
+            const string fallbackUri = "https://localhost:8081/v1/auth/callback";
             var configuration = CreateDevConfiguration(new Dictionary<string, string?>
             {
-                ["DEFAULT_REDIRECT_URI"] = null
+                ["DEFAULT_REDIRECT_URI"] = null,
+                ["DEFAULT_ORGANIZATION_REDIRECT_URI"] = fallbackUri
+            });
+
+            // Act
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert
+            var client = await _context.Clients.IgnoreQueryFilters().FirstAsync(c => c.ClientId == TestClientId);
+            var exists = await _context.RedirectUris
+                .IgnoreQueryFilters()
+                .AnyAsync(r => r.Uri == fallbackUri && r.ClientId == client.Id);
+            Assert.True(exists);
+        }
+
+        [Fact]
+        public async Task SeedAsync_WithBothRedirectUris_PrefersPrefixedValue()
+        {
+            // Arrange: 明示の {prefix}_REDIRECT_URI があればそちらを使う（本番 / staging の配線）
+            var configuration = CreateDevConfiguration(new Dictionary<string, string?>
+            {
+                ["DEFAULT_ORGANIZATION_REDIRECT_URI"] = "https://fallback.example.com/callback"
+            });
+
+            // Act
+            await _seeder.SeedAsync(_context, configuration, _mockLogger.Object);
+
+            // Assert
+            var uris = await _context.RedirectUris.IgnoreQueryFilters().Select(r => r.Uri).ToListAsync();
+            Assert.Equal(new[] { TestRedirectUri }, uris);
+        }
+
+        [Fact]
+        public async Task SeedAsync_WithoutRedirectUri_ShouldSkipRedirectUri()
+        {
+            // Arrange: {prefix}_REDIRECT_URI も DEFAULT_ORGANIZATION_REDIRECT_URI も無い
+            var configuration = CreateDevConfiguration(new Dictionary<string, string?>
+            {
+                ["DEFAULT_REDIRECT_URI"] = null,
+                ["DEFAULT_ORGANIZATION_REDIRECT_URI"] = null
             });
 
             // Act

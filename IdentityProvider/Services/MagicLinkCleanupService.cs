@@ -5,8 +5,14 @@ using Microsoft.Extensions.Options;
 namespace IdentityProvider.Services
 {
     /// <summary>
-    /// 期限切れ・使用済みのマジックリンクトークンを日次で削除するバックグラウンドサービス。
-    /// 保持期間（7 日）を過ぎた <see cref="MagicLoginToken"/> を <c>ExecuteDelete</c> で一括削除する。
+    /// 期限切れ・使用済みの短命トークンを日次で削除するバックグラウンドサービス。
+    /// 保持期間（7 日）を過ぎた <see cref="MagicLoginToken"/> と <see cref="PasskeyRegistrationToken"/> を
+    /// <c>ExecuteDelete</c> で一括削除する。
+    /// <para>
+    /// <see cref="PasskeyRegistrationToken"/>（有効期限 30 分・一回限り）は申込のたびに行が増えるが
+    /// 保持し続ける理由が無いため、同じ保持期間で一緒に掃除する（EcAuth#462）。
+    /// 保存はハッシュのみで平文は無いが、期限切れ行の残存は失効済みトークンの照合対象を増やすだけ。
+    /// </para>
     /// <para>
     /// <see cref="BackgroundService"/> は singleton のため、scoped な <see cref="EcAuthDbContext"/> は
     /// <see cref="IServiceScopeFactory"/> でリクエストスコープを作って解決する。
@@ -50,7 +56,7 @@ namespace IdentityProvider.Services
                 catch (Exception ex)
                 {
                     // クリーンアップの失敗はサービス継続を妨げない（次回実行で再試行）。
-                    _logger.LogError(ex, "マジックリンクトークンのクリーンアップに失敗しました。");
+                    _logger.LogError(ex, "期限切れトークンのクリーンアップに失敗しました。");
                 }
             }
             while (await timer.WaitForNextTickAsync(stoppingToken));
@@ -71,6 +77,19 @@ namespace IdentityProvider.Services
                 _logger.LogInformation(
                     "期限切れマジックリンクトークンを {Count} 件削除しました（保持期間: {RetentionDays} 日）。",
                     deleted, _retention.TotalDays);
+            }
+
+            // PasskeyRegistrationToken にはテナントのクエリフィルターが無い（token_hash でテナント横断に
+            // 照合するため）ので、全テナント分がここでまとめて消える。
+            var deletedRegistrationTokens = await context.PasskeyRegistrationTokens
+                .Where(t => t.CreatedAt < cutoff)
+                .ExecuteDeleteAsync(ct);
+
+            if (deletedRegistrationTokens > 0)
+            {
+                _logger.LogInformation(
+                    "期限切れパスキー登録トークンを {Count} 件削除しました（保持期間: {RetentionDays} 日）。",
+                    deletedRegistrationTokens, _retention.TotalDays);
             }
         }
     }
