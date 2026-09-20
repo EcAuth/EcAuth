@@ -230,6 +230,16 @@ B2C の `/v1/authorization` も同じく登録済み `RedirectUris` と完全一
 保てば既定テナントに解決される。Playwright 側は `playwright.config.ts` の
 `--host-resolver-rules` に `MAP *.test 127.0.0.1` を入れて解決させる。
 
+#### IdP を叩くホスト名は `AllowedHosts` にも載せる
+
+`Host` ヘッダは `appsettings*.json` の `AllowedHosts` で許可リスト制（EcAuthDocs#102。`*` だと任意の
+`Host` で discovery の `issuer` / `jwks_uri` が攻撃者ドメインに書き換わる）。本番は `*.ec-auth.io`、
+Development は `localhost` / `127.0.0.1` / `ec-auth.io` / `*.ec-auth.io` / `*.test`。App Service の既定ホスト
+（`{app}.azurewebsites.net`）は `WEBSITE_HOSTNAME` から `Security/HostFilteringSetup.cs` が補完する
+（health check と staging の verify がこのホストで来るため。Terraform / CI には配線しない）。
+E2E で新しいホスト名の IdP を開くときは `--host-resolver-rules` と併せて
+`appsettings.Development.json` の `AllowedHosts` にも足すこと。漏れると 400 で落ちる。
+
 #### 申込が作る Organization と組織コードの導出
 
 申込は入力された URL ごとに独立した Organization を作る（最大 2 件）。組織コードは
