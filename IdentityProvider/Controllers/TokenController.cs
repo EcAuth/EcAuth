@@ -29,6 +29,7 @@ namespace IdentityProvider.Controllers
         private readonly IUserService _userService;
         private readonly IB2BUserService _b2bUserService;
         private readonly IAccountService _accountService;
+        private readonly IAuthorizationCodeService _authorizationCodeService;
         private readonly ILogger<TokenController> _logger;
         private readonly IConfiguration _configuration;
         private readonly ISecretProtector _secretProtector;
@@ -40,11 +41,13 @@ namespace IdentityProvider.Controllers
             IUserService userService,
             IB2BUserService b2bUserService,
             IAccountService accountService,
+            IAuthorizationCodeService authorizationCodeService,
             ILogger<TokenController> logger,
             IConfiguration configuration,
             ISecretProtector secretProtector)
         {
             _context = context;
+            _authorizationCodeService = authorizationCodeService;
             _environment = environment;
             _tokenService = tokenService;
             _userService = userService;
@@ -289,12 +292,24 @@ namespace IdentityProvider.Controllers
                     });
                 }
 
-                // 10. 認可コードを使用済みにマーキング
-                authorizationCode.IsUsed = true;
-                authorizationCode.UsedAt = DateTimeOffset.UtcNow;
+                // 10. 認可コードを使用済みにマーキング（Compare-And-Set、EcAuth#461）
+                // 手順 7 の IsUsed 読み取りからここまでの間に並行リクエストが同じコードを交換しうる。
+                // 「未使用かつ未期限切れ」を条件にしたアトミック UPDATE で、影響行数 1 のときだけ
+                // トークン発行へ進む。手順 7 は分かりやすいエラーを早く返すための事前チェックで、
+                // 単発使用の保証はここが担う。
+                bool marked;
                 using (TimingScope.Begin("auth_code_mark_used"))
                 {
-                    await _context.SaveChangesAsync();
+                    marked = await _authorizationCodeService.MarkAsUsedAsync(code);
+                }
+                if (!marked)
+                {
+                    _logger.LogWarning("Authorization code lost the mark-as-used race or expired: {Code}", code);
+                    return BadRequest(new
+                    {
+                        error = "invalid_grant",
+                        error_description = "認可コードは既に使用されています。"
+                    });
                 }
 
                 // 11. SubjectType に応じたユーザー情報の取得

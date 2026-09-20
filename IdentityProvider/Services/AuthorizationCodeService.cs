@@ -171,35 +171,44 @@ namespace IdentityProvider.Services
             if (string.IsNullOrWhiteSpace(code))
                 return false;
 
-            var authorizationCode = await _context.AuthorizationCodes
-                .Include(ac => ac.Client)
-                    .ThenInclude(c => c!.Organization)
-                .FirstOrDefaultAsync(ac => ac.Code == code);
+            var now = DateTimeOffset.UtcNow;
+            var affected = await TryMarkAsUsedAsync(code, now);
 
-            if (authorizationCode == null)
+            if (affected == 0)
             {
-                _logger.LogWarning("使用済みマーク対象の認可コードが見つかりません: Code={Code}", code);
+                // 見つからない / 使用済み / 期限切れ のいずれか。どれかは区別しない
+                // （並行交換に負けた場合も「使用済み」としてここに落ちる）。
+                _logger.LogWarning("認可コードを使用済みにできませんでした（未存在・使用済み・期限切れ）: Code={Code}", code);
                 return false;
             }
-
-            if (authorizationCode.IsUsed)
-            {
-                _logger.LogWarning(
-                    "既に使用済みの認可コードです: Code={Code}, UsedAt={UsedAt}",
-                    code, authorizationCode.UsedAt);
-                return false;
-            }
-
-            authorizationCode.IsUsed = true;
-            authorizationCode.UsedAt = DateTimeOffset.UtcNow;
-
-            await _context.SaveChangesAsync();
 
             _logger.LogInformation(
                 "認可コードを使用済みにマークしました: Code={Code}, UsedAt={UsedAt}",
-                code, authorizationCode.UsedAt);
+                code, now);
 
             return true;
+        }
+
+        /// <summary>
+        /// 認可コードの使用済みマーキングの Compare-And-Set（EcAuth#461）。
+        /// <para>
+        /// 「未使用かつ未期限切れ」の行だけを対象にしたアトミック UPDATE で、影響行数 1 のときだけ
+        /// 成功とする。read-then-write（IsUsed を読んでから SaveChanges）だと、並行するトークン交換が
+        /// 両方チェックを通過して同一コードを二重交換できる余地があるため。
+        /// </para>
+        /// <para>
+        /// 原子性は実 DB（統合テスト / E2E）で担保する。<c>ExecuteUpdate</c> は EF Core の InMemory
+        /// プロバイダー非対応のため、ユニットテストではこのメソッドを override して逐次の単発契約のみ検証する
+        /// （<c>MagicLinkService.TryConsumeTokenAsync</c> と同じ流儀）。
+        /// </para>
+        /// </summary>
+        protected virtual Task<int> TryMarkAsUsedAsync(string code, DateTimeOffset now)
+        {
+            return _context.AuthorizationCodes
+                .Where(ac => ac.Code == code && !ac.IsUsed && ac.ExpiresAt > now)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(ac => ac.IsUsed, true)
+                    .SetProperty(ac => ac.UsedAt, now));
         }
 
         public async Task<int> CleanupExpiredCodesAsync()

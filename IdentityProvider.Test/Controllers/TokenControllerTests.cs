@@ -25,6 +25,7 @@ namespace IdentityProvider.Test.Controllers
         // Mock<IConfiguration> は使わない。GetValue<T> は拡張メソッドで GetSection を呼ぶため、
         // loose Mock だと null が返り NullReferenceException になる（PkcePolicy.IsRequired が該当）。
         private readonly IConfiguration _configuration;
+        private readonly IAuthorizationCodeService _authorizationCodeService;
         private readonly TokenController _controller;
 
         public TokenControllerTests()
@@ -37,18 +38,25 @@ namespace IdentityProvider.Test.Controllers
             _mockAccountService = new Mock<IAccountService>();
             _mockLogger = new Mock<ILogger<TokenController>>();
             _configuration = new ConfigurationBuilder().Build();
+            // 使用済みマーキングの CAS（ExecuteUpdate）は InMemory 非対応のため、逐次版に差し替えたサービスを使う
+            _authorizationCodeService = new TestableAuthorizationCodeService(
+                _context, new Mock<ILogger<AuthorizationCodeService>>().Object);
 
-            _controller = new TokenController(
+            _controller = CreateController(_authorizationCodeService);
+        }
+
+        private TokenController CreateController(IAuthorizationCodeService authorizationCodeService) =>
+            new TokenController(
                 _context,
                 _mockEnvironment.Object,
                 _mockTokenService.Object,
                 _mockUserService.Object,
                 _mockB2BUserService.Object,
                 _mockAccountService.Object,
+                authorizationCodeService,
                 _mockLogger.Object,
                 _configuration,
                 new PlaintextSecretProtector());
-        }
 
         [Fact]
         public async Task Token_ValidAuthorizationCode_ReturnsTokens()
@@ -855,6 +863,61 @@ namespace IdentityProvider.Test.Controllers
             Assert.IsType<BadRequestObjectResult>(result);
             var authCode = await _context.AuthorizationCodes.FirstAsync(ac => ac.Code == "test-code");
             Assert.False(authCode.IsUsed);
+        }
+
+        [Fact]
+        public async Task Token_WhenMarkAsUsedLosesRace_ReturnsInvalidGrantWithoutIssuingTokens()
+        {
+            // 手順 7（IsUsed 読み取り）は通過したが、手順 10 の CAS で並行リクエストに負けた
+            // （影響行数 0）ケース。二重交換を防ぐため、トークンを発行せず invalid_grant を返す。
+            _context.Organizations.Add(new Organization
+            {
+                Id = 1,
+                Code = "test-org",
+                Name = "Test Organization",
+                TenantName = "test-tenant",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            });
+            _context.Clients.Add(new Client
+            {
+                Id = 1,
+                ClientId = "1",
+                ClientSecret = "test-secret",
+                AppName = "Test App",
+                OrganizationId = 1
+            });
+            _context.AuthorizationCodes.Add(new AuthorizationCode
+            {
+                Code = "raced-code",
+                Subject = "test-subject",
+                ClientId = 1,
+                RedirectUri = "https://example.com/callback",
+                Scope = "openid profile",
+                CodeChallenge = PkceChallenge,
+                CodeChallengeMethod = "S256",
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+                IsUsed = false
+            });
+            await _context.SaveChangesAsync();
+
+            var racedService = new Mock<IAuthorizationCodeService>();
+            racedService.Setup(x => x.MarkAsUsedAsync("raced-code")).ReturnsAsync(false);
+            var controller = CreateController(racedService.Object);
+
+            var result = await controller.Token(
+                "authorization_code",
+                "raced-code",
+                "https://example.com/callback",
+                "1",
+                "test-secret",
+                code_verifier: PkceVerifier);
+
+            var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+            var error = (string)badRequest.Value!.GetType().GetProperty("error")!.GetValue(badRequest.Value)!;
+            Assert.Equal("invalid_grant", error);
+            racedService.Verify(x => x.MarkAsUsedAsync("raced-code"), Times.Once);
+            _mockTokenService.Verify(x => x.GenerateTokensAsync(It.IsAny<ITokenService.TokenRequest>()), Times.Never);
         }
 
         public void Dispose()
