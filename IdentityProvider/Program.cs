@@ -100,7 +100,7 @@ builder.Services.Configure<MagicLinkOptions>(
     builder.Configuration.GetSection(MagicLinkOptions.SectionName));
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
 builder.Services.AddScoped<IPasskeyRegistrationTokenService, PasskeyRegistrationTokenService>();
-// 期限切れトークンの日次クリーンアップ（既定の保持期間 7 日）
+// 期限切れトークン（マジックリンク / パスキー登録トークン）の日次クリーンアップ（既定の保持期間 7 日）
 builder.Services.AddHostedService<MagicLinkCleanupService>();
 
 // client_secret 等の保存時暗号化（EcAuthDocs#106）。
