@@ -44,7 +44,18 @@ public class OrganizationClientSeeder : IDbSeeder
         var clientId = GetConfigValue(configuration, prefix, "CLIENT_ID");
         var clientSecret = GetConfigValue(configuration, prefix, "CLIENT_SECRET");
         var appName = GetConfigValue(configuration, prefix, "APP_NAME");
+        // B2C クライアントの redirect_uri。{prefix}_REDIRECT_URI が無ければ、コントローラが外部 IdP に
+        // 渡す自身のコールバック URL（DEFAULT_ORGANIZATION_REDIRECT_URI）を使う。
+        // ローカル / CI（Development）の配線は DEFAULT_REDIRECT_URI を持たず DEFAULT_ORGANIZATION_REDIRECT_URI
+        // だけを持ち、E2E は EcAuth 自身のコールバック URL を client の redirect_uri として使うため両者は同じ値。
+        // 本番の Terraform も PROD_REDIRECT_URI と DEFAULT_ORGANIZATION_REDIRECT_URI に同じ値を配線している。
+        // /v1/authorization が redirect_uri を登録値と照合する（EcAuthDocs#100）ため、これが無いと
+        // Development でフェデレーションの E2E が通らない。
         var redirectUri = GetConfigValue(configuration, prefix, "REDIRECT_URI");
+        if (string.IsNullOrEmpty(redirectUri))
+        {
+            redirectUri = configuration["DEFAULT_ORGANIZATION_REDIRECT_URI"];
+        }
 
         // MockIdP 設定
         var mockIdpAppName = GetConfigValue(configuration, prefix, "MOCK_IDP_APP_NAME");
