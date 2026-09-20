@@ -348,6 +348,10 @@ jobs:
           B2B_USER_SUBJECT: op://EcAuth/ecauth-prod-app/b2b_user_subject
           B2B_REDIRECT_URI: op://EcAuth/ecauth-prod-app/b2b_redirect_uri
           WEB_APP_SUFFIX: op://EcAuth/ecauth-prod-app/web_app_suffix
+          # B2C フェデレーション検証の redirect_uri。/v1/authorization が登録値と完全一致で
+          # 検証する（EcAuthDocs#100）ため、Terraform が DEFAULT_ORGANIZATION_REDIRECT_URI として
+          # 配線し OrganizationClientSeeder が client に登録するのと同じフィールドを渡す。
+          REDIRECT_URI: op://EcAuth/ecauth-prod-app/redirect_uri
           # 申込スモーク（stg-accounts テナント）。本物の顧客が入る accounts テナントは使わない。
           # stg-accounts の管理コンソール Client は confidential（STG_ACCOUNTS_CLIENT_PUBLIC が
           # 設定されていない）ため、PKCE に加えて client_secret も要る。
@@ -457,6 +461,7 @@ jobs:
       - name: Federation authentication verification
         id: federation_verify
         env:
+          ECAUTH_REDIRECT_URI: ${{ env.REDIRECT_URI }}
           ECAUTH_BASE_URL: https://production.ec-auth.io
         run: ./.github/scripts/verify-federation-auth.sh
 
