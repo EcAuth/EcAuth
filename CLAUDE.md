@@ -217,6 +217,8 @@ E2E でこれを一体にして「ブラウザから直接 API を叩く」と�
 #### `redirect_uri` / `rp_id` をテスト側で組み立てない
 
 `authenticate/verify` の `redirect_uri` は登録値と**完全一致**で検証される（`Controllers/B2BPasskeyController.cs`）。
+B2C の `/v1/authorization` も同じく登録済み `RedirectUris` と完全一致で検証し、不一致は State に封緘する前に
+400 で返す（`Controllers/AuthorizationController.cs`、EcAuthDocs#100）。
 テストで期待値を組み立てると「申込が登録した初期値」と「プラグインが送る値」のズレ（EcAuth#481 の本体）が
 検出できない。`GET /v1/account/clients` で取得した登録済みの値をそのまま使うこと。
 

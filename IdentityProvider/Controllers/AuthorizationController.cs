@@ -37,7 +37,7 @@ namespace IdentityProvider.Controllers
         /// 必要なパラメータは以下のとおり
         /// - client.client_id
         /// - open_id_provider.name
-        /// - redirect_uri
+        /// - redirect_uri（client に登録済みの RedirectUris と完全一致すること。不一致は 400）
         /// - state（オプション：クライアントから渡された場合はコールバック時にそのまま返す）
         /// - code_challenge / code_challenge_method（オプション：PKCE (RFC 7636)。S256 のみ）
         /// パラメータで OpenID Provider を特定し、その IdP の Authorization endpoint にリダイレクトします。
@@ -111,6 +111,7 @@ namespace IdentityProvider.Controllers
 
             var Client = await _context.Clients
                 .ExcludeDeletedOrganizations()
+                .Include(c => c.RedirectUris)
                 .Where(c => c.ClientId == client_id)
                 .FirstOrDefaultAsync();
             if (Client == null)
@@ -120,6 +121,30 @@ namespace IdentityProvider.Controllers
                 {
                     error = "invalid_request",
                     error_description = "client_id が不正です。"
+                });
+            }
+
+            // redirect_uri の allowlist 検証（EcAuthDocs#100）。
+            // ここで検証せずに State へ封緘すると、コールバックで攻撃者が指定した URI へ
+            // 認可コードが配送される。B2B の authenticate/verify と同じく、client に登録済みの
+            // RedirectUris と完全一致（大小・末尾スラッシュ含む）で照合し、不一致は封緘前に
+            // 400 で返す。redirect_uri へエラーをリダイレクトしないのは冒頭の PKCE 検証と同じ理由。
+            if (string.IsNullOrEmpty(redirect_uri))
+            {
+                _logger.LogWarning("redirect_uri missing for client: {ClientId}", client_id);
+                return BadRequest(new
+                {
+                    error = "invalid_request",
+                    error_description = "redirect_uri は必須です。"
+                });
+            }
+            if (!Client.RedirectUris.Any(r => string.Equals(r.Uri, redirect_uri, StringComparison.Ordinal)))
+            {
+                _logger.LogWarning("Invalid redirect_uri for client {ClientId}: {RedirectUri}", client_id, redirect_uri);
+                return BadRequest(new
+                {
+                    error = "invalid_request",
+                    error_description = "redirect_uri が許可されていません。"
                 });
             }
 

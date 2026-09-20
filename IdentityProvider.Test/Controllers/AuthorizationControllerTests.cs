@@ -26,6 +26,8 @@ namespace IdentityProvider.Test.Controllers
         private const string ClientId = "test-client";
         private const string ProviderName = "federate-oauth2";
         private const string RedirectUri = "https://client.example.com/callback";
+        private const string OtherClientId = "other-client";
+        private const string OtherClientRedirectUri = "https://other.example.com/callback";
 
         // Iron はパスワード長 32 文字以上を要求する
         private const string StatePassword = "test-state-password-must-be-32-chars-or-longer";
@@ -74,6 +76,28 @@ namespace IdentityProvider.Test.Controllers
                 AppName = "Test App",
                 OrganizationId = 1
             });
+            // redirect_uri は client に登録済みのものと完全一致でなければ拒否される（EcAuthDocs#100）
+            _context.RedirectUris.Add(new RedirectUri
+            {
+                Id = 1,
+                Uri = RedirectUri,
+                ClientId = 1
+            });
+            // 別 client の登録 URI は本 client の allowlist にならないことを検証するために用意する
+            _context.Clients.Add(new Client
+            {
+                Id = 2,
+                ClientId = OtherClientId,
+                ClientSecret = "other-secret",
+                AppName = "Other App",
+                OrganizationId = 1
+            });
+            _context.RedirectUris.Add(new RedirectUri
+            {
+                Id = 2,
+                Uri = OtherClientRedirectUri,
+                ClientId = 2
+            });
             _context.OpenIdProviders.Add(new OpenIdProvider
             {
                 Id = 1,
@@ -88,6 +112,9 @@ namespace IdentityProvider.Test.Controllers
 
         private Task<IActionResult> Federate(string? codeChallenge, string? codeChallengeMethod) =>
             _controller.Federate(ClientId, ProviderName, RedirectUri, "client-state", codeChallenge, codeChallengeMethod);
+
+        private Task<IActionResult> FederateWithRedirectUri(string? redirectUri) =>
+            _controller.Federate(ClientId, ProviderName, redirectUri!, "client-state", ValidChallenge, "S256");
 
         /// <summary>リダイレクト先の state パラメータを開封して State を取り出す。</summary>
         private static async Task<State> UnsealStateFrom(IActionResult result)
@@ -201,6 +228,71 @@ namespace IdentityProvider.Test.Controllers
         {
             var result = await _controller.Federate(
                 ClientId, "no-such-provider", RedirectUri, null, null, null);
+
+            Assert.Equal("invalid_request", GetError(result));
+        }
+
+        // ---- redirect_uri allowlist（EcAuthDocs#100）----
+        //
+        // 未検証のまま State に封緘すると、コールバックで攻撃者の URI へ認可コードが配送される。
+        // 拒否は redirect_uri へのリダイレクトではなく 400（オープンリダイレクタにしない）。
+
+        [Fact]
+        public async Task Federate_WithRegisteredRedirectUri_RedirectsToProvider()
+        {
+            var result = await FederateWithRedirectUri(RedirectUri);
+
+            var state = await UnsealStateFrom(result);
+            Assert.Equal(RedirectUri, state.RedirectUri);
+        }
+
+        [Fact]
+        public async Task Federate_WithUnregisteredRedirectUri_ReturnsInvalidRequest()
+        {
+            var result = await FederateWithRedirectUri("https://evil.attacker.example/steal");
+
+            Assert.Equal("invalid_request", GetError(result));
+        }
+
+        [Fact]
+        public async Task Federate_WithRedirectUriDifferingOnlyByTrailingSlash_ReturnsInvalidRequest()
+        {
+            var result = await FederateWithRedirectUri(RedirectUri + "/");
+
+            Assert.Equal("invalid_request", GetError(result));
+        }
+
+        [Fact]
+        public async Task Federate_WithRedirectUriDifferingOnlyByCase_ReturnsInvalidRequest()
+        {
+            var result = await FederateWithRedirectUri(RedirectUri.ToUpperInvariant());
+
+            Assert.Equal("invalid_request", GetError(result));
+        }
+
+        [Fact]
+        public async Task Federate_WithRedirectUriHavingExtraQuery_ReturnsInvalidRequest()
+        {
+            var result = await FederateWithRedirectUri(RedirectUri + "?x=1");
+
+            Assert.Equal("invalid_request", GetError(result));
+        }
+
+        [Fact]
+        public async Task Federate_WithRedirectUriRegisteredToAnotherClient_ReturnsInvalidRequest()
+        {
+            // allowlist は client 単位。別 client に登録された URI では通らない
+            var result = await FederateWithRedirectUri(OtherClientRedirectUri);
+
+            Assert.Equal("invalid_request", GetError(result));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public async Task Federate_WithoutRedirectUri_ReturnsInvalidRequest(string? redirectUri)
+        {
+            var result = await FederateWithRedirectUri(redirectUri);
 
             Assert.Equal("invalid_request", GetError(result));
         }
