@@ -349,7 +349,7 @@ namespace IdentityProvider.Test.Data
 
             Assert.Equal(1, interceptor.FailedCommits);
             var created = Assert.IsType<CreatedResult>(result);
-            // Client には自然キーが無いため、再試行は初期 redirect_uri で前回の成果を見つけて返す。
+            // 再試行は試行間で固定した client_id で前回の成果を見つけて返す。
             // やり直しで同じサイトの Client が 2 件できてはいけない。
             var clients = await Context.Clients.IgnoreQueryFilters().Include(c => c.RedirectUris)
                 .Where(c => c.OrganizationId == 1).ToListAsync();
@@ -357,6 +357,77 @@ namespace IdentityProvider.Test.Data
             Assert.Equal("https://wp.example.jp/ecauth/callback.php", clients[0].RedirectUris.Single().Uri);
             Assert.Equal(clients[0].ClientId,
                 (string)created.Value!.GetType().GetProperty("client_id")!.GetValue(created.Value)!);
+        }
+
+        /// <summary>
+        /// 再試行の判定を redirect_uri に頼ると起きる取り違えの再現（EcAuth#551 レビュー指摘）。
+        /// 同じ Organization に同じ初期 redirect_uri の Client が既にある状態で、1 回目の試行が
+        /// コミット前に一過性エラーで落ちた場合、再試行は既存 Client を「前回の成果」と誤認せず、
+        /// 要求された Client を新たに作らなければならない。
+        /// </summary>
+        [Fact]
+        public async Task AccountController_AddClient_CreatesNewClient_WhenSameRedirectUriAlreadyExistsAndFirstAttemptFailsBeforeCommit()
+        {
+            await SeedAccountsOrgWithConsoleClientAsync();
+            await SeedAccountAsync();
+            await SeedOwnedOrganizationAsync(1, "shop1", isSandbox: false);
+            const string existingClientId = "ec-shop1-existing";
+            await SeedClientAsync(1, existingClientId, "https://wp.example.jp/ecauth/callback.php");
+            var protector = CreateProtectorFailingOnce(out var protectCalls);
+            var controller = CreateController(protector.Object, out _, useRealAccountService: true);
+            SetBearer(controller);
+
+            var result = await controller.AddClient(1, new AccountController.AddClientDto
+            {
+                SiteUrl = "https://wp.example.jp",
+                EcCubeVersion = "2"
+            });
+
+            Assert.Equal(2, protectCalls.Value);
+            var created = Assert.IsType<CreatedResult>(result);
+            var createdClientId = (string)created.Value!.GetType().GetProperty("client_id")!.GetValue(created.Value)!;
+            // 既存 Client を返していない。
+            Assert.NotEqual(existingClientId, createdClientId);
+            // 既存 1 件 + 今回の 1 件。redirect_uri が同じでも別 Client として増える。
+            var clients = await Context.Clients.IgnoreQueryFilters().Include(c => c.RedirectUris)
+                .Where(c => c.OrganizationId == 1).OrderBy(c => c.Id).ToListAsync();
+            Assert.Equal(2, clients.Count);
+            Assert.Equal(existingClientId, clients[0].ClientId);
+            Assert.Equal(createdClientId, clients[1].ClientId);
+            Assert.All(clients, c => Assert.Equal("https://wp.example.jp/ecauth/callback.php", c.RedirectUris.Single().Uri));
+        }
+
+        /// <summary>
+        /// コミット後の接続断でも、既存の同一 redirect_uri Client ではなく今回作った Client を返す。
+        /// </summary>
+        [Fact]
+        public async Task AccountController_AddClient_ReturnsNewlyCreatedClient_WhenSameRedirectUriAlreadyExistsAndCommitSucceedsButConnectionDrops()
+        {
+            var interceptor = UseCommitFailingContext();
+            await SeedAccountsOrgWithConsoleClientAsync();
+            await SeedAccountAsync();
+            await SeedOwnedOrganizationAsync(1, "shop1", isSandbox: false);
+            const string existingClientId = "ec-shop1-existing";
+            await SeedClientAsync(1, existingClientId, "https://wp.example.jp/ecauth/callback.php");
+            var controller = CreateController(new PlaintextSecretProtector(), out _, useRealAccountService: true);
+            SetBearer(controller);
+            interceptor.Arm();
+
+            var result = await controller.AddClient(1, new AccountController.AddClientDto
+            {
+                SiteUrl = "https://wp.example.jp",
+                EcCubeVersion = "2"
+            });
+
+            Assert.Equal(1, interceptor.FailedCommits);
+            var created = Assert.IsType<CreatedResult>(result);
+            var createdClientId = (string)created.Value!.GetType().GetProperty("client_id")!.GetValue(created.Value)!;
+            Assert.NotEqual(existingClientId, createdClientId);
+            var clients = await Context.Clients.IgnoreQueryFilters()
+                .Where(c => c.OrganizationId == 1).OrderBy(c => c.Id).ToListAsync();
+            // 既存 1 件 + 今回の 1 件。コミット済みの成果を二重化していない。
+            Assert.Equal(2, clients.Count);
+            Assert.Equal(createdClientId, clients[1].ClientId);
         }
 
         [Fact]
@@ -413,6 +484,27 @@ namespace IdentityProvider.Test.Data
                 OrganizationId = AccountsOrgId,
                 SubjectType = SubjectType.Account
             });
+            await Context.SaveChangesAsync();
+            Context.ChangeTracker.Clear();
+        }
+
+        /// <summary>
+        /// 管理下 Organization に既存の B2B Client を投入する。redirect_uri を指定して
+        /// 「同じ初期 redirect_uri の Client が既にある」状態を作る。
+        /// </summary>
+        private async Task SeedClientAsync(int organizationId, string clientId, string redirectUri)
+        {
+            var client = new Client
+            {
+                ClientId = clientId,
+                ClientSecret = string.Empty,
+                AppName = "existing",
+                OrganizationId = organizationId,
+                SubjectType = SubjectType.B2B,
+                AllowedRpIds = new List<string> { "wp.example.jp" }
+            };
+            client.RedirectUris!.Add(new RedirectUri { Uri = redirectUri });
+            Context.Clients.Add(client);
             await Context.SaveChangesAsync();
             Context.ChangeTracker.Clear();
         }

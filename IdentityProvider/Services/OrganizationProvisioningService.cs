@@ -269,7 +269,7 @@ namespace IdentityProvider.Services
 
             // 最初の Client は、後から足す Client（AddClientAsync）と同じ規則で作る。
             // AddClientAsync 内の SaveChanges で RsaKeyPair / AccountOrganization も一緒に確定する。
-            var client = await AddClientAsync(organization, site, organizationName, ecCubeVersion, ct);
+            var client = await AddClientAsync(organization, site, organizationName, ecCubeVersion, ct: ct);
 
             return new ProvisionedSite(organization, client);
         }
@@ -280,9 +280,10 @@ namespace IdentityProvider.Services
             SiteEntry site,
             string appName,
             string ecCubeVersion,
+            string? clientId = null,
             CancellationToken ct = default)
         {
-            var client = CreateClient(organization, site, appName, ecCubeVersion);
+            var client = CreateClient(organization, site, appName, ecCubeVersion, clientId ?? NewClientId(organization.Code));
             // 保存前に client_secret を暗号化する（レガシー/dev は平文パススルー）。
             // Key Vault 暗号化の所要時間を独立ステップとして計測する。
             using (TimingScope.Begin("client_secret_protect"))
@@ -396,11 +397,11 @@ namespace IdentityProvider.Services
         /// 追加先とは別のホストから導出された値なので使わない）。
         /// </summary>
         private Client CreateClient(
-            Organization organization, SiteEntry site, string appName, string ecCubeVersion)
+            Organization organization, SiteEntry site, string appName, string ecCubeVersion, string clientId)
         {
             var client = new Client
             {
-                ClientId = BuildClientId(organization.Code),
+                ClientId = clientId,
                 ClientSecret = GenerateClientSecret(),
                 AppName = appName,
                 OrganizationId = organization.Id,
@@ -481,9 +482,10 @@ namespace IdentityProvider.Services
         /// 顧客 Org 用の client_id を組織コードから導出する。
         /// グローバルユニーク制約があるため、組織コードに短いランダムサフィックスを付与して衝突を避ける。
         /// </summary>
-        private static string BuildClientId(string code)
+        /// <inheritdoc />
+        public string NewClientId(string organizationCode)
         {
-            return $"ec-{code}-{Guid.NewGuid():N}";
+            return $"ec-{organizationCode}-{Guid.NewGuid():N}";
         }
 
         /// <summary>

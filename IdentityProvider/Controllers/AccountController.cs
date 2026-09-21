@@ -793,6 +793,20 @@ namespace IdentityProvider.Controllers
                     created_at = client.CreatedAt
                 });
 
+            // client_id は試行の外で採番し、再試行をまたいで固定する（ConfirmAsync が subject を
+            // 固定するのと同じ）。Client には自然キーが無く、同一 Organization に同じ初期
+            // redirect_uri の Client が複数あってよい（EC-CUBE と WordPress の同居がまさにそれ）ため、
+            // 「前回の試行がコミット済みか」を redirect_uri で判定すると、無関係な既存 Client を
+            // 今回の成果として返してしまい、要求された Client が作られない。client_id は
+            // IX_client_client_id でユニークなので、この値で引けば前回の試行が残した行にしか一致しない。
+            // 組織コードは追加先 Org のもの（管理下であることは上で確認済み）。
+            var organizationCode = await _context.Organizations
+                .IgnoreQueryFilters()
+                .Where(o => o.Id == id)
+                .Select(o => o.Code)
+                .FirstAsync(HttpContext.RequestAborted);
+            var clientId = _provisioning.NewClientId(organizationCode);
+
             return await _context.ExecuteInRetryableUnitAsync<IActionResult>(async (isRetry, cancellationToken) =>
             {
                 await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
@@ -827,21 +841,16 @@ namespace IdentityProvider.Controllers
                         .IgnoreQueryFilters()
                         .FirstAsync(o => o.Id == id, cancellationToken);
 
-                    var expectedRedirectUri = _provisioning.BuildInitialRedirectUri(site, ecCubeVersion);
-
                     if (isRetry)
                     {
                         // 前回の試行がコミット済みで応答だけが接続断で失われた場合（EF Core docs の
-                        // idempotency issue）、同じ Org に同じ初期 redirect_uri を持つ Client が既にある。
-                        // Client には自然キーが無く、やり直すと同じサイトの Client が 2 件できるため、
-                        // 直前に作られたものを前回の試行の成果として 201 で返す。
+                        // idempotency issue）、試行間で固定した client_id の Client が既にある。
+                        // やり直すと同じサイトの Client が 2 件できるため、前回の試行の成果として
+                        // 201 で返す。client_id はユニークなので、既存の別 Client には一致しない。
                         var alreadyCreated = await _context.Clients
                             .IgnoreQueryFilters()
                             .Include(c => c.RedirectUris)
-                            .Where(c => c.OrganizationId == id
-                                && c.RedirectUris.Any(r => r.Uri == expectedRedirectUri))
-                            .OrderByDescending(c => c.Id)
-                            .FirstOrDefaultAsync(cancellationToken);
+                            .FirstOrDefaultAsync(c => c.ClientId == clientId, cancellationToken);
                         if (alreadyCreated != null)
                         {
                             await transaction.RollbackAsync(cancellationToken);
@@ -883,6 +892,7 @@ namespace IdentityProvider.Controllers
                         site,
                         appName ?? site.Host,
                         ecCubeVersion,
+                        clientId,
                         cancellationToken);
 
                     await transaction.CommitAsync(cancellationToken);

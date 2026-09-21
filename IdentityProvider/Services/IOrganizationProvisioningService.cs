@@ -130,6 +130,13 @@ namespace IdentityProvider.Services
         /// <param name="site"><see cref="BuildSite"/> の結果（Host / BaseUrl のみ使う）。</param>
         /// <param name="appName">Client.AppName。</param>
         /// <param name="ecCubeVersion">初期 redirect_uri のコールバックパスを決める（"2" / "4" / "other"）。</param>
+        /// <param name="clientId">
+        /// 使う client_id。<c>null</c> なら <see cref="NewClientId"/> で採番する。
+        /// 再試行される単位（<c>ExecuteInRetryableUnitAsync</c>）から呼ぶ場合は、呼び出し側で
+        /// 試行の外で採番した値を渡し、試行間で固定すること。Client には自然キーが無く、
+        /// 同一 Organization に同じ初期 redirect_uri の Client が複数あってよいため、
+        /// 「前回の試行がコミット済みか」は client_id（ユニーク）でしか判定できない。
+        /// </param>
         /// <param name="ct">キャンセルトークン。</param>
         /// <returns>追加した Client。client_secret は暗号化済みの値が入っている。</returns>
         Task<Client> AddClientAsync(
@@ -137,7 +144,16 @@ namespace IdentityProvider.Services
             SiteEntry site,
             string appName,
             string ecCubeVersion,
+            string? clientId = null,
             CancellationToken ct = default);
+
+        /// <summary>
+        /// 新しい client_id を採番する（<c>ec-{組織コード}-{GUID}</c>）。
+        /// GUID 付きなのでグローバルに衝突せず、<c>IX_client_client_id</c> のユニークインデックスで
+        /// 担保される。<see cref="AddClientAsync"/> の再試行を冪等にするため、呼び出し側が
+        /// 試行の外で採番して固定する用途に公開している。
+        /// </summary>
+        string NewClientId(string organizationCode);
 
         /// <summary>
         /// サイトのホストから初期 <c>allowed_rp_ids</c> を組み立てる（host と、<c>www.</c> 付きなら
