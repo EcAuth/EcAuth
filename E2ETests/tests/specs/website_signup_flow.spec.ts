@@ -1,4 +1,4 @@
-import { test, expect, BrowserContext, Page } from '@playwright/test';
+import { test, expect, BrowserContext, Locator, Page } from '@playwright/test';
 import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
 
 /**
@@ -17,6 +17,7 @@ import { createMailbox, extractToken, Mailbox } from '../helpers/mailbox';
  *     → /v1/account/organizations でサイト一覧、secret の reveal / 再生成
  *     → マイページの編集 UI から redirect_uri / allowed_rp_ids を実 API で全置換
  *     → リカバリ（マジックリンク）でも同じマイページに着地する
+ *     → マイページの「Client を追加」で既存サイトに 2 つ目の Client を足し、そのホストは別申込で取れない
  *
  * 前提（CI では playwright.yml が用意する）:
  *   - IdentityProvider が https://localhost:8081 で稼働し、accounts.ec-auth.io に解決すること
@@ -50,6 +51,8 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
   const runSuffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const email = `e2e-website-${runSuffix}@example.com`;
   const productionSiteHost = `web-${runSuffix}.example.com`;
+  // 既存サイトに足す 2 つ目の Client（WordPress 想定）のホスト。
+  const secondClientHost = `wp-${runSuffix}.example.com`;
   const expectedOrgCode = productionSiteHost.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
   let mailbox: Mailbox;
@@ -263,7 +266,7 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
   }
 
   /** 設定セクションの入力欄の値を表示順に取り出す。 */
-  function inputValuesOf(section: ReturnType<typeof settingsSection>): Promise<string[]> {
+  function inputValuesOf(section: Locator): Promise<string[]> {
     return section.locator('.row-input').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value));
   }
 
@@ -390,6 +393,78 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     await page.fill('#org', `E2E Dup Org ${runSuffix}`);
     await page.fill('#contact', 'E2E Tester');
     await page.fill('#prod', `https://${productionSiteHost}`);
+    await page.click('#submit-btn');
+
+    const status = page.locator('#status');
+    await expect(status).toHaveClass(/err/, { timeout: 15000 });
+    await expect(status).toContainText('このドメインは既に EcAuth に登録されています');
+    await expect(page.locator('#f-prod')).toHaveClass(/invalid/);
+  });
+  /*
+   * 既存サイトへの Client 追加（EcAuthDocs#121 項目 3、ecauth-website#43）。
+   * カード内の「Client を追加」フォームから実 API（POST /v1/account/organizations/{id}/clients）で
+   * Client を足し、同じカードに 2 件並ぶこと、初期値が実 API に残ることを見る。
+   *
+   * 上の各テストは「1 サイト 1 Client」を前提に .secret-row / .ci-settings をサイト単位で
+   * 引いている（2 件になると strict mode で落ちる）ため、このテストは最後に置く。
+   */
+  test('マイページの「Client を追加」から実 API で Client を足し、同じカードに 2 件並ぶ', async () => {
+    test.setTimeout(45000);
+
+    await page.goto(`${websiteBase}/mypage/`);
+    await expect(page.locator('#app-view')).toBeVisible({ timeout: 15000 });
+
+    const item = page.locator('.client-item').filter({ hasText: expectedOrgCode });
+    await expect(item).toHaveCount(1, { timeout: 15000 });
+    await expect(item.locator('.ci-client')).toHaveCount(1);
+    await expect(page.locator('#site-usage')).toHaveText('1 / 10 件');
+
+    await item.getByRole('button', { name: /Client を追加/ }).click();
+    const form = item.locator('.client-add');
+    await expect(form).toBeVisible();
+    await form.locator('.ca-url').fill(`https://${secondClientHost}/blog/`);
+    await form.locator('input[type="radio"][value="other"]').check();
+    await form.locator('.ca-name').fill('WordPress');
+    await form.getByRole('button', { name: '追加する' }).click();
+
+    await expect(page.locator('#list-status')).toHaveClass(/ok/, { timeout: 15000 });
+    await expect(page.locator('#list-status')).toContainText('Client を追加しました');
+
+    // サイト（カード）は増えず、Client が 2 件になる。本番の残枠は Client 単位で数える。
+    const reloaded = page.locator('.client-item').filter({ hasText: expectedOrgCode });
+    await expect(reloaded).toHaveCount(1);
+    await expect(reloaded.locator('.ci-client')).toHaveCount(2);
+    await expect(reloaded.locator('.ci-client-name').nth(1)).toHaveText('WordPress');
+    await expect(page.locator('#site-usage')).toHaveText('2 / 10 件');
+
+    // 追加 Client の初期 redirect_uri / RP ID は最初の Client と同じ規則で作られ、実 API に残る。
+    const added = reloaded.locator('.ci-client').nth(1);
+    const rpIds = added.locator('.ci-settings[data-section="allowed_rp_ids"]');
+    await rpIds.locator('summary').click();
+    expect(await inputValuesOf(rpIds)).toEqual([secondClientHost]);
+    const redirectUris = added.locator('.ci-settings[data-section="redirect_uris"]');
+    await redirectUris.locator('summary').click();
+    expect(await inputValuesOf(redirectUris)).toEqual([`https://${secondClientHost}/blog/ecauth/callback`]);
+
+    // 他の組織（受付テナント）が持つホストは追加できない。サーバの 422 がフォームに出る。
+    await reloaded.getByRole('button', { name: /Client を追加/ }).click();
+    await form.locator('.ca-url').fill(`https://${accountsHost}/`);
+    await form.getByRole('button', { name: '追加する' }).click();
+    const status = form.locator('[data-status="client-add"]');
+    await expect(status).toHaveClass(/err/, { timeout: 15000 });
+    await expect(status).toContainText('既に別のサイトとして登録されています');
+  });
+
+  test('追加した Client のホストは別の申込で登録できない（占有は Client のホスト単位）', async () => {
+    test.setTimeout(30000);
+
+    // 2 つ目の Client のホストはどの組織コードにも写らない。組織コード単位の占有判定のままだと
+    // 別の申込者がこのホストで新しい Organization を作れてしまう（EcAuthDocs#121 項目 1）。
+    await page.goto(`${websiteBase}/signup/`);
+    await page.fill('#email', `e2e-website-wp-${runSuffix}@example.com`);
+    await page.fill('#org', `E2E WP Org ${runSuffix}`);
+    await page.fill('#contact', 'E2E Tester');
+    await page.fill('#prod', `https://${secondClientHost}`);
     await page.click('#submit-btn');
 
     const status = page.locator('#status');
