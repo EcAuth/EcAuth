@@ -407,6 +407,43 @@ spec は受信口を直接触らず、`tests/helpers/mailbox.ts` の `Mailbox` �
 `verify-only` は migrate / build / deploy を skip して `verify` だけを回す入口。
 `production.yml` の `dry_run` は既定 `true` なので、明示的に `false` を渡さないと verify も skip される。
 
+### SQL 接続断への耐性（`EnableRetryOnFailure` とユーザー開始トランザクション）
+
+`Program.cs` の `UseSqlServer` は `EnableRetryOnFailure`（3 回 / 最大 5 秒）と
+`CommandTimeout(30)` を設定している（EcAuth#536）。設定値と根拠は `Data/DatabaseResilience.cs`。
+
+- **`BeginTransactionAsync` を新設するときは `_context.ExecuteInRetryableUnitAsync(...)` で包む。**
+  再試行戦略が有効な DbContext では、包まれていないユーザー開始トランザクション内で最初の
+  操作を実行した時点で `InvalidOperationException`（user-initiated transactions 非対応）になる。
+  InMemory プロバイダーではこの例外が再現されないため、ユニットテストが通っていても本番で落ちる。
+  `IdentityProvider.Test/Data/DatabaseResilienceTests.cs` に同種のテスト（SQLite + 再試行戦略）を
+  足して CI で守ること。
+- **デリゲートは丸ごと再実行される。** `ExecuteInRetryableUnitAsync` は各試行の先頭で
+  `ChangeTracker.Clear()` するので、外で読んだエンティティを中で更新するなら `Attach` し直す
+  （`SignupService.ConfirmAsync` の `signupRequest`）。参照だけなら不要。
+- **タイムアウト（`SqlException -2` / `Win32Exception 258`）は再試行されない。** EF Core の
+  `SqlServerTransientExceptionDetector` が意図的に除外している（操作が完了していても投げられうるため）。
+  再試行が効くのは接続断系（10054 / 10053 / 233 / 40613 等）で、死んだ接続でのブロック時間は
+  `CommandTimeout` の短縮が担う。
+- **`CommandTimeout` を延ばしたい処理は `SetCommandTimeout` で個別に延ばす**（起動時の `MigrateAsync` が
+  該当）。staging / production のマイグレーションは `dotnet ef migrations script` の SQL を
+  `azure/sql-action` で流すため、`Program.cs` の値には依存しない。
+- **`catch (DbUpdateException)` は `DatabaseResilience.IsUniqueConstraintViolation` で絞る。** 一過性の
+  接続断も `SaveChangesAsync` では `DbUpdateException` に包まれて届くため、無条件に握って 409 に変換すると
+  デリゲートが正常終了扱いになり再試行されない。
+- **`CommitAsync` が例外を投げた後に `RollbackAsync` を呼ばない**（`catch { Rollback; throw; }` を書かない）。
+  DB 上はコミット済みなので「This SqlTransaction has completed」で元の例外が覆い隠され、再試行されない。
+  未コミットのロールバックは `await using` の Dispose に任せる。
+- **コミット中の接続断は「成功したが応答が失われた」状態で再試行される**（EF docs の idempotency issue）。
+  やり直しは二重 INSERT にならず（ユニーク制約 / 代替キーで `DbUpdateException`）、404 / 409 /
+  上限超過になる。応答と共に失われる値がある経路（申込確認の登録トークンは DB にハッシュしか残らない）や
+  やり直しがエラーになる経路は、`ExecuteInRetryableUnitAsync` の `isRetry` で「前回の試行がコミット済みか」を
+  実状態から判定し、成功として返す（`ConfirmAsync` は `subject` を試行間で固定して Account の有無、
+  `CreateOrganization` は管理下の同一組織コード、`DeleteOrganization` は owner 行の `deleted_at`）。
+  `IdentityProvider.Test/Data/DatabaseResilienceTests.cs` の `FailAfterCommitOnceInterceptor` で再現できる。
+  ユニーク制約の無い IDENTITY テーブルにリクエスト経路から単発 INSERT する処理を足すときは、
+  二重 INSERT が黙って通らないか確認する（2026-09 時点で該当なし）。
+
 ### マイグレーション設計ルール
 
 - `migrationBuilder.Sql()` でカラムを参照する UPDATE/INSERT 文を書く場合、`EXEC()` 動的 SQL でラップすること

@@ -16,9 +16,15 @@ services:
       args:
         - GITHUB_USERNAME=${GITHUB_USERNAME}
         - GITHUB_TOKEN=${GITHUB_TOKEN}
+    # db は healthcheck を持つので、SQL Server が接続を受け付けるまで待ってから起動する。
+    # 短縮形（service_started 相当）だと RUN_MIGRATIONS_ON_STARTUP の MigrateAsync が
+    # 起動直後の db に pre-login handshake で弾かれ、Development の fail-fast でコンテナごと
+    # 消えて caddy の名前解決まで巻き込む（EcAuth#536 の CI 事象）。
     depends_on:
-      - db
-      - mailpit
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: "8080"
