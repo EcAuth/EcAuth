@@ -36,7 +36,7 @@ namespace IdentityProvider.Test.Data
         private const string AccountSubject = "account-subject-1";
 
         private readonly MockTenantService _tenantService;
-        private readonly RetryingSqliteContext _db;
+        private RetryingSqliteContext _db;
 
         private EcAuthDbContext Context => _db.Context;
 
@@ -48,6 +48,19 @@ namespace IdentityProvider.Test.Data
         }
 
         public void Dispose() => _db.Dispose();
+
+        /// <summary>
+        /// コミット成功直後に一過性エラーを報告するインターセプター付きのコンテキストへ差し替える。
+        /// 返したインターセプターの <see cref="FailAfterCommitOnceInterceptor.Arm"/> を、シード後・検証対象の
+        /// 直前に呼ぶ（シードの SaveChanges が暗黙トランザクションを張ることがあるため）。
+        /// </summary>
+        private FailAfterCommitOnceInterceptor UseCommitFailingContext()
+        {
+            _db.Dispose();
+            var interceptor = new FailAfterCommitOnceInterceptor();
+            _db = new RetryingSqliteContext(_tenantService, interceptor);
+            return interceptor;
+        }
 
         // ---- ヘルパー自体の妥当性（テストの検出力を担保する） ----
 
@@ -143,40 +156,8 @@ namespace IdentityProvider.Test.Data
             // 再試行で ChangeTracker が空にされないと、ロールバック済みの Organization が Unchanged で残り、
             // 2 回目の SaveChanges が存在しない行への FK で失敗するか、Account が二重追跡になる。
             var protector = CreateProtectorFailingOnce(out var protectCalls);
-            var emailMock = new Mock<IEmailService>();
-            string? confirmUrl = null;
-            emailMock
-                .Setup(x => x.SendSignupConfirmationAsync(
-                    It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .Callback<string, string, string, CancellationToken>((_, _, url, _) => confirmUrl = url)
-                .Returns(Task.CompletedTask);
-            var disposableMock = new Mock<IDisposableEmailChecker>();
-            disposableMock.Setup(x => x.IsDisposable(It.IsAny<string>())).Returns(false);
-            var configuration = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    [$"Signup:ConfirmBaseUrl:{Tenant}"] = "https://ec-auth.io"
-                })
-                .Build();
-            var service = new SignupService(
-                Context,
-                _tenantService,
-                emailMock.Object,
-                disposableMock.Object,
-                configuration,
-                Mock.Of<ILogger<SignupService>>(),
-                new PasskeyRegistrationTokenService(Context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()),
-                new OrganizationProvisioningService(Context, protector.Object));
-
-            await service.RequestAsync(new SignupInput
-            {
-                Email = "owner@example.com",
-                OrganizationName = "Example Shop",
-                ContactName = "山田 太郎",
-                ProductionSiteUrl = "https://shop.example.jp",
-                EcCubeVersion = "4"
-            });
-            var token = ExtractTokenFromConfirmUrl(confirmUrl!);
+            var service = CreateSignupService(protector.Object);
+            var token = await RequestAndCaptureTokenAsync(service);
 
             var confirmed = await service.ConfirmAsync(token);
 
@@ -277,6 +258,80 @@ namespace IdentityProvider.Test.Data
             Assert.NotNull(organization.DeletedAt);
         }
 
+        // ---- コミットは成功したが応答が失われ、再試行がやり直しになるケース（idempotency issue） ----
+
+        [Fact]
+        public async Task SignupService_ConfirmAsync_ReturnsSuccessWithReissuedToken_WhenCommitSucceedsButConnectionDrops()
+        {
+            // 1 回目の試行のコミットは DB 上では成功するが、その直後に一過性エラーが報告され、
+            // 再試行戦略がデリゲートをやり直す。やり直しは email / 組織コードのユニーク制約で 409 になり、
+            // 登録トークンの平文は失われる（Codex の指摘）。再試行時に前回の Account を認識し、
+            // トークンを発行し直して成功として返すこと。
+            var interceptor = UseCommitFailingContext();
+            await SeedAccountsOrgWithConsoleClientAsync();
+            var service = CreateSignupService(new PlaintextSecretProtector());
+            var token = await RequestAndCaptureTokenAsync(service);
+            interceptor.Arm();
+
+            var confirmed = await service.ConfirmAsync(token);
+
+            Assert.Equal(1, interceptor.FailedCommits);
+            Assert.False(string.IsNullOrEmpty(confirmed.RegistrationToken));
+            Assert.NotNull(confirmed.Request.ConfirmedAt);
+            Assert.Single(await Context.Accounts.IgnoreQueryFilters().ToListAsync());
+            Assert.Single(await Context.Organizations.IgnoreQueryFilters().Where(o => o.Code != Tenant).ToListAsync());
+            // 1 回目のコミットで発行済みのトークンに加えて、再試行で発行し直したトークンが 1 件増える
+            var subject = (await Context.Accounts.IgnoreQueryFilters().SingleAsync()).Subject;
+            Assert.Equal(2, await Context.PasskeyRegistrationTokens.IgnoreQueryFilters().CountAsync(t => t.Subject == subject));
+        }
+
+        [Fact]
+        public async Task AccountController_CreateOrganization_ReturnsCreated_WhenCommitSucceedsButConnectionDrops()
+        {
+            var interceptor = UseCommitFailingContext();
+            await SeedAccountsOrgWithConsoleClientAsync();
+            await SeedAccountAsync();
+            // 再試行時に「管理下に作成済みのサイトがある」ことを実 DB から読ませるため、実物の AccountService を使う
+            var controller = CreateController(new PlaintextSecretProtector(), out _, useRealAccountService: true);
+            SetBearer(controller);
+            interceptor.Arm();
+
+            var result = await controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://shop.example.jp"
+            });
+
+            Assert.Equal(1, interceptor.FailedCommits);
+            var created = Assert.IsType<CreatedResult>(result);
+            var organizations = await Context.Organizations.IgnoreQueryFilters()
+                .Where(o => o.Code == "shop-example-jp").ToListAsync();
+            Assert.Single(organizations);
+            Assert.Equal($"/v1/account/organizations/{organizations[0].Id}", created.Location);
+        }
+
+        [Fact]
+        public async Task AccountController_DeleteOrganization_ReturnsOk_WhenCommitSucceedsButConnectionDrops()
+        {
+            var interceptor = UseCommitFailingContext();
+            await SeedAccountsOrgWithConsoleClientAsync();
+            await SeedAccountAsync();
+            await SeedOwnedOrganizationAsync(1, "shop1", isSandbox: false);
+            await SeedOwnedOrganizationAsync(2, "shop1-sandbox", isSandbox: true, parentOrganizationId: 1);
+            var controller = CreateController(new PlaintextSecretProtector(), out _, useRealAccountService: true);
+            SetBearer(controller);
+            interceptor.Arm();
+
+            var result = await controller.DeleteOrganization(1);
+
+            Assert.Equal(1, interceptor.FailedCommits);
+            var ok = Assert.IsType<OkObjectResult>(result);
+            var deletedIds = (int[])ok.Value!.GetType().GetProperty("deleted_organization_ids")!.GetValue(ok.Value)!;
+            Assert.Equal(new[] { 1, 2 }, deletedIds.OrderBy(i => i).ToArray());
+            var organizations = await Context.Organizations.IgnoreQueryFilters().AsNoTracking()
+                .Where(o => o.Id == 1 || o.Id == 2).ToListAsync();
+            Assert.All(organizations, o => Assert.NotNull(o.DeletedAt));
+        }
+
         // ---- セットアップ ----
 
         private static Organization NewOrganization(string code) => new()
@@ -326,6 +381,73 @@ namespace IdentityProvider.Test.Data
             Context.ChangeTracker.Clear();
         }
 
+        /// <summary>Account が owner として管理する Organization を投入する（実物の AccountService が読む）。</summary>
+        private async Task SeedOwnedOrganizationAsync(int id, string code, bool isSandbox, int? parentOrganizationId = null)
+        {
+            Context.Organizations.Add(new Organization
+            {
+                Id = id,
+                Code = code,
+                Name = code,
+                TenantName = code,
+                IsSandbox = isSandbox,
+                ParentOrganizationId = parentOrganizationId
+            });
+            Context.AccountOrganizations.Add(new AccountOrganization
+            {
+                AccountSubject = AccountSubject,
+                OrganizationId = id,
+                Role = "owner"
+            });
+            await Context.SaveChangesAsync();
+            Context.ChangeTracker.Clear();
+        }
+
+        private SignupService CreateSignupService(ISecretProtector protector)
+        {
+            var disposableMock = new Mock<IDisposableEmailChecker>();
+            disposableMock.Setup(x => x.IsDisposable(It.IsAny<string>())).Returns(false);
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [$"Signup:ConfirmBaseUrl:{Tenant}"] = "https://ec-auth.io"
+                })
+                .Build();
+            _emailMock = new Mock<IEmailService>();
+            return new SignupService(
+                Context,
+                _tenantService,
+                _emailMock.Object,
+                disposableMock.Object,
+                configuration,
+                Mock.Of<ILogger<SignupService>>(),
+                new PasskeyRegistrationTokenService(Context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()),
+                new OrganizationProvisioningService(Context, protector));
+        }
+
+        private Mock<IEmailService> _emailMock = new();
+
+        /// <summary>申込を受け付け、確認メールに載る生トークンを取り出す（DB にはハッシュしか残らない）。</summary>
+        private async Task<string> RequestAndCaptureTokenAsync(SignupService service)
+        {
+            string? confirmUrl = null;
+            _emailMock
+                .Setup(x => x.SendSignupConfirmationAsync(
+                    It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, string, CancellationToken>((_, _, url, _) => confirmUrl = url)
+                .Returns(Task.CompletedTask);
+
+            await service.RequestAsync(new SignupInput
+            {
+                Email = "owner@example.com",
+                OrganizationName = "Example Shop",
+                ContactName = "山田 太郎",
+                ProductionSiteUrl = "https://shop.example.jp",
+                EcCubeVersion = "4"
+            });
+            return ExtractTokenFromConfirmUrl(confirmUrl!);
+        }
+
         /// <summary>
         /// 1 回目の <c>ProtectAsync</c> だけ一過性の失敗を起こし、以降は平文をそのまま返す ISecretProtector。
         /// ProvisionAsync は Organization を SaveChanges した後に ProtectAsync を呼ぶため、
@@ -351,7 +473,12 @@ namespace IdentityProvider.Test.Data
             return protector;
         }
 
-        private AccountController CreateController(ISecretProtector protector, out Mock<IAccountService> accountServiceMock)
+        /// <param name="useRealAccountService">
+        /// true なら実物の <see cref="AccountService"/>（account_organization を実 DB から読む）を使う。
+        /// 再試行時に「前回の試行が作った / 消したサイト」を管理下として認識させるテストで必要。
+        /// </param>
+        private AccountController CreateController(
+            ISecretProtector protector, out Mock<IAccountService> accountServiceMock, bool useRealAccountService = false)
         {
             var tokenServiceMock = new Mock<ITokenService>();
             tokenServiceMock
@@ -363,11 +490,14 @@ namespace IdentityProvider.Test.Data
                     SubjectType = SubjectType.Account
                 });
             accountServiceMock = new Mock<IAccountService>();
+            IAccountService accountService = useRealAccountService
+                ? new AccountService(Context, Mock.Of<ILogger<AccountService>>())
+                : accountServiceMock.Object;
 
             return new AccountController(
                 Context,
                 tokenServiceMock.Object,
-                accountServiceMock.Object,
+                accountService,
                 protector,
                 new OrganizationProvisioningService(Context, protector),
                 Mock.Of<ILogger<AccountController>>());

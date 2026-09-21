@@ -428,10 +428,21 @@ spec は受信口を直接触らず、`tests/helpers/mailbox.ts` の `Mailbox` �
 - **`CommandTimeout` を延ばしたい処理は `SetCommandTimeout` で個別に延ばす**（起動時の `MigrateAsync` が
   該当）。staging / production のマイグレーションは `dotnet ef migrations script` の SQL を
   `azure/sql-action` で流すため、`Program.cs` の値には依存しない。
-- コミット中の接続断は状態不明のまま再試行される（EF docs の idempotency issue）。二重 INSERT は
-  ユニーク制約 / 代替キーで `DbUpdateException` になり既存の 409 経路へ落ちる前提。
+- **`catch (DbUpdateException)` は `DatabaseResilience.IsUniqueConstraintViolation` で絞る。** 一過性の
+  接続断も `SaveChangesAsync` では `DbUpdateException` に包まれて届くため、無条件に握って 409 に変換すると
+  デリゲートが正常終了扱いになり再試行されない。
+- **`CommitAsync` が例外を投げた後に `RollbackAsync` を呼ばない**（`catch { Rollback; throw; }` を書かない）。
+  DB 上はコミット済みなので「This SqlTransaction has completed」で元の例外が覆い隠され、再試行されない。
+  未コミットのロールバックは `await using` の Dispose に任せる。
+- **コミット中の接続断は「成功したが応答が失われた」状態で再試行される**（EF docs の idempotency issue）。
+  やり直しは二重 INSERT にならず（ユニーク制約 / 代替キーで `DbUpdateException`）、404 / 409 /
+  上限超過になる。応答と共に失われる値がある経路（申込確認の登録トークンは DB にハッシュしか残らない）や
+  やり直しがエラーになる経路は、`ExecuteInRetryableUnitAsync` の `isRetry` で「前回の試行がコミット済みか」を
+  実状態から判定し、成功として返す（`ConfirmAsync` は `subject` を試行間で固定して Account の有無、
+  `CreateOrganization` は管理下の同一組織コード、`DeleteOrganization` は owner 行の `deleted_at`）。
+  `IdentityProvider.Test/Data/DatabaseResilienceTests.cs` の `FailAfterCommitOnceInterceptor` で再現できる。
   ユニーク制約の無い IDENTITY テーブルにリクエスト経路から単発 INSERT する処理を足すときは、
-  この前提が崩れないか確認する（2026-09 時点で該当なし）。
+  二重 INSERT が黙って通らないか確認する（2026-09 時点で該当なし）。
 
 ### マイグレーション設計ルール
 

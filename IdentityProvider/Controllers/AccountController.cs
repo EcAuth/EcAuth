@@ -489,7 +489,27 @@ namespace IdentityProvider.Controllers
             // 一過性の接続断で再試行されると、この単位（行ロック → 再検証 → 払い出し → コミット）が
             // 丸ごと再実行される。ChangeTracker は各試行の先頭で空になるため、上で読んだ account /
             // ownedOrganizations は参照専用として扱い、更新対象はロック取得後に読み直す。
-            return await _context.ExecuteInRetryableUnitAsync<IActionResult>(async cancellationToken =>
+            // client_secret は返さない（一覧に載せないのと同じ理由）。UI は reveal で 1 件ずつ取得する。
+            IActionResult CreatedResponse(ProvisionedSite provisioned) =>
+                Created($"/v1/account/organizations/{provisioned.Organization.Id}", new
+                {
+                    id = provisioned.Organization.Id,
+                    code = provisioned.Organization.Code,
+                    name = provisioned.Organization.Name,
+                    is_sandbox = provisioned.Organization.IsSandbox,
+                    parent_organization_id = provisioned.Organization.ParentOrganizationId,
+                    created_at = provisioned.Organization.CreatedAt,
+                    client = new
+                    {
+                        id = provisioned.Client.Id,
+                        client_id = provisioned.Client.ClientId,
+                        has_secret = !string.IsNullOrEmpty(provisioned.Client.ClientSecret),
+                        redirect_uris = provisioned.Client.RedirectUris!.Select(r => r.Uri).ToArray(),
+                        allowed_rp_ids = provisioned.Client.AllowedRpIds.ToArray()
+                    }
+                });
+
+            return await _context.ExecuteInRetryableUnitAsync<IActionResult>(async (isRetry, cancellationToken) =>
             {
                 await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
                 ProvisionedSite provisioned;
@@ -513,6 +533,34 @@ namespace IdentityProvider.Controllers
                     // ownedOrganizations は使えない。
                     var lockedManaged = await _accountService.GetManagedOrganizationsAsync(subject);
                     var lockedOrgIds = lockedManaged.Select(m => m.OrganizationId).ToHashSet();
+
+                    if (isRetry)
+                    {
+                        // 前回の試行がコミット済みで応答だけが接続断で失われた場合（EF Core docs の
+                        // idempotency issue）、このリクエストの組織コードのサイトが既に管理下にある。
+                        // やり直すと本番は site_limit_exceeded、それ以外は組織コードのユニーク制約で
+                        // 409 になるため、作成済みのサイトをそのまま 201 で返す。組織コードは事前に
+                        // 未使用を確認しており、管理下にあるなら前回の試行が作ったものと判断できる。
+                        var alreadyCreated = await _context.Organizations
+                            .IgnoreQueryFilters()
+                            .FirstOrDefaultAsync(o => lockedOrgIds.Contains(o.Id)
+                                && o.Code == site.Code
+                                && o.IsSandbox == body.IsSandbox
+                                && o.DeletedAt == null,
+                                cancellationToken);
+                        if (alreadyCreated != null)
+                        {
+                            await transaction.RollbackAsync(cancellationToken);
+                            var existingClient = await _context.Clients
+                                .IgnoreQueryFilters()
+                                .Include(c => c.RedirectUris)
+                                .FirstAsync(c => c.OrganizationId == alreadyCreated.Id, cancellationToken);
+                            _logger.LogWarning(
+                                "前回の試行がコミット済みだったためサイト追加を成功として扱います: Subject={Subject}, OrganizationId={OrganizationId}, Code={Code}",
+                                subject, alreadyCreated.Id, alreadyCreated.Code);
+                            return CreatedResponse(new ProvisionedSite(alreadyCreated, existingClient));
+                        }
+                    }
 
                     if (body.IsSandbox)
                     {
@@ -615,24 +663,7 @@ namespace IdentityProvider.Controllers
                     subject, provisioned.Organization.Id, provisioned.Organization.Code,
                     provisioned.Organization.IsSandbox, parentOrganizationId);
 
-                // client_secret は返さない（一覧に載せないのと同じ理由）。UI は reveal で 1 件ずつ取得する。
-                return Created($"/v1/account/organizations/{provisioned.Organization.Id}", new
-                {
-                    id = provisioned.Organization.Id,
-                    code = provisioned.Organization.Code,
-                    name = provisioned.Organization.Name,
-                    is_sandbox = provisioned.Organization.IsSandbox,
-                    parent_organization_id = provisioned.Organization.ParentOrganizationId,
-                    created_at = provisioned.Organization.CreatedAt,
-                    client = new
-                    {
-                        id = provisioned.Client.Id,
-                        client_id = provisioned.Client.ClientId,
-                        has_secret = !string.IsNullOrEmpty(provisioned.Client.ClientSecret),
-                        redirect_uris = provisioned.Client.RedirectUris!.Select(r => r.Uri).ToArray(),
-                        allowed_rp_ids = provisioned.Client.AllowedRpIds.ToArray()
-                    }
-                });
+                return CreatedResponse(provisioned);
             }, HttpContext.RequestAborted);
         }
 
@@ -691,7 +722,7 @@ namespace IdentityProvider.Controllers
 
             // CreateOrganization と同じく再試行の 1 単位として実行する（行ロック → 再検証 → 論理削除 → コミット）。
             // 論理削除は冪等なので、コミット中の接続断で状態不明のまま再実行されても結果は変わらない。
-            return await _context.ExecuteInRetryableUnitAsync<IActionResult>(async cancellationToken =>
+            return await _context.ExecuteInRetryableUnitAsync<IActionResult>(async (isRetry, cancellationToken) =>
             {
                 await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
 
@@ -719,6 +750,38 @@ namespace IdentityProvider.Controllers
                 if (!lockedOrgIds.Contains(id))
                 {
                     await transaction.RollbackAsync(cancellationToken);
+
+                    if (isRetry)
+                    {
+                        // 前回の試行がコミット済みで応答だけが接続断で失われた場合（EF Core docs の
+                        // idempotency issue）、対象は論理削除済みで管理対象から外れている。通常の
+                        // 二重削除（404）と区別するため、再試行時に限り、自分が owner の行が削除済みなら
+                        // 成功として返す。子サンドボックスは同一トランザクションで同じ deleted_at を
+                        // 持つので、それで絞る。
+                        var deletedTarget = await _context.Organizations
+                            .IgnoreQueryFilters()
+                            .Where(o => o.Id == id && o.DeletedAt != null
+                                && _context.AccountOrganizations.Any(ao => ao.OrganizationId == o.Id && ao.AccountSubject == subject))
+                            .Select(o => new { o.Id, o.DeletedAt })
+                            .FirstOrDefaultAsync(cancellationToken);
+                        if (deletedTarget != null)
+                        {
+                            var deletedIds = await _context.Organizations
+                                .IgnoreQueryFilters()
+                                .Where(o => (o.Id == id || o.ParentOrganizationId == id) && o.DeletedAt == deletedTarget.DeletedAt)
+                                .Select(o => o.Id)
+                                .ToListAsync(cancellationToken);
+                            _logger.LogWarning(
+                                "前回の試行がコミット済みだったためサイト削除を成功として扱います: Subject={Subject}, OrganizationIds={OrganizationIds}",
+                                subject, string.Join(",", deletedIds));
+                            return Ok(new
+                            {
+                                deleted_organization_ids = deletedIds.ToArray(),
+                                deleted_at = deletedTarget.DeletedAt
+                            });
+                        }
+                    }
+
                     return NotFoundResult();
                 }
 

@@ -75,18 +75,38 @@ public static class DatabaseResilience
     /// 呼び出し元が未保存のエンティティを追跡させたまま呼ぶと破棄されるので、
     /// リクエスト処理の主単位（コントローラー / サービスの入口）でのみ使う。
     /// </para>
+    /// <para>
+    /// コミット中に接続が切れると、コミットが成功していても一過性エラーとして再試行される
+    /// （EF Core docs「Transaction commit failure and the idempotency issue」）。やり直しがユニーク制約で
+    /// 409 になるだけなら許容できるが、応答と共に失われる値（申込確認の登録トークン等）がある経路は
+    /// <see cref="ExecuteInRetryableUnitAsync{TResult}(EcAuthDbContext, Func{bool, CancellationToken, Task{TResult}}, CancellationToken)"/>
+    /// の <c>isRetry</c> で「前回の試行がコミット済みか」を確認し、成功として返すこと。
+    /// </para>
     /// </summary>
     public static Task<TResult> ExecuteInRetryableUnitAsync<TResult>(
         this EcAuthDbContext context,
         Func<CancellationToken, Task<TResult>> operation,
         CancellationToken cancellationToken = default)
+        => context.ExecuteInRetryableUnitAsync((_, ct) => operation(ct), cancellationToken);
+
+    /// <summary>
+    /// <see cref="ExecuteInRetryableUnitAsync{TResult}(EcAuthDbContext, Func{CancellationToken, Task{TResult}}, CancellationToken)"/>
+    /// と同じだが、デリゲートに「再試行か（2 回目以降の試行か）」を渡す。
+    /// 再試行時に前回の試行のコミット結果を認識し、やり直しではなく成功として返すための判定に使う。
+    /// </summary>
+    public static Task<TResult> ExecuteInRetryableUnitAsync<TResult>(
+        this EcAuthDbContext context,
+        Func<bool, CancellationToken, Task<TResult>> operation,
+        CancellationToken cancellationToken = default)
     {
         var strategy = context.Database.CreateExecutionStrategy();
+        var attempt = 0;
         return strategy.ExecuteAsync(
             async ct =>
             {
+                attempt++;
                 context.ChangeTracker.Clear();
-                return await operation(ct);
+                return await operation(attempt > 1, ct);
             },
             cancellationToken);
     }

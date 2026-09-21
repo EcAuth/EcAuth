@@ -218,19 +218,37 @@ namespace IdentityProvider.Services
                 }
             }
 
-            return await _context.ExecuteInRetryableUnitAsync(async cancellationToken =>
+            // subject は再試行をまたいで固定する。コミット中の接続断で「前回の試行は実際には
+            // コミット済み」だった場合に、その Account の有無で成功を判定するため（下の isRetry 分岐）。
+            var subject = Guid.NewGuid().ToString();
+
+            return await _context.ExecuteInRetryableUnitAsync(async (isRetry, cancellationToken) =>
             {
                 // ExecuteInRetryableUnitAsync は各試行の先頭で ChangeTracker を空にするため、
                 // トランザクション外で読んだ申込行を更新対象として追跡し直す。
                 _context.SignupRequests.Attach(signupRequest);
+
+                if (isRetry && await _context.Accounts
+                        .IgnoreQueryFilters()
+                        .AnyAsync(a => a.Subject == subject, cancellationToken))
+                {
+                    // 前回の試行はコミット済みで、応答だけが接続断で失われた（EF Core docs の
+                    // idempotency issue）。やり直すと email / 組織コードのユニーク制約で 409 になるうえ、
+                    // 登録トークンの平文は前回の応答と共に失われている（DB にはハッシュしか無い）ため、
+                    // 申込者が初回パスキー登録を完了できなくなる。トークンだけ発行し直して成功として返す。
+                    await _context.Entry(signupRequest).ReloadAsync(cancellationToken);
+                    var reissuedToken = await _registrationTokenService.IssueAsync(subject, cancellationToken);
+                    _logger.LogWarning(
+                        "前回の試行がコミット済みだったため申込確認を成功として扱い、登録トークンを再発行しました: Tenant={Tenant}, TokenHash={TokenHash}, Subject={Subject}",
+                        signupRequest.TenantName, TokenHashPrefix(token), subject);
+                    return new ISignupService.ConfirmResult(signupRequest, reissuedToken);
+                }
 
                 await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
                 using (TimingScope.Begin("confirm"))
                 {
                 try
                 {
-                    var subject = Guid.NewGuid().ToString();
-
                     // Account（受付テナント Org 所属）。
                     var account = new Account
                     {
@@ -355,11 +373,9 @@ namespace IdentityProvider.Services
                         field: "production_site_url",
                         statusCode: 409);
                 }
-                catch
-                {
-                    await transaction.RollbackAsync(cancellationToken);
-                    throw;
-                }
+                // 上記以外の例外で明示的に RollbackAsync は呼ばない。未コミットなら await using の Dispose が
+                // ロールバックする。CommitAsync が例外を投げた後（DB 上は完了済み）に RollbackAsync を呼ぶと
+                // 「This SqlTransaction has completed」で元の例外が覆い隠され、一過性の接続断が再試行されない。
                 }
             }, ct);
         }

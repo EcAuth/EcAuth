@@ -1,7 +1,9 @@
+using System.Data.Common;
 using IdentityProvider.Models;
 using IdentityProvider.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Storage;
 
 namespace IdentityProvider.Test.TestHelpers
@@ -32,6 +34,34 @@ namespace IdentityProvider.Test.TestHelpers
     }
 
     /// <summary>
+    /// <see cref="Arm"/> 後の最初のトランザクションコミットが DB 上では成功した直後に、
+    /// 一過性の失敗（<see cref="TransientTestException"/>）を報告するインターセプター。
+    /// 「コミットは成功したが接続断でその応答が失われ、再試行戦略がデリゲートをやり直す」
+    /// （EF Core docs の Transaction commit failure and the idempotency issue）を再現する。
+    /// </summary>
+    public sealed class FailAfterCommitOnceInterceptor : DbTransactionInterceptor
+    {
+        private bool _armed;
+
+        /// <summary>武装後に失敗を報告したコミットの数（1 になれば発火済み）。</summary>
+        public int FailedCommits { get; private set; }
+
+        public void Arm() => _armed = true;
+
+        public override Task TransactionCommittedAsync(
+            DbTransaction transaction, TransactionEndEventData eventData, CancellationToken cancellationToken = default)
+        {
+            if (_armed)
+            {
+                _armed = false;
+                FailedCommits++;
+                throw new TransientTestException();
+            }
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
     /// 再試行戦略を載せた SQLite in-memory の <see cref="EcAuthDbContext"/>。
     ///
     /// <para>
@@ -51,13 +81,14 @@ namespace IdentityProvider.Test.TestHelpers
 
         public EcAuthDbContext Context { get; }
 
-        public RetryingSqliteContext(ITenantService? tenantService = null)
+        public RetryingSqliteContext(ITenantService? tenantService = null, params IInterceptor[] interceptors)
         {
             _connection = new SqliteConnection("DataSource=:memory:");
             _connection.Open();
 
             var options = new DbContextOptionsBuilder<EcAuthDbContext>()
                 .UseSqlite(_connection, sqlite => sqlite.ExecutionStrategy(d => new RetryingTestExecutionStrategy(d)))
+                .AddInterceptors(interceptors)
                 .Options;
 
             Context = new EcAuthDbContext(options, tenantService ?? new MockTenantService());
