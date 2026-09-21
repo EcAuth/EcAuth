@@ -592,11 +592,14 @@ namespace IdentityProvider.Controllers
 
                     await transaction.CommitAsync(cancellationToken);
                 }
-                catch (DbUpdateException ex)
+                catch (DbUpdateException ex) when (DatabaseResilience.IsUniqueConstraintViolation(ex))
                 {
                     await transaction.RollbackAsync(cancellationToken);
 
                     // 事前チェックをすり抜けた並行追加（同じ組織コード / 同じ親へのテストサイト 2 件）。
+                    // ユニーク制約違反だけを 409 にする。一過性の接続断を包んだ DbUpdateException まで
+                    // ここで握ると再試行戦略が働かないため、それ以外は外へ逃がす（トランザクションは
+                    // await using の Dispose でロールバックされる）。
                     _logger.LogWarning(ex,
                         "サイト追加が競合しました: Subject={Subject}, Code={Code}", subject, site.Code);
                     return Conflict(new

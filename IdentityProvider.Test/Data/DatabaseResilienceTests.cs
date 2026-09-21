@@ -214,6 +214,33 @@ namespace IdentityProvider.Test.Data
         }
 
         [Fact]
+        public async Task AccountController_CreateOrganization_RetriesTransientFailureWrappedInDbUpdateException()
+        {
+            // SaveChangesAsync 中の一過性の接続断は DbUpdateException に包まれて届く。
+            // CreateOrganization の catch (DbUpdateException) がユニーク制約違反以外まで握って 409 に
+            // 変換すると、デリゲートが正常終了扱いになり再試行戦略が働かない（Codex / CodeRabbit の指摘）。
+            // ExecutionStrategy は DbUpdateException の InnerException で再試行可否を判定するので、
+            // 外へ逃がせば再試行される。
+            await SeedAccountsOrgWithConsoleClientAsync();
+            await SeedAccountAsync();
+            var protector = CreateProtectorFailingOnce(
+                out var protectCalls,
+                failure: () => new DbUpdateException("wrapped transient failure", new TransientTestException()));
+            var controller = CreateController(protector.Object, out var accountServiceMock);
+            AuthenticateAsOwnerOf(controller, accountServiceMock);
+
+            var result = await controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://shop.example.jp"
+            });
+
+            Assert.IsType<CreatedResult>(result);
+            Assert.Equal(2, protectCalls.Value);
+            Assert.Single(await Context.Organizations.IgnoreQueryFilters()
+                .Where(o => o.Code == "shop-example-jp").ToListAsync());
+        }
+
+        [Fact]
         public async Task AccountController_DeleteOrganization_SucceedsUnderRetryingStrategy_WhenFirstAttemptFailsTransiently()
         {
             await SeedAccountsOrgWithConsoleClientAsync();
@@ -304,7 +331,8 @@ namespace IdentityProvider.Test.Data
         /// ProvisionAsync は Organization を SaveChanges した後に ProtectAsync を呼ぶため、
         /// 「トランザクション途中で一過性の失敗 → 再試行」を再現できる。
         /// </summary>
-        private static Mock<ISecretProtector> CreateProtectorFailingOnce(out StrongBox<int> calls)
+        private static Mock<ISecretProtector> CreateProtectorFailingOnce(
+            out StrongBox<int> calls, Func<Exception>? failure = null)
         {
             var counter = new StrongBox<int>(0);
             var protector = new Mock<ISecretProtector>();
@@ -315,7 +343,7 @@ namespace IdentityProvider.Test.Data
                     counter.Value++;
                     if (counter.Value == 1)
                     {
-                        throw new TransientTestException();
+                        throw failure?.Invoke() ?? new TransientTestException();
                     }
                     return Task.FromResult(plaintext);
                 });

@@ -324,7 +324,7 @@ namespace IdentityProvider.Services
 
                     return new ISignupService.ConfirmResult(signupRequest, registrationToken);
                 }
-                catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+                catch (DbUpdateException ex) when (DatabaseResilience.IsUniqueConstraintViolation(ex))
                 {
                     // confirm 中に別リクエストが先に INSERT したことによるユニーク制約違反（TOCTOU）。
                     // 事前チェック（メール既登録・組織コード重複）をすり抜けた真の競合のみがここに到達する。
@@ -362,16 +362,6 @@ namespace IdentityProvider.Services
                 }
                 }
             }, ct);
-        }
-
-        /// <summary>
-        /// <see cref="DbUpdateException"/> が SQL Server のユニーク／主キー制約違反
-        /// （エラー番号 2601 / 2627）に起因するかを判定する。
-        /// </summary>
-        private static bool IsUniqueConstraintViolation(DbUpdateException ex)
-        {
-            return ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx
-                && (sqlEx.Number == 2601 || sqlEx.Number == 2627);
         }
 
         // Account.(OrganizationId, Email) / B2BUser.(OrganizationId, ExternalId) のユニークインデックス名。

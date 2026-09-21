@@ -37,6 +37,24 @@ public static class DatabaseResilience
     public static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// <see cref="DbUpdateException"/> が SQL Server のユニーク／主キー制約違反
+    /// （エラー番号 2601 / 2627）に起因するかを判定する。
+    ///
+    /// <para>
+    /// <see cref="ExecuteInRetryableUnitAsync"/> の中で <c>DbUpdateException</c> を捕まえて 409 等に
+    /// 変換するときは、必ずこの判定で絞ること。一過性の接続断も <c>SaveChangesAsync</c> では
+    /// <c>DbUpdateException</c> に包まれて届くため、無条件に捕まえるとデリゲートが正常終了扱いになり、
+    /// 再試行戦略が働かない（<c>ExecutionStrategy</c> は <c>DbUpdateException</c> の InnerException を
+    /// 見て再試行可否を判定するので、外へ逃がせば再試行される）。
+    /// </para>
+    /// </summary>
+    public static bool IsUniqueConstraintViolation(DbUpdateException ex)
+    {
+        return ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx
+            && (sqlEx.Number == 2601 || sqlEx.Number == 2627);
+    }
+
+    /// <summary>
     /// ユーザー開始トランザクション（<c>BeginTransactionAsync</c>）を含む一連の DB 操作を、
     /// 再試行戦略の 1 単位として実行する。
     ///
