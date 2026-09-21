@@ -264,6 +264,18 @@ E2E で新しいホスト名の IdP を開くときは `--host-resolver-rules` �
 組織コードは DNS ラベル 1 つ分なので 63 文字を超えられない（`MaxOrganizationCodeLength`）。
 超える申込は `invalid_site_url` で弾く。
 
+**ドメインの占有は組織コードではなく Client のホスト（`allowed_rp_ids`）単位で判定する**
+（EcAuthDocs#121 項目 1、`OrganizationProvisioningService.EnsureHostsAvailableAsync`）。
+Organization = 組織、Client = サイトであり、`POST /v1/account/organizations/{id}/clients` で
+既存 Organization に 2 つ目以降の Client（WordPress 等）を足せる。2 つ目以降のホストはどの
+組織コードにも写らないため、組織コード単位の判定では別の申込者が同じホストで新しい
+Organization を作れてしまう。判定は正規化済み RP ID の完全一致で、呼び出し元が管理する
+Organization 群（本番とそのサンドボックス）内の重複は許可する。`allowed_rp_ids` は JSON
+文字列カラムなので、SQL 側は `LIKE '%"host"%'` でプリフィルタし、メモリ上で完全一致を確定する。
+`POST /v1/account/clients/{id}/allowed-rp-ids` にも同じ判定を掛ける（迂回路にしない）。
+`account.max_sites` の単位も本番 Organization 配下の **Client 数**。Client を減らす経路は無い
+（EcAuthDocs#144）。
+
 #### `wwwroot/b2b-passkey-test.html` の配信条件
 
 静的ファイル配信は **`app.Environment.IsProduction()` のときだけ**テナント限定になる
@@ -325,8 +337,8 @@ ECCUBE_AUTHENTICATION_KEY=$(op read 'op://EcAuth/eccube4-ecauth-plugin/eccube_au
 
 #### 再実行時の注意
 
-申込は組織コードの重複を弾く（`organization_already_exists`）。組織コードはサイトホストから
-導出されるため、**同じホストで二度申し込めない**。`up` は毎回新しい RUN_ID を振り、`down` は
+申込はホストの占有を弾く（`organization_already_exists`。判定は Client の `allowed_rp_ids`
+単位、上記「申込が作る Organization と組織コードの導出」参照）ため、**同じホストで二度申し込めない**。`up` は毎回新しい RUN_ID を振り、`down` は
 ボリュームごと破棄する。`E2E_RUN_ID` を環境変数で固定すると同じホストで再実行してしまうので、
 意図的に再現したいとき以外は設定しない。
 

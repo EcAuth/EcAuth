@@ -631,7 +631,19 @@ namespace IdentityProvider.Test.Controllers
         {
             await SeedAccount(maxSites: 3);
             await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret-prod");
-            await SeedOrganization(2, "shop1-sandbox", isSandbox: true, parentOrganizationId: 1);
+            // 同じ本番 Org の 2 つ目の Client（WordPress）。本番サイト数として数える。
+            _context.Clients.Add(new Client
+            {
+                Id = 11,
+                ClientId = "client-prod-wp",
+                ClientSecret = "secret-wp",
+                AppName = "shop1 WordPress",
+                OrganizationId = 1
+            });
+            await _context.SaveChangesAsync();
+            await SeedOrgWithClient(2, "shop1-sandbox", true, 20, "client-sandbox", "secret-sandbox");
+            _context.Organizations.IgnoreQueryFilters().Single(o => o.Id == 2).ParentOrganizationId = 1;
+            await _context.SaveChangesAsync();
             await SeedOrganization(3, "other", isSandbox: false);
 
             AuthenticateAsOwnerOf((1, "shop1"), (2, "shop1-sandbox"));
@@ -642,8 +654,8 @@ namespace IdentityProvider.Test.Controllers
             var organizations = GetOrganizationList(ok.Value);
             Assert.Equal(2, organizations.Count);
             Assert.Equal(3, (int)GetProp(ok.Value!, "max_sites"));
-            // 本番のみを数える（サンドボックスは上限の対象外）。
-            Assert.Equal(1, (int)GetProp(ok.Value!, "production_site_count"));
+            // 本番 Org 配下の Client 数を数える（サンドボックス Org 配下の Client は上限の対象外）。
+            Assert.Equal(2, (int)GetProp(ok.Value!, "production_site_count"));
 
             var sandbox = organizations.Single(o => (bool)GetProp(o, "is_sandbox"));
             Assert.Equal(1, (int?)GetProp(sandbox, "parent_organization_id"));
@@ -656,8 +668,9 @@ namespace IdentityProvider.Test.Controllers
         public async Task CreateOrganization_ProductionAtLimit_ReturnsSiteLimitExceeded()
         {
             await SeedAccount(maxSites: 2);
-            await SeedOrganization(1, "shop1", isSandbox: false);
-            await SeedOrganization(2, "shop2", isSandbox: false);
+            // 上限の単位は本番 Org 配下の Client 数。Client を持たない Org は数に入らない。
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-1", "secret", allowedRpIds: new[] { "shop1.example.jp" });
+            await SeedOrgWithClient(2, "shop2", false, 20, "client-2", "secret", allowedRpIds: new[] { "shop2.example.jp" });
             AuthenticateAsOwnerOf((1, "shop1"), (2, "shop2"));
 
             var result = await _controller.CreateOrganization(new AccountController.CreateOrganizationDto
@@ -818,6 +831,335 @@ namespace IdentityProvider.Test.Controllers
                 .AnyAsync(k => k.OrganizationId == organizationId));
             Assert.True(await _context.AccountOrganizations.IgnoreQueryFilters()
                 .AnyAsync(ao => ao.OrganizationId == organizationId && ao.AccountSubject == AccountSubject));
+        }
+
+        [Fact]
+        public async Task CreateOrganization_HostOwnedByAnotherAccountsSecondClient_ReturnsOrganizationAlreadyExists()
+        {
+            await SeedAccount();
+            // 別アカウントの Org。組織コードは最初のサイト由来で、2 つ目の Client が wp.example.jp を持つ。
+            await SeedOrgWithClient(9, "shop9-example-jp", false, 90, "client-9", "secret",
+                allowedRpIds: new[] { "shop9.example.jp" });
+            _context.Clients.Add(new Client
+            {
+                Id = 91,
+                ClientId = "client-9-wp",
+                ClientSecret = "secret",
+                AppName = "WordPress",
+                OrganizationId = 9,
+                AllowedRpIds = new List<string> { "wp.example.jp" }
+            });
+            await _context.SaveChangesAsync();
+            AuthenticateAsOwnerOf();
+
+            // 組織コード（wp-example-jp）は空いているが、ホストは別 Org の Client が占有している。
+            var result = await _controller.CreateOrganization(new AccountController.CreateOrganizationDto
+            {
+                SiteUrl = "https://wp.example.jp"
+            });
+
+            var objectResult = Assert.IsType<ObjectResult>(result);
+            Assert.Equal(422, objectResult.StatusCode);
+            Assert.Equal("organization_already_exists", (string)GetProp(objectResult.Value!, "error"));
+            Assert.Equal("site_url", (string)GetProp(objectResult.Value!, "field"));
+        }
+
+        // ---- 既存 Organization への Client 追加 ----
+
+        private static AccountController.AddClientDto AddClientBody(
+            string siteUrl, string? version = null, string? appName = null) =>
+            new() { SiteUrl = siteUrl, EcCubeVersion = version, AppName = appName };
+
+        [Fact]
+        public async Task AddClient_OwnedOrganization_CreatesSecondClientWithoutNewOrganization()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1-example-jp", false, 10, "client-prod", "secret",
+                allowedRpIds: new[] { "shop1.example.jp" });
+            AuthenticateAsOwnerOf((1, "shop1-example-jp"));
+
+            var result = await _controller.AddClient(1, AddClientBody("https://wp.example.jp/blog/", "2", "WordPress"));
+
+            var created = Assert.IsType<CreatedResult>(result);
+            Assert.Equal("/v1/account/organizations/1", created.Location);
+            Assert.Equal(1, (int)GetProp(created.Value!, "organization_id"));
+            Assert.Equal("WordPress", (string)GetProp(created.Value!, "app_name"));
+            Assert.StartsWith("ec-shop1-example-jp-", (string)GetProp(created.Value!, "client_id"));
+            Assert.Equal(new[] { "https://wp.example.jp/blog/ecauth/callback.php" },
+                (string[])GetProp(created.Value!, "redirect_uris"));
+            Assert.Equal(new[] { "wp.example.jp" }, (string[])GetProp(created.Value!, "allowed_rp_ids"));
+            // client_secret はレスポンスに含めない（一覧と同じ方針）。
+            Assert.Null(created.Value!.GetType().GetProperty("client_secret"));
+            Assert.True((bool)GetProp(created.Value!, "has_secret"));
+
+            // Organization は増えず、Client だけ 2 件になる。
+            Assert.Equal(2, await _context.Organizations.IgnoreQueryFilters().CountAsync()); // accounts + shop1
+            Assert.Equal(2, await _context.Clients.IgnoreQueryFilters().CountAsync(c => c.OrganizationId == 1));
+        }
+
+        [Fact]
+        public async Task AddClient_DefaultsAppNameToHostAndVersionTo4()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret");
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.AddClient(1, AddClientBody("https://www.wp.example.jp"));
+
+            var created = Assert.IsType<CreatedResult>(result);
+            Assert.Equal("www.wp.example.jp", (string)GetProp(created.Value!, "app_name"));
+            Assert.Equal(new[] { "https://www.wp.example.jp/ecauth/callback" },
+                (string[])GetProp(created.Value!, "redirect_uris"));
+            // www. 付きなら除去版も許可する（最初の Client と同じ規則）。
+            Assert.Equal(new[] { "www.wp.example.jp", "wp.example.jp" },
+                (string[])GetProp(created.Value!, "allowed_rp_ids"));
+        }
+
+        [Fact]
+        public async Task AddClient_NotManagedOrganization_ReturnsNotFound()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret");
+            await SeedOrgWithClient(9, "someone-else", false, 90, "client-9", "secret");
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.AddClient(9, AddClientBody("https://wp.example.jp"));
+
+            // 管理外・存在しない・削除済みは区別せず 404（存在を漏らさない）。
+            var notFound = Assert.IsType<NotFoundObjectResult>(result);
+            Assert.Equal("not_found", (string)GetProp(notFound.Value!, "error"));
+            Assert.Equal(1, await _context.Clients.IgnoreQueryFilters().CountAsync(c => c.OrganizationId == 9));
+        }
+
+        [Fact]
+        public async Task AddClient_DeletedOrganization_ReturnsNotFound()
+        {
+            await SeedAccount();
+            await SeedOrganization(1, "shop1", isSandbox: false, deletedAt: DateTimeOffset.UtcNow);
+            // 削除済み Org は GetManagedOrganizationsAsync が除外するため管理下に無い。
+            AuthenticateAsOwnerOf();
+
+            var result = await _controller.AddClient(1, AddClientBody("https://wp.example.jp"));
+
+            Assert.IsType<NotFoundObjectResult>(result);
+        }
+
+        [Fact]
+        public async Task AddClient_NoToken_ReturnsUnauthorized()
+        {
+            SetBearer(null);
+
+            var result = await _controller.AddClient(1, AddClientBody("https://wp.example.jp"));
+
+            Assert.IsType<UnauthorizedObjectResult>(result);
+        }
+
+        [Fact]
+        public async Task AddClient_MissingSiteUrl_ReturnsInvalidRequest()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret");
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.AddClient(1, new AccountController.AddClientDto());
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal("invalid_request", (string)GetProp(unprocessable.Value!, "error"));
+            Assert.Equal("site_url", (string)GetProp(unprocessable.Value!, "field"));
+        }
+
+        [Fact]
+        public async Task AddClient_NonHttpsSiteUrl_ReturnsInvalidSiteUrl()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret");
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.AddClient(1, AddClientBody("http://wp.example.jp"));
+
+            var objectResult = Assert.IsType<ObjectResult>(result);
+            Assert.Equal(422, objectResult.StatusCode);
+            Assert.Equal("invalid_site_url", (string)GetProp(objectResult.Value!, "error"));
+        }
+
+        [Fact]
+        public async Task AddClient_UnsupportedVersion_ReturnsUnsupportedVersion()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret");
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.AddClient(1, AddClientBody("https://wp.example.jp", "3"));
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal("unsupported_version", (string)GetProp(unprocessable.Value!, "error"));
+        }
+
+        [Fact]
+        public async Task AddClient_AppNameTooLong_ReturnsInvalidRequest()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret");
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.AddClient(1, AddClientBody("https://wp.example.jp", null, new string('a', 101)));
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal("invalid_request", (string)GetProp(unprocessable.Value!, "error"));
+            Assert.Equal("app_name", (string)GetProp(unprocessable.Value!, "field"));
+        }
+
+        [Fact]
+        public async Task AddClient_ProductionAtLimit_ReturnsSiteLimitExceeded()
+        {
+            await SeedAccount(maxSites: 2);
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-1", "secret", allowedRpIds: new[] { "shop1.example.jp" });
+            // 同じ本番 Org に既に 2 件目の Client がある（= 本番 Client 数 2 で上限）。
+            _context.Clients.Add(new Client
+            {
+                Id = 11,
+                ClientId = "client-1-wp",
+                ClientSecret = "secret",
+                AppName = "WordPress",
+                OrganizationId = 1,
+                AllowedRpIds = new List<string> { "wp.example.jp" }
+            });
+            await _context.SaveChangesAsync();
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.AddClient(1, AddClientBody("https://third.example.jp"));
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal("site_limit_exceeded", (string)GetProp(unprocessable.Value!, "error"));
+            Assert.Equal(2, await _context.Clients.IgnoreQueryFilters().CountAsync(c => c.OrganizationId == 1));
+        }
+
+        [Fact]
+        public async Task AddClient_SandboxOrganization_DoesNotCountTowardProductionLimit()
+        {
+            await SeedAccount(maxSites: 1);
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret", allowedRpIds: new[] { "shop1.example.jp" });
+            await SeedOrgWithClient(2, "shop1-sandbox", true, 20, "client-sandbox", "secret", allowedRpIds: new[] { "shop1.example.jp" });
+            AuthenticateAsOwnerOf((1, "shop1"), (2, "shop1-sandbox"));
+
+            // 本番は上限いっぱいだが、サンドボックス Org への追加は別枠。
+            var result = await _controller.AddClient(2, AddClientBody("https://stg-wp.example.jp"));
+
+            var created = Assert.IsType<CreatedResult>(result);
+            Assert.Equal(2, (int)GetProp(created.Value!, "organization_id"));
+        }
+
+        [Fact]
+        public async Task AddClient_SameHostAsExistingClientInOwnOrganization_Succeeds()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1-example-jp", false, 10, "client-prod", "secret",
+                allowedRpIds: new[] { "shop1.example.jp" });
+            AuthenticateAsOwnerOf((1, "shop1-example-jp"));
+
+            // EC-CUBE と WordPress が同一ホストの別パスで同居するケース。
+            var result = await _controller.AddClient(1, AddClientBody("https://shop1.example.jp/wp/"));
+
+            var created = Assert.IsType<CreatedResult>(result);
+            Assert.Equal(new[] { "https://shop1.example.jp/wp/ecauth/callback" },
+                (string[])GetProp(created.Value!, "redirect_uris"));
+        }
+
+        [Fact]
+        public async Task AddClient_HostOwnedByAnotherAccount_ReturnsOrganizationAlreadyExists()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret", allowedRpIds: new[] { "shop1.example.jp" });
+            await SeedOrgWithClient(9, "someone-else", false, 90, "client-9", "secret", allowedRpIds: new[] { "wp.example.jp" });
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.AddClient(1, AddClientBody("https://wp.example.jp"));
+
+            var objectResult = Assert.IsType<ObjectResult>(result);
+            Assert.Equal(422, objectResult.StatusCode);
+            Assert.Equal("organization_already_exists", (string)GetProp(objectResult.Value!, "error"));
+            Assert.Equal("site_url", (string)GetProp(objectResult.Value!, "field"));
+            Assert.Equal(1, await _context.Clients.IgnoreQueryFilters().CountAsync(c => c.OrganizationId == 1));
+        }
+
+        [Fact]
+        public async Task AddClient_HostOwnedByDeletedOrganization_ReturnsOrganizationDeleted()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret", allowedRpIds: new[] { "shop1.example.jp" });
+            await SeedOrgWithClient(9, "gone", false, 90, "client-9", "secret", allowedRpIds: new[] { "wp.example.jp" });
+            _context.Organizations.IgnoreQueryFilters().Single(o => o.Id == 9).DeletedAt = DateTimeOffset.UtcNow;
+            await _context.SaveChangesAsync();
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.AddClient(1, AddClientBody("https://wp.example.jp"));
+
+            var objectResult = Assert.IsType<ObjectResult>(result);
+            Assert.Equal(422, objectResult.StatusCode);
+            Assert.Equal("organization_deleted", (string)GetProp(objectResult.Value!, "error"));
+        }
+
+        [Fact]
+        public async Task GetOrganizations_ListsAddedClientUnderItsOrganization()
+        {
+            await SeedAccount();
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret", allowedRpIds: new[] { "shop1.example.jp" });
+            AuthenticateAsOwnerOf((1, "shop1"));
+            Assert.IsType<CreatedResult>(await _controller.AddClient(1, AddClientBody("https://wp.example.jp", null, "WordPress")));
+
+            var result = await _controller.GetOrganizations();
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            var organization = GetOrganizationList(ok.Value).Single();
+            var clients = ((IEnumerable<object>)GetProp(organization, "clients")).ToList();
+            Assert.Equal(2, clients.Count);
+            Assert.Contains(clients, c => (string)GetProp(c, "app_name") == "WordPress");
+            Assert.All(clients, c => Assert.IsType<DateTimeOffset>(GetProp(c, "created_at")));
+            Assert.Equal(2, (int)GetProp(ok.Value!, "production_site_count"));
+        }
+
+        // ---- allowed_rp_ids の更新とホスト占有 ----
+
+        [Fact]
+        public async Task UpdateAllowedRpIds_HostOwnedByAnotherOrganization_Returns422AndKeepsExisting()
+        {
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret",
+                allowedRpIds: new[] { "shop1.example.jp" });
+            await SeedOrgWithClient(9, "someone-else", false, 90, "client-9", "secret",
+                allowedRpIds: new[] { "shop9.example.jp" });
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            // 編集 API からも他 Org のホストは取れない（占有チェックの迂回路にしない）。
+            var result = await _controller.UpdateAllowedRpIds(10, new AccountController.AllowedRpIdsDto
+            {
+                AllowedRpIds = new List<string> { "shop1.example.jp", "shop9.example.jp" }
+            });
+
+            var objectResult = Assert.IsType<ObjectResult>(result);
+            Assert.Equal(422, objectResult.StatusCode);
+            Assert.Equal("organization_already_exists", (string)GetProp(objectResult.Value!, "error"));
+            Assert.Equal("allowed_rp_ids", (string)GetProp(objectResult.Value!, "field"));
+
+            var stored = await _context.Clients.IgnoreQueryFilters().FirstAsync(c => c.Id == 10);
+            Assert.Equal(new[] { "shop1.example.jp" }, stored.AllowedRpIds);
+        }
+
+        [Fact]
+        public async Task UpdateAllowedRpIds_HostOwnedByOwnSandboxOrganization_Succeeds()
+        {
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret",
+                allowedRpIds: new[] { "shop1.example.jp" });
+            await SeedOrgWithClient(2, "shop1-sandbox", true, 20, "client-sandbox", "secret",
+                allowedRpIds: new[] { "stg.example.jp" });
+            AuthenticateAsOwnerOf((1, "shop1"), (2, "shop1-sandbox"));
+
+            // 管理下 Org（本番とそのサンドボックス）同士の重複は許可する。
+            var result = await _controller.UpdateAllowedRpIds(10, new AccountController.AllowedRpIdsDto
+            {
+                AllowedRpIds = new List<string> { "shop1.example.jp", "stg.example.jp" }
+            });
+
+            Assert.IsType<OkObjectResult>(result);
         }
 
         [Fact]

@@ -310,6 +310,56 @@ namespace IdentityProvider.Test.Data
         }
 
         [Fact]
+        public async Task AccountController_AddClient_SucceedsUnderRetryingStrategy_WhenFirstAttemptFailsTransiently()
+        {
+            await SeedAccountsOrgWithConsoleClientAsync();
+            await SeedAccountAsync();
+            await SeedOwnedOrganizationAsync(1, "shop1", isSandbox: false);
+            var protector = CreateProtectorFailingOnce(out var protectCalls);
+            var controller = CreateController(protector.Object, out _, useRealAccountService: true);
+            SetBearer(controller);
+
+            var result = await controller.AddClient(1, new AccountController.AddClientDto
+            {
+                SiteUrl = "https://wp.example.jp"
+            });
+
+            Assert.IsType<CreatedResult>(result);
+            Assert.Equal(2, protectCalls.Value);
+            // 再試行で二重 INSERT にならない（1 回目は secret 暗号化で落ちて Client は作られていない）。
+            Assert.Single(await Context.Clients.IgnoreQueryFilters().Where(c => c.OrganizationId == 1).ToListAsync());
+        }
+
+        [Fact]
+        public async Task AccountController_AddClient_ReturnsCreated_WhenCommitSucceedsButConnectionDrops()
+        {
+            var interceptor = UseCommitFailingContext();
+            await SeedAccountsOrgWithConsoleClientAsync();
+            await SeedAccountAsync();
+            await SeedOwnedOrganizationAsync(1, "shop1", isSandbox: false);
+            var controller = CreateController(new PlaintextSecretProtector(), out _, useRealAccountService: true);
+            SetBearer(controller);
+            interceptor.Arm();
+
+            var result = await controller.AddClient(1, new AccountController.AddClientDto
+            {
+                SiteUrl = "https://wp.example.jp",
+                EcCubeVersion = "2"
+            });
+
+            Assert.Equal(1, interceptor.FailedCommits);
+            var created = Assert.IsType<CreatedResult>(result);
+            // Client には自然キーが無いため、再試行は初期 redirect_uri で前回の成果を見つけて返す。
+            // やり直しで同じサイトの Client が 2 件できてはいけない。
+            var clients = await Context.Clients.IgnoreQueryFilters().Include(c => c.RedirectUris)
+                .Where(c => c.OrganizationId == 1).ToListAsync();
+            Assert.Single(clients);
+            Assert.Equal("https://wp.example.jp/ecauth/callback.php", clients[0].RedirectUris.Single().Uri);
+            Assert.Equal(clients[0].ClientId,
+                (string)created.Value!.GetType().GetProperty("client_id")!.GetValue(created.Value)!);
+        }
+
+        [Fact]
         public async Task AccountController_DeleteOrganization_ReturnsOk_WhenCommitSucceedsButConnectionDrops()
         {
             var interceptor = UseCommitFailingContext();

@@ -43,6 +43,9 @@ namespace IdentityProvider.Controllers
         /// <summary>RP ID の登録上限。</summary>
         private const int MaxAllowedRpIds = 20;
 
+        /// <summary>Client 追加時の app_name の最大長（表示名なので UI が扱える範囲に抑える）。</summary>
+        private const int MaxAppNameLength = 100;
+
         /// <summary>RP ID 1 件の最大長（RFC 1035 のドメイン名上限）。</summary>
         private const int MaxRpIdLength = 253;
 
@@ -259,6 +262,12 @@ namespace IdentityProvider.Controllers
         /// origin と RP ID の一致を要求するため、そのドメインの origin でページを配信できない
         /// 限りセレモニーが成立せず、作られる資格情報も自 Organization に閉じる）ため、
         /// 所有権の確認は課さない。ただし変更は監査ログに残す。
+        ///
+        /// 一方で、他の Organization の Client が既に持つホストは登録できない
+        /// （<see cref="IOrganizationProvisioningService.EnsureHostsAvailableAsync"/>）。ドメインの占有は
+        /// 申込・サイト追加時にこのホスト単位で判定しており、ここで素通しにすると占有チェックの
+        /// 迂回路になる（EcAuthDocs#121 項目 1）。管理下の Organization 同士（本番とサンドボックス、
+        /// 同一 Organization 内の Client 間）の重複は許可する。
         /// </summary>
         [HttpPost("clients/{id:int}/allowed-rp-ids")]
         public async Task<IActionResult> UpdateAllowedRpIds(int id, [FromBody] AllowedRpIdsDto? body)
@@ -273,6 +282,19 @@ namespace IdentityProvider.Controllers
             if (invalid != null)
             {
                 return invalid;
+            }
+
+            var managedForRpIds = await _accountService.GetManagedOrganizationsAsync(subject!);
+            try
+            {
+                await _provisioning.EnsureHostsAvailableAsync(
+                    rpIds!, HttpContext.RequestAborted,
+                    field: "allowed_rp_ids",
+                    ownedOrganizationIds: managedForRpIds.Select(m => m.OrganizationId).ToHashSet());
+            }
+            catch (SignupValidationException ex)
+            {
+                return FromValidationException(ex);
             }
 
             // getter は毎回新しいリストを返すため Add では永続化されない。リストごと再代入する。
@@ -364,16 +386,22 @@ namespace IdentityProvider.Controllers
                         has_secret = !string.IsNullOrEmpty(c.ClientSecret),
                         app_name = c.AppName,
                         redirect_uris = c.RedirectUris.Select(r => r.Uri).ToArray(),
-                        allowed_rp_ids = c.AllowedRpIds.ToArray()
+                        allowed_rp_ids = c.AllowedRpIds.ToArray(),
+                        created_at = c.CreatedAt
                     })
                     .ToArray()
             }).ToArray();
+
+            // 上限（max_sites）の単位は本番 Organization 配下の Client 数（EcAuthDocs#121 項目 3）。
+            // 1 Organization に複数のサイト（Client）がぶら下がるようになったため、Organization 数では
+            // 「1 組織に 10 サイト」を止められない。サンドボックス Org 配下の Client は数えない。
+            var productionOrgIds = organizations.Where(o => !o.IsSandbox).Select(o => o.Id).ToHashSet();
 
             return Ok(new
             {
                 organizations = result,
                 max_sites = maxSites,
-                production_site_count = organizations.Count(o => !o.IsSandbox)
+                production_site_count = clients.Count(c => productionOrgIds.Contains(c.OrganizationId!.Value))
             });
         }
 
@@ -612,21 +640,14 @@ namespace IdentityProvider.Controllers
                         //   - IX_organization_parent_organization_id_active は parent_organization_id が
                         //     非 null の行だけが対象で、本番 Org（null）は含まれない
                         //   - organization.Code のユニーク制約は、別ドメイン同士なら衝突しない
-                        var productionCount = lockedOrgIds.Count == 0
-                            ? 0
-                            : await _context.Organizations
-                                .IgnoreQueryFilters()
-                                .CountAsync(o => lockedOrgIds.Contains(o.Id) && !o.IsSandbox,
-                                    cancellationToken);
+                        // 単位は本番 Org 配下の Client 数。本番 Org を 1 つ作ると Client も 1 件増えるので
+                        // 「既に上限なら作れない」の判定は Client 数で行う。
+                        var productionCount = await CountProductionClientsAsync(lockedOrgIds, cancellationToken);
 
                         if (productionCount >= lockedAccount.MaxSites)
                         {
                             await transaction.RollbackAsync(cancellationToken);
-                            return InvalidInput(
-                                "site_limit_exceeded",
-                                $"登録できる本番サイトは {lockedAccount.MaxSites} 件までです。"
-                                    + "不要なサイトを削除するか、サポートにお問い合わせください。",
-                                "site_url");
+                            return SiteLimitExceeded(lockedAccount.MaxSites);
                         }
                     }
 
@@ -664,6 +685,231 @@ namespace IdentityProvider.Controllers
                     provisioned.Organization.IsSandbox, parentOrganizationId);
 
                 return CreatedResponse(provisioned);
+            }, HttpContext.RequestAborted);
+        }
+
+        /// <summary>
+        /// POST /v1/account/organizations/{id}/clients
+        /// 既存のサイト（Organization）に Client を 1 件追加する（EcAuthDocs#121 項目 3）。
+        ///
+        /// <para>
+        /// Organization = 組織、Client = アプリケーション（EC-CUBE / WordPress 等）。同じ組織で
+        /// 複数のサイトを運用する顧客が、サイトごとに Organization（テナントサブドメイン・RSA 鍵・
+        /// マイページのカード）を増やさずに済むようにする。生成規則は
+        /// <see cref="IOrganizationProvisioningService.AddClientAsync"/> に集約し、申込やサイト追加が
+        /// 作る最初の Client と同じ形にする。
+        /// </para>
+        /// <para>
+        /// 制約: (1) 追加先は呼び出し Account が管理する未削除の Organization（管理外・削除済み・
+        /// 存在しない Organization はいずれも 404 に揃える）。(2) 本番 Organization への追加は
+        /// 本番 Client の合計が <c>account.max_sites</c> 未満のときだけ（サンドボックス Organization への
+        /// 追加は数えない）。(3) サイトのホストが他の Organization に占有されていないこと
+        /// （<see cref="IOrganizationProvisioningService.EnsureHostsAvailableAsync"/>。管理下の
+        /// Organization 内での重複は許可する）。
+        /// </para>
+        /// <para>
+        /// Client を減らす経路は無い（EcAuthDocs#144）。誤って追加した場合も、当面は Organization ごと
+        /// 削除するしかない。
+        /// </para>
+        /// </summary>
+        [HttpPost("organizations/{id:int}/clients")]
+        public async Task<IActionResult> AddClient(int id, [FromBody] AddClientDto? body)
+        {
+            var subject = await ValidateAccountTokenAsync();
+            if (subject == null)
+            {
+                return Unauthorized(new
+                {
+                    error = "invalid_token",
+                    error_description = "有効な Account アクセストークンが必要です。"
+                });
+            }
+
+            if (body == null || string.IsNullOrWhiteSpace(body.SiteUrl))
+            {
+                return InvalidInput("invalid_request", "site_url を指定してください。", "site_url");
+            }
+
+            var ecCubeVersion = NormalizeEcCubeVersion(body.EcCubeVersion);
+            if (ecCubeVersion == null)
+            {
+                return InvalidInput(
+                    "unsupported_version", "対応していない EC-CUBE バージョンです。", "ec_cube_version");
+            }
+
+            var appName = body.AppName?.Trim();
+            if (appName != null && appName.Length > MaxAppNameLength)
+            {
+                return InvalidInput(
+                    "invalid_request", $"app_name は {MaxAppNameLength} 文字以内で指定してください。", "app_name");
+            }
+
+            IActionResult NotFoundResult()
+            {
+                _logger.LogWarning(
+                    "Account {Subject} attempted to add a client to organization {OrganizationId} without ownership",
+                    subject, id);
+                return NotFound(new
+                {
+                    error = "not_found",
+                    error_description = "対象のサイトが見つかりません。"
+                });
+            }
+
+            // 削除済みの Org は管理対象から外れるため、削除済み・管理外・存在しない Org はすべて 404。
+            var managed = await _accountService.GetManagedOrganizationsAsync(subject);
+            var orgIds = managed.Select(m => m.OrganizationId).ToHashSet();
+            if (!orgIds.Contains(id))
+            {
+                return NotFoundResult();
+            }
+
+            SiteEntry site;
+            try
+            {
+                // 組織コードは追加先 Org のものを使うため、site.Code（このホストからの導出値）は使わない。
+                // isSandbox はコード導出にしか影響しないので false 固定でよい。
+                site = _provisioning.BuildSite(body.SiteUrl, isSandbox: false, "site_url");
+                await _provisioning.EnsureHostsAvailableAsync(
+                    _provisioning.BuildAllowedRpIds(site.Host), HttpContext.RequestAborted,
+                    ownedOrganizationIds: orgIds);
+            }
+            catch (SignupValidationException ex)
+            {
+                return FromValidationException(ex);
+            }
+
+            // client_secret は返さない（一覧に載せないのと同じ理由）。UI は reveal で 1 件ずつ取得する。
+            IActionResult CreatedResponse(Organization organization, Client client) =>
+                Created($"/v1/account/organizations/{organization.Id}", new
+                {
+                    organization_id = organization.Id,
+                    id = client.Id,
+                    client_id = client.ClientId,
+                    has_secret = !string.IsNullOrEmpty(client.ClientSecret),
+                    app_name = client.AppName,
+                    redirect_uris = client.RedirectUris.Select(r => r.Uri).ToArray(),
+                    allowed_rp_ids = client.AllowedRpIds.ToArray(),
+                    created_at = client.CreatedAt
+                });
+
+            return await _context.ExecuteInRetryableUnitAsync<IActionResult>(async (isRetry, cancellationToken) =>
+            {
+                await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+                Organization organization;
+                Client client;
+                try
+                {
+                    // CreateOrganization / DeleteOrganization と同じアカウント行を排他ロックする。
+                    // 本番 Client 数の上限判定は集計値なので、ロック無しだと並行追加で上限を超えうる。
+                    // Organization の削除ともここで直列化され、削除済みの Org に Client を足す窓が閉じる。
+                    var lockedAccount = await LockAccountForUpdateAsync(subject, cancellationToken);
+                    if (lockedAccount == null)
+                    {
+                        await transaction.RollbackAsync(cancellationToken);
+                        return Unauthorized(new
+                        {
+                            error = "invalid_token",
+                            error_description = "有効な Account アクセストークンが必要です。"
+                        });
+                    }
+
+                    // ロック取得後に管理下 Org を引き直す（ロック待ちの間に削除されていることがある）。
+                    var lockedManaged = await _accountService.GetManagedOrganizationsAsync(subject);
+                    var lockedOrgIds = lockedManaged.Select(m => m.OrganizationId).ToHashSet();
+                    if (!lockedOrgIds.Contains(id))
+                    {
+                        await transaction.RollbackAsync(cancellationToken);
+                        return NotFoundResult();
+                    }
+
+                    organization = await _context.Organizations
+                        .IgnoreQueryFilters()
+                        .FirstAsync(o => o.Id == id, cancellationToken);
+
+                    var expectedRedirectUri = _provisioning.BuildInitialRedirectUri(site, ecCubeVersion);
+
+                    if (isRetry)
+                    {
+                        // 前回の試行がコミット済みで応答だけが接続断で失われた場合（EF Core docs の
+                        // idempotency issue）、同じ Org に同じ初期 redirect_uri を持つ Client が既にある。
+                        // Client には自然キーが無く、やり直すと同じサイトの Client が 2 件できるため、
+                        // 直前に作られたものを前回の試行の成果として 201 で返す。
+                        var alreadyCreated = await _context.Clients
+                            .IgnoreQueryFilters()
+                            .Include(c => c.RedirectUris)
+                            .Where(c => c.OrganizationId == id
+                                && c.RedirectUris.Any(r => r.Uri == expectedRedirectUri))
+                            .OrderByDescending(c => c.Id)
+                            .FirstOrDefaultAsync(cancellationToken);
+                        if (alreadyCreated != null)
+                        {
+                            await transaction.RollbackAsync(cancellationToken);
+                            _logger.LogWarning(
+                                "前回の試行がコミット済みだったため Client 追加を成功として扱います: Subject={Subject}, OrganizationId={OrganizationId}, ClientId={ClientId}",
+                                subject, id, alreadyCreated.ClientId);
+                            return CreatedResponse(organization, alreadyCreated);
+                        }
+                    }
+
+                    if (!organization.IsSandbox)
+                    {
+                        var productionCount = await CountProductionClientsAsync(lockedOrgIds, cancellationToken);
+                        if (productionCount >= lockedAccount.MaxSites)
+                        {
+                            await transaction.RollbackAsync(cancellationToken);
+                            return SiteLimitExceeded(lockedAccount.MaxSites);
+                        }
+                    }
+
+                    // ホスト占有の再検証。事前チェックはトランザクション外のスナップショットに基づくため、
+                    // その後に別の申込が同じホストで Organization を作っていることがある。ホスト単位の
+                    // DB 制約は無いので、ここで見なければ同一ホストが 2 組織にぶら下がる。
+                    // 事前チェックを通った後の衝突は競合なので 409 で返す。
+                    try
+                    {
+                        await _provisioning.EnsureHostsAvailableAsync(
+                            _provisioning.BuildAllowedRpIds(site.Host), cancellationToken,
+                            statusCode: 409, ownedOrganizationIds: lockedOrgIds);
+                    }
+                    catch (SignupValidationException ex)
+                    {
+                        await transaction.RollbackAsync(cancellationToken);
+                        return FromValidationException(ex);
+                    }
+
+                    client = await _provisioning.AddClientAsync(
+                        organization,
+                        site,
+                        appName ?? site.Host,
+                        ecCubeVersion,
+                        cancellationToken);
+
+                    await transaction.CommitAsync(cancellationToken);
+                }
+                catch (DbUpdateException ex) when (DatabaseResilience.IsUniqueConstraintViolation(ex))
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+
+                    // client_id は GUID 付きで実質衝突しないため、ここに来るのは想定外の制約違反。
+                    // 一過性の接続断を包んだ DbUpdateException まで握ると再試行戦略が働かないため、
+                    // ユニーク制約違反だけを 409 にする。
+                    _logger.LogWarning(ex,
+                        "Client 追加が競合しました: Subject={Subject}, OrganizationId={OrganizationId}, Host={Host}",
+                        subject, id, site.Host);
+                    return Conflict(new
+                    {
+                        error = "client_already_exists",
+                        error_description = "Client の登録が競合しました。時間をおいて再度お試しください。",
+                        field = "site_url"
+                    });
+                }
+
+                _logger.LogInformation(
+                    "Client を追加しました: Subject={Subject}, OrganizationId={OrganizationId}, ClientId={ClientId}, Host={Host}",
+                    subject, organization.Id, client.ClientId, site.Host);
+
+                return CreatedResponse(organization, client);
             }, HttpContext.RequestAborted);
         }
 
@@ -864,6 +1110,37 @@ namespace IdentityProvider.Controllers
                 .ToListAsync(ct);
 
             return locked.Count == 0 ? null : locked[0];
+        }
+
+        /// <summary>
+        /// 管理下の本番 Organization 配下にある Client の数を返す。<c>account.max_sites</c> の単位
+        /// （EcAuthDocs#121 項目 3）。サンドボックス Organization 配下の Client は数えない。
+        /// 管理下 Org（<paramref name="managedOrgIds"/>）は削除済みを含まない前提
+        /// （<see cref="IAccountService.GetManagedOrganizationsAsync"/> が除外する）。
+        /// **上限判定に使うときは Account 行のロック下で呼ぶこと。**
+        /// </summary>
+        private async Task<int> CountProductionClientsAsync(IReadOnlySet<int> managedOrgIds, CancellationToken ct)
+        {
+            if (managedOrgIds.Count == 0)
+            {
+                return 0;
+            }
+
+            return await _context.Clients
+                .IgnoreQueryFilters()
+                .CountAsync(c => c.OrganizationId != null
+                    && managedOrgIds.Contains(c.OrganizationId.Value)
+                    && !c.Organization!.IsSandbox,
+                    ct);
+        }
+
+        private IActionResult SiteLimitExceeded(int maxSites)
+        {
+            return InvalidInput(
+                "site_limit_exceeded",
+                $"登録できる本番サイトは {maxSites} 件までです。"
+                    + "不要なサイトを削除するか、サポートにお問い合わせください。",
+                "site_url");
         }
 
         /// <summary>
@@ -1148,6 +1425,30 @@ namespace IdentityProvider.Controllers
         {
             [JsonPropertyName("allowed_rp_ids")]
             public List<string>? AllowedRpIds { get; set; }
+        }
+
+        /// <summary>
+        /// <c>POST /v1/account/organizations/{id}/clients</c> のリクエストボディ（snake_case）。
+        /// </summary>
+        public sealed class AddClientDto
+        {
+            /// <summary>追加するサイトの URL（https 必須）。ホストが allowed_rp_ids、パスが redirect_uri の基点になる。</summary>
+            [JsonPropertyName("site_url")]
+            public string? SiteUrl { get; set; }
+
+            /// <summary>
+            /// 初期 redirect_uri のコールバックパスを決める（"2" / "4" / "other"）。
+            /// 未指定は "4"。
+            /// </summary>
+            [JsonPropertyName("ec_cube_version")]
+            public string? EcCubeVersion { get; set; }
+
+            /// <summary>
+            /// Client の表示名（Client.AppName）。同じ Organization に複数の Client が並ぶため、
+            /// マイページでどのサイトか判別する用途。未指定はサイトのホスト名。
+            /// </summary>
+            [JsonPropertyName("app_name")]
+            public string? AppName { get; set; }
         }
 
         /// <summary>
