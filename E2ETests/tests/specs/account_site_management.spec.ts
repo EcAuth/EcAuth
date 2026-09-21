@@ -6,10 +6,12 @@ import { createMailbox, Mailbox } from '../helpers/mailbox';
  * マイページからのサイト（Organization）追加・削除を、実バックエンドに対して通す（EcAuth#482）。
  *
  * 申込では本番・テストの片方しか登録しないケースがあり、後からもう一方を足す手段が
- * 無かった。サイト = Organization は 1:1 なので「追加」は Organization の新規作成になる。
+ * 無かった。Organization = 組織、Client = サイト（EcAuthDocs#121）なので、「追加」には
+ * Organization の新規作成と、既存 Organization への Client 追加の 2 経路がある。
  * ユニットテストは InMemory プロバイダで動くため、以下は実 DB でしか確かめられない:
  *   - フィルター付きユニークインデックスによる「1 本番 1 テスト」の担保
  *   - 論理削除しても組織コードが解放されないこと（unique 制約は削除済み行にも効く）
+ *   - Client の allowed_rp_ids（JSON 文字列カラム）に対する LIKE プリフィルタでホスト占有が判定されること
  *   - 削除済みサイトの client_id が /platform/v1/client-resolve から引けなくなること
  *
  * 申込と同じく疑似サイトのホストには .test（RFC 6761 の予約 TLD）を使い、run ごとに
@@ -33,6 +35,7 @@ test.describe.serial('マイページからのサイト追加・削除', () => {
   const runSuffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const siteHost = `e2e-site-${runSuffix}.test`;
   const addedSiteHost = `e2e-added-${runSuffix}.test`;
+  const addedClientHost = `e2e-wp-${runSuffix}.test`;
   const productionSiteUrl = `https://${siteHost}/`;
   const email = `e2e-site-${runSuffix}@e2e.ec-auth.io`;
 
@@ -50,7 +53,7 @@ test.describe.serial('マイページからのサイト追加・削除', () => {
   const authHeaders = () => ({ Authorization: `Bearer ${accessToken}` });
 
   test.beforeAll(async ({ browser }) => {
-    console.log(`[site-management] site=${siteHost} added=${addedSiteHost} email=${email}`);
+    console.log(`[site-management] site=${siteHost} added=${addedSiteHost} client=${addedClientHost} email=${email}`);
 
     api = await request.newContext({
       ignoreHTTPSErrors: true,
@@ -89,6 +92,7 @@ test.describe.serial('マイページからのサイト追加・削除', () => {
   let addedOrgId: number;
   let sandboxOrgId: number;
   let addedClientId: string;
+  let addedSecondClientId: string;
 
   test('申込直後は本番サイト 1 件が一覧に出る', async () => {
     const response = await api.get(`${accountsApiBaseUrl}/v1/account/organizations`, {
@@ -136,6 +140,57 @@ test.describe.serial('マイページからのサイト追加・削除', () => {
 
     const body = await response.json();
     expect(body.tenant_name).toBe(addedSiteHost.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''));
+  });
+
+  test('既存の Organization に Client を追加できる（Organization は増えない）', async () => {
+    // Organization = 組織、Client = サイト（EcAuthDocs#121 項目 3）。EC-CUBE と WordPress を
+    // 同じ組織にぶら下げる導線。テナントサブドメイン・RSA 鍵は追加先 Org のものを共有する。
+    const response = await api.post(
+      `${accountsApiBaseUrl}/v1/account/organizations/${addedOrgId}/clients`,
+      {
+        headers: authHeaders(),
+        data: { site_url: `https://${addedClientHost}/blog/`, ec_cube_version: 'other', app_name: 'WordPress' },
+      }
+    );
+    expect(response.status()).toBe(201);
+
+    const body = await response.json();
+    expect(body.organization_id).toBe(addedOrgId);
+    expect(body.app_name).toBe('WordPress');
+    // 初期 redirect_uri / allowed_rp_ids は最初の Client と同じ導出（ベースパス継承）。
+    expect(body.redirect_uris).toEqual([`https://${addedClientHost}/blog/ecauth/callback`]);
+    expect(body.allowed_rp_ids).toEqual([addedClientHost]);
+    expect(body).not.toHaveProperty('client_secret');
+    addedSecondClientId = body.client_id;
+
+    const list = await api.get(`${accountsApiBaseUrl}/v1/account/organizations`, { headers: authHeaders() });
+    const listBody = await list.json();
+    // 申込 Org + 追加 Org の 2 件のまま。追加 Org の Client が 2 件になり、本番サイト数は Client 単位で 3。
+    expect(listBody.organizations).toHaveLength(2);
+    const addedOrg = listBody.organizations.find((o: { id: number }) => o.id === addedOrgId);
+    expect(addedOrg.clients).toHaveLength(2);
+    expect(addedOrg.clients.map((c: { client_id: string }) => c.client_id)).toContain(addedSecondClientId);
+    expect(listBody.production_site_count).toBe(3);
+  });
+
+  test('追加した Client は追加先 Organization のテナントで client-resolve できる', async () => {
+    const response = await api.get(
+      `${baseUrl}/platform/v1/client-resolve?client_id=${encodeURIComponent(addedSecondClientId)}`
+    );
+    expect(response.status()).toBe(200);
+
+    const body = await response.json();
+    // テナント名は最初のサイトのホスト由来のまま（項目 2 は後回し）。client-resolve は client_id 単位。
+    expect(body.tenant_name).toBe(addedSiteHost.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''));
+  });
+
+  test('管理外の Organization には Client を追加できない', async () => {
+    const response = await api.post(`${accountsApiBaseUrl}/v1/account/organizations/999999/clients`, {
+      headers: authHeaders(),
+      data: { site_url: `https://e2e-foreign-${runSuffix}.test/` },
+    });
+    expect(response.status()).toBe(404);
+    expect((await response.json()).error).toBe('not_found');
   });
 
   test('本番サイトと同じドメインでもテストサイトを追加できる', async () => {
@@ -216,6 +271,26 @@ test.describe.serial('マイページからのサイト追加・削除', () => {
     });
     expect(response.status()).toBe(422);
     expect((await response.json()).error).toBe('organization_deleted');
+  });
+
+  test('追加した Client のホストも再登録できない（占有は Client のホスト単位）', async () => {
+    // 2 つ目の Client のホストはどの組織コードにも写らない。組織コード単位の占有判定では
+    // このホストで新しい Organization を作れてしまうため、Client の allowed_rp_ids で判定する
+    // （EcAuthDocs#121 項目 1）。削除済み Org の Client が持つホストも解放しない。
+    const response = await api.post(`${accountsApiBaseUrl}/v1/account/organizations`, {
+      headers: authHeaders(),
+      data: { site_url: `https://${addedClientHost}/` },
+    });
+    expect(response.status()).toBe(422);
+    expect((await response.json()).error).toBe('organization_deleted');
+  });
+
+  test('削除済み Organization には Client を追加できない', async () => {
+    const response = await api.post(
+      `${accountsApiBaseUrl}/v1/account/organizations/${addedOrgId}/clients`,
+      { headers: authHeaders(), data: { site_url: `https://e2e-late-${runSuffix}.test/` } }
+    );
+    expect(response.status()).toBe(404);
   });
 
   test('テストサイトを削除すると同じ本番の枠が空く', async () => {

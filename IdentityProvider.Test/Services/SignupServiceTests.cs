@@ -336,20 +336,44 @@ namespace IdentityProvider.Test.Services
             Assert.Equal("ec_cube_version", ex.Field);
         }
 
+        /// <summary>
+        /// 既存の顧客 Org を、そのサイトのホストを allowed_rp_ids に持つ Client 付きで投入する。
+        /// ドメインの占有は Client のホスト単位で判定する（EcAuthDocs#121 項目 1）ため、
+        /// Organization だけを置いても占有の衝突にはならない。
+        /// </summary>
+        private static async Task SeedExistingSiteAsync(
+            EcAuthDbContext context, int orgId, string code, string host,
+            bool isSandbox = false, DateTimeOffset? deletedAt = null)
+        {
+            context.Organizations.Add(new Organization
+            {
+                Id = orgId,
+                Code = code,
+                Name = "Existing",
+                TenantName = code,
+                IsSandbox = isSandbox,
+                DeletedAt = deletedAt
+            });
+            context.Clients.Add(new Client
+            {
+                Id = orgId * 10,
+                ClientId = $"ec-{code}-existing",
+                ClientSecret = "secret",
+                AppName = "Existing",
+                OrganizationId = orgId,
+                SubjectType = SubjectType.B2B,
+                AllowedRpIds = new List<string> { host }
+            });
+            await context.SaveChangesAsync();
+        }
+
         [Fact]
         public async Task RequestAsync_OrganizationCodeAlreadyExists_ThrowsOrganizationAlreadyExists()
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
             // 既存の顧客 Org (Code=shop-example-jp) を投入して衝突させる
-            context.Organizations.Add(new Organization
-            {
-                Id = 2,
-                Code = "shop-example-jp",
-                Name = "Existing",
-                TenantName = "shop-example-jp"
-            });
-            await context.SaveChangesAsync();
+            await SeedExistingSiteAsync(context, 2, "shop-example-jp", "shop.example.jp");
 
             var service = CreateService(context, tenantService, out _, out _);
 
@@ -359,9 +383,9 @@ namespace IdentityProvider.Test.Services
         }
 
         /// <summary>
-        /// ドメインの占有判定は接尾辞を除いた導出コードで行う。site.Code をそのまま比較すると、
-        /// サンドボックス側だけコードが変わったせいで「登録済みドメインを拒否する」保証が
-        /// 失われ、他人のドメインを自分のテストサイトとして登録できてしまう。
+        /// ドメインの占有は Client のホスト（allowed_rp_ids）単位で判定する。組織コードの形
+        /// （旧規則の接尾辞なし / 新規則の -sandbox）に関わらず、別アカウントが既に使っている
+        /// ホストはテストサイトとしても登録できない。
         /// </summary>
         [Theory]
         // 旧規則（接尾辞なし）で登録済みのサンドボックス Org。移行しないので必ず残る。
@@ -375,15 +399,7 @@ namespace IdentityProvider.Test.Services
         {
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
-            context.Organizations.Add(new Organization
-            {
-                Id = 2,
-                Code = existingCode,
-                Name = "Existing",
-                TenantName = existingCode,
-                IsSandbox = existingIsSandbox
-            });
-            await context.SaveChangesAsync();
+            await SeedExistingSiteAsync(context, 2, existingCode, "stg.example.jp", isSandbox: existingIsSandbox);
 
             var service = CreateService(context, tenantService, out _, out _);
 
@@ -408,13 +424,41 @@ namespace IdentityProvider.Test.Services
             var tenantService = CreateTenantService();
             using var context = CreateContextWithAccountsOrg(tenantService);
             // 逆方向: 旧規則のサンドボックス Org が居るドメインを本番として申し込む。
-            context.Organizations.Add(new Organization
+            await SeedExistingSiteAsync(context, 2, "stg-example-jp", "stg.example.jp", isSandbox: true);
+
+            var service = CreateService(context, tenantService, out _, out _);
+            var input = ValidInput() with
             {
-                Id = 2,
-                Code = "stg-example-jp",
-                Name = "Existing sandbox",
-                TenantName = "stg-example-jp",
-                IsSandbox = true
+                Email = "another@example.com",
+                ProductionSiteUrl = "https://stg.example.jp"
+            };
+
+            var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
+            Assert.Equal("organization_already_exists", ex.Error);
+            Assert.Equal("production_site_url", ex.Field);
+        }
+
+        /// <summary>
+        /// 既存 Organization に 2 つ目以降の Client を足した場合（EcAuthDocs#121 項目 3）、そのホストは
+        /// どの組織コードにも写らない。組織コード単位の占有判定では別の申込者が同じホストで新しい
+        /// Organization を作れてしまうため、Client のホスト単位で弾く。
+        /// </summary>
+        [Fact]
+        public async Task RequestAsync_HostOwnedBySecondClientOfAnotherOrganization_ThrowsOrganizationAlreadyExists()
+        {
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            // 組織コードは最初のサイト（shop.example.jp）由来。2 つ目の Client は wp.example.jp を持つ。
+            await SeedExistingSiteAsync(context, 2, "shop-example-jp", "shop.example.jp");
+            context.Clients.Add(new Client
+            {
+                Id = 21,
+                ClientId = "ec-shop-example-jp-second",
+                ClientSecret = "secret",
+                AppName = "WordPress",
+                OrganizationId = 2,
+                SubjectType = SubjectType.B2B,
+                AllowedRpIds = new List<string> { "wp.example.jp" }
             });
             await context.SaveChangesAsync();
 
@@ -422,7 +466,7 @@ namespace IdentityProvider.Test.Services
             var input = ValidInput() with
             {
                 Email = "another@example.com",
-                ProductionSiteUrl = "https://stg.example.jp"
+                ProductionSiteUrl = "https://wp.example.jp"
             };
 
             var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.RequestAsync(input));
@@ -1028,17 +1072,11 @@ namespace IdentityProvider.Test.Services
             using var context = CreateContextWithAccountsOrg(tenantService);
             var service = CreateService(context, tenantService, out var emailMock, out _);
 
-            // 申込を受け付けた後で、confirm 前に同じ code の Org が作成されたケースを再現する
+            // 申込を受け付けた後で、confirm 前に同じホストのサイトが別の Org として作成された
+            // ケースを再現する（組織コードは別で衝突しないので、ホスト単位の占有判定で検知する）。
             var token = await RequestAndCaptureTokenAsync(service, emailMock, ValidInput());
 
-            context.Organizations.Add(new Organization
-            {
-                Id = 99,
-                Code = "shop-example-jp",
-                Name = "Race",
-                TenantName = "shop-example-jp"
-            });
-            await context.SaveChangesAsync();
+            await SeedExistingSiteAsync(context, 99, "race-example-jp", "shop.example.jp");
 
             var ex = await Assert.ThrowsAsync<SignupValidationException>(() => service.ConfirmAsync(token));
             Assert.Equal("organization_already_exists", ex.Error);

@@ -12,8 +12,10 @@ namespace IdentityProvider.Models
     public class Account : ISubjectProvider
     {
         /// <summary>
-        /// 1 アカウントが持てる本番 Organization 数の既定上限。
-        /// サンドボックス Org は各本番に 1 つまでという別制約で縛るため、この数には含めない。
+        /// 1 アカウントが持てる本番サイト（本番 Organization 配下の Client）数の既定上限。
+        /// 単位は Organization ではなく Client（EcAuthDocs#121 項目 3。1 Organization に複数の
+        /// サイトがぶら下がるため）。サンドボックス Org は各本番に 1 つまでという別制約で縛り、
+        /// その配下の Client もこの数には含めない。
         /// </summary>
         public const int DefaultMaxSites = 10;
 
@@ -44,9 +46,9 @@ namespace IdentityProvider.Models
         public DateTimeOffset? EmailVerifiedAt { get; set; }
 
         /// <summary>
-        /// このアカウントが持てる本番 Organization 数の上限。
+        /// このアカウントが持てる本番サイト（本番 Organization 配下の Client）数の上限。
         /// プラン変更や個別対応は DB のこのカラムを直接更新して運用する（変更 API は設けない）。
-        /// 論理削除済みの Organization は上限のカウント対象外。
+        /// 論理削除済みの Organization 配下の Client は上限のカウント対象外。
         /// </summary>
         [Column("max_sites")]
         public int MaxSites { get; set; } = DefaultMaxSites;
