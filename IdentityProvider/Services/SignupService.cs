@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using IdentityProvider.Data;
 using IdentityProvider.Exceptions;
 using IdentityProvider.Models;
 using IdentityProvider.Telemetry;
@@ -217,143 +218,150 @@ namespace IdentityProvider.Services
                 }
             }
 
-            await using var transaction = await _context.Database.BeginTransactionAsync(ct);
-            using (TimingScope.Begin("confirm"))
+            return await _context.ExecuteInRetryableUnitAsync(async cancellationToken =>
             {
-            try
-            {
-                var subject = Guid.NewGuid().ToString();
+                // ExecuteInRetryableUnitAsync は各試行の先頭で ChangeTracker を空にするため、
+                // トランザクション外で読んだ申込行を更新対象として追跡し直す。
+                _context.SignupRequests.Attach(signupRequest);
 
-                // Account（受付テナント Org 所属）。
-                var account = new Account
+                await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+                using (TimingScope.Begin("confirm"))
                 {
-                    Subject = subject,
-                    Email = signupRequest.Email,
-                    OrganizationId = accountsOrg.Id,
-                    EmailVerifiedAt = DateTimeOffset.UtcNow
-                };
-                _context.Accounts.Add(account);
-
-                // B2BUser（Subject を Account と共有、受付テナント Org 所属）。
-                var b2bUser = new B2BUser
+                try
                 {
-                    Subject = subject,
-                    UserType = "account_owner",
-                    OrganizationId = accountsOrg.Id
-                };
-                _context.B2BUsers.Add(b2bUser);
+                    var subject = Guid.NewGuid().ToString();
 
-                // 発行元ごとの識別子（EcAuthDocs#110）。発行元は受付テナントの管理コンソール
-                // Client（SubjectType.Account）。accounts と stg-accounts は別 Organization なので、
-                // 固定値ではなく client_id を使うことで同一人物が両方に申し込んでも衝突しない。
-                // external_id=SHA-256(email)。個人情報を含むため正規化 + ハッシュ化して保持する
-                // （Account.email は表示用に平文保持）。
-                var accountsClientId = await _context.Clients
-                    .IgnoreQueryFilters()
-                    .Where(c => c.OrganizationId == accountsOrg.Id && c.SubjectType == SubjectType.Account)
-                    .Select(c => c.ClientId)
-                    .FirstOrDefaultAsync(ct);
-
-                if (accountsClientId == null)
-                {
-                    // 識別子の置き場は identity だけなので（旧 b2b_user.external_id へのフォールバックは
-                    // 無い）、identity 無しの Account を作らない。管理コンソール Client は
-                    // AccountsOrganizationSeeder が投入する構成前提であり、欠落は設定不備として
-                    // MagicLinkService.ResolveAccountClientAsync と同じく 500 で止める。
-                    _logger.LogError(
-                        "管理コンソール Client が見つかりません: Tenant={Tenant}, OrganizationId={OrganizationId}",
-                        signupRequest.TenantName, accountsOrg.Id);
-                    throw new SignupValidationException(
-                        "signup_not_configured",
-                        "申込環境が正しく構成されていません。サポートにお問い合わせください。",
-                        statusCode: 500);
-                }
-
-                _context.B2BUserIdentities.Add(new B2BUserIdentity
-                {
-                    B2BSubject = subject,
-                    IssuerKey = B2BIssuerKey.ForClient(accountsClientId),
-                    ExternalId = ExternalIdHasher.Hash(signupRequest.Email),
-                    ClientId = accountsClientId
-                });
-
-                // 顧客 Organization を入力 URL に応じて 1〜2 件作成し、
-                // 各 Org に Client / RsaKeyPair / AccountOrganization を作成する。
-                //
-                // 本番を先に作り、テスト Org には本番の Id を親として持たせる
-                //（「1 本番 Org あたりサンドボックスは 1 つ」の紐付け）。テストサイトだけで
-                // 申し込んだ場合は親が存在しないため null のままにする。後から本番サイトを
-                // 追加したときに、マイページ側でこの孤立サンドボックスを親に紐づけ直せる。
-                int? productionOrganizationId = null;
-                foreach (var site in sites.Sites.OrderBy(s => s.IsSandbox))
-                {
-                    var provisioned = await _provisioning.ProvisionAsync(
-                        site,
-                        signupRequest.OrganizationName,
-                        signupRequest.EcCubeVersion,
-                        subject,
-                        parentOrganizationId: site.IsSandbox ? productionOrganizationId : null,
-                        ct);
-
-                    if (!site.IsSandbox)
+                    // Account（受付テナント Org 所属）。
+                    var account = new Account
                     {
-                        productionOrganizationId = provisioned.Organization.Id;
+                        Subject = subject,
+                        Email = signupRequest.Email,
+                        OrganizationId = accountsOrg.Id,
+                        EmailVerifiedAt = DateTimeOffset.UtcNow
+                    };
+                    _context.Accounts.Add(account);
+
+                    // B2BUser（Subject を Account と共有、受付テナント Org 所属）。
+                    var b2bUser = new B2BUser
+                    {
+                        Subject = subject,
+                        UserType = "account_owner",
+                        OrganizationId = accountsOrg.Id
+                    };
+                    _context.B2BUsers.Add(b2bUser);
+
+                    // 発行元ごとの識別子（EcAuthDocs#110）。発行元は受付テナントの管理コンソール
+                    // Client（SubjectType.Account）。accounts と stg-accounts は別 Organization なので、
+                    // 固定値ではなく client_id を使うことで同一人物が両方に申し込んでも衝突しない。
+                    // external_id=SHA-256(email)。個人情報を含むため正規化 + ハッシュ化して保持する
+                    // （Account.email は表示用に平文保持）。
+                    var accountsClientId = await _context.Clients
+                        .IgnoreQueryFilters()
+                        .Where(c => c.OrganizationId == accountsOrg.Id && c.SubjectType == SubjectType.Account)
+                        .Select(c => c.ClientId)
+                        .FirstOrDefaultAsync(cancellationToken);
+
+                    if (accountsClientId == null)
+                    {
+                        // 識別子の置き場は identity だけなので（旧 b2b_user.external_id へのフォールバックは
+                        // 無い）、identity 無しの Account を作らない。管理コンソール Client は
+                        // AccountsOrganizationSeeder が投入する構成前提であり、欠落は設定不備として
+                        // MagicLinkService.ResolveAccountClientAsync と同じく 500 で止める。
+                        _logger.LogError(
+                            "管理コンソール Client が見つかりません: Tenant={Tenant}, OrganizationId={OrganizationId}",
+                            signupRequest.TenantName, accountsOrg.Id);
+                        throw new SignupValidationException(
+                            "signup_not_configured",
+                            "申込環境が正しく構成されていません。サポートにお問い合わせください。",
+                            statusCode: 500);
                     }
+
+                    _context.B2BUserIdentities.Add(new B2BUserIdentity
+                    {
+                        B2BSubject = subject,
+                        IssuerKey = B2BIssuerKey.ForClient(accountsClientId),
+                        ExternalId = ExternalIdHasher.Hash(signupRequest.Email),
+                        ClientId = accountsClientId
+                    });
+
+                    // 顧客 Organization を入力 URL に応じて 1〜2 件作成し、
+                    // 各 Org に Client / RsaKeyPair / AccountOrganization を作成する。
+                    //
+                    // 本番を先に作り、テスト Org には本番の Id を親として持たせる
+                    //（「1 本番 Org あたりサンドボックスは 1 つ」の紐付け）。テストサイトだけで
+                    // 申し込んだ場合は親が存在しないため null のままにする。後から本番サイトを
+                    // 追加したときに、マイページ側でこの孤立サンドボックスを親に紐づけ直せる。
+                    int? productionOrganizationId = null;
+                    foreach (var site in sites.Sites.OrderBy(s => s.IsSandbox))
+                    {
+                        var provisioned = await _provisioning.ProvisionAsync(
+                            site,
+                            signupRequest.OrganizationName,
+                            signupRequest.EcCubeVersion,
+                            subject,
+                            parentOrganizationId: site.IsSandbox ? productionOrganizationId : null,
+                            cancellationToken);
+
+                        if (!site.IsSandbox)
+                        {
+                            productionOrganizationId = provisioned.Organization.Id;
+                        }
+                    }
+
+                    signupRequest.ConfirmedAt = DateTimeOffset.UtcNow;
+
+                    await _context.SaveChangesAsync(cancellationToken);
+
+                    // 初回パスキー登録を認可する一回限りトークンを同一トランザクションで発行する。
+                    // accounts コンソールは public client のため、登録 API はこのトークンで認可する。
+                    var registrationToken = await _registrationTokenService.IssueAsync(subject, cancellationToken);
+
+                    await transaction.CommitAsync(cancellationToken);
+
+                    _logger.LogInformation(
+                        "申込を確認し本登録が完了しました: Tenant={Tenant}, TokenHash={TokenHash}, Subject={Subject}, Orgs={OrgCount}",
+                        signupRequest.TenantName, TokenHashPrefix(token), subject, sites.Sites.Count);
+
+                    return new ISignupService.ConfirmResult(signupRequest, registrationToken);
                 }
-
-                signupRequest.ConfirmedAt = DateTimeOffset.UtcNow;
-
-                await _context.SaveChangesAsync(ct);
-
-                // 初回パスキー登録を認可する一回限りトークンを同一トランザクションで発行する。
-                // accounts コンソールは public client のため、登録 API はこのトークンで認可する。
-                var registrationToken = await _registrationTokenService.IssueAsync(subject, ct);
-
-                await transaction.CommitAsync(ct);
-
-                _logger.LogInformation(
-                    "申込を確認し本登録が完了しました: Tenant={Tenant}, TokenHash={TokenHash}, Subject={Subject}, Orgs={OrgCount}",
-                    signupRequest.TenantName, TokenHashPrefix(token), subject, sites.Sites.Count);
-
-                return new ISignupService.ConfirmResult(signupRequest, registrationToken);
-            }
-            catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
-            {
-                // confirm 中に別リクエストが先に INSERT したことによるユニーク制約違反（TOCTOU）。
-                // 事前チェック（メール既登録・組織コード重複）をすり抜けた真の競合のみがここに到達する。
-                // 違反したインデックス名で分岐し、409 に正規化して適切なメッセージを返す。
-                await transaction.RollbackAsync(ct);
-
-                if (IsEmailUniqueViolation(ex))
+                catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
                 {
-                    // Account.(OrganizationId, Email) または B2BUser.(OrganizationId, ExternalId) の競合。
-                    // 同一メールの再登録に該当するため、URL 変更では解決しない旨が伝わるエラーを返す。
+                    // confirm 中に別リクエストが先に INSERT したことによるユニーク制約違反（TOCTOU）。
+                    // 事前チェック（メール既登録・組織コード重複）をすり抜けた真の競合のみがここに到達する。
+                    // 違反したインデックス名で分岐し、409 に正規化して適切なメッセージを返す。
+                    await transaction.RollbackAsync(cancellationToken);
+
+                    if (IsEmailUniqueViolation(ex))
+                    {
+                        // Account.(OrganizationId, Email) または B2BUser.(OrganizationId, ExternalId) の競合。
+                        // 同一メールの再登録に該当するため、URL 変更では解決しない旨が伝わるエラーを返す。
+                        _logger.LogWarning(ex,
+                            "申込確認中にメールアドレスのユニーク制約違反が発生しました（競合）: Tenant={Tenant}, TokenHash={TokenHash}",
+                            signupRequest.TenantName, TokenHashPrefix(token));
+                        throw new SignupValidationException(
+                            "email_already_registered",
+                            "このメールアドレスは既に登録されています。",
+                            field: "email",
+                            statusCode: 409);
+                    }
+
+                    // それ以外（組織コード・client_id・rsa kid 等）の制約違反は組織コード重複として扱う。
                     _logger.LogWarning(ex,
-                        "申込確認中にメールアドレスのユニーク制約違反が発生しました（競合）: Tenant={Tenant}, TokenHash={TokenHash}",
+                        "申込確認中に組織コードのユニーク制約違反が発生しました（競合）: Tenant={Tenant}, TokenHash={TokenHash}",
                         signupRequest.TenantName, TokenHashPrefix(token));
                     throw new SignupValidationException(
-                        "email_already_registered",
-                        "このメールアドレスは既に登録されています。",
-                        field: "email",
+                        "organization_already_exists",
+                        "このドメインは既に EcAuth に登録されています。別のサイト URL でお申し込みください。",
+                        field: "production_site_url",
                         statusCode: 409);
                 }
-
-                // それ以外（組織コード・client_id・rsa kid 等）の制約違反は組織コード重複として扱う。
-                _logger.LogWarning(ex,
-                    "申込確認中に組織コードのユニーク制約違反が発生しました（競合）: Tenant={Tenant}, TokenHash={TokenHash}",
-                    signupRequest.TenantName, TokenHashPrefix(token));
-                throw new SignupValidationException(
-                    "organization_already_exists",
-                    "このドメインは既に EcAuth に登録されています。別のサイト URL でお申し込みください。",
-                    field: "production_site_url",
-                    statusCode: 409);
-            }
-            catch
-            {
-                await transaction.RollbackAsync(ct);
-                throw;
-            }
-            }
+                catch
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    throw;
+                }
+                }
+            }, ct);
         }
 
         /// <summary>

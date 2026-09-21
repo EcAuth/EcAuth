@@ -156,7 +156,22 @@ builder.Services.AddDbContext<EcAuthDbContext>((sp, options) =>
     var tenantService = sp.GetRequiredService<ITenantService>();
     options.UseSqlServer(
         builder.Configuration["ConnectionStrings:EcAuthDbContext"],
-        sqlOptions => sqlOptions.CommandTimeout(180) // タイムアウトを3分に設定
+        sqlOptions =>
+        {
+            // リクエスト経路向けの上限（EcAuth#536）。起動時マイグレーションだけは
+            // 下の MigrateAsync 呼び出しで個別に延ばす。
+            sqlOptions.CommandTimeout(DatabaseResilience.RequestCommandTimeoutSeconds);
+
+            // 一過性の接続断（10054 / 10053 / 233 / 40613 等）を再試行する。
+            // タイムアウト（SqlException -2）は EF Core の既定で再試行対象外
+            // （操作が完了していても投げられうるため）なので、CommandTimeout × 回数に膨らむことはない。
+            // BeginTransactionAsync を張る経路は DatabaseResilience.ExecuteInRetryableUnitAsync で
+            // 包む必要がある（包み忘れは DatabaseResilienceTests が検出する）。
+            sqlOptions.EnableRetryOnFailure(
+                maxRetryCount: DatabaseResilience.MaxRetryCount,
+                maxRetryDelay: DatabaseResilience.MaxRetryDelay,
+                errorNumbersToAdd: null);
+        }
     );
 
     // EF Core 9のマイグレーション時の自動トランザクション管理警告を無視
@@ -245,7 +260,17 @@ using (var scope = app.Services.CreateScope())
         if (configuration.GetValue<bool>("RUN_MIGRATIONS_ON_STARTUP"))
         {
             logger.LogInformation("Applying database migrations on startup...");
-            await context.Database.MigrateAsync();
+            // backfill を含むマイグレーションはリクエスト経路の CommandTimeout では足りない。
+            // この DbContext は続く DbInitializer と共有するため、完了後に既定へ戻す。
+            context.Database.SetCommandTimeout(DatabaseResilience.MigrationCommandTimeoutSeconds);
+            try
+            {
+                await context.Database.MigrateAsync();
+            }
+            finally
+            {
+                context.Database.SetCommandTimeout(null);
+            }
         }
 
         await dbInitializer.InitializeAsync(context, configuration);
