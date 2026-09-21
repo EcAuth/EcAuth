@@ -434,11 +434,17 @@ test.describe.serial('ecauth-website フロント × EcAuth 実バックエン�
     const reloaded = page.locator('.client-item').filter({ hasText: expectedOrgCode });
     await expect(reloaded).toHaveCount(1);
     await expect(reloaded.locator('.ci-client')).toHaveCount(2);
-    await expect(reloaded.locator('.ci-client-name').nth(1)).toHaveText('WordPress');
     await expect(page.locator('#site-usage')).toHaveText('2 / 10 件');
 
+    // 追加した Client は表示順ではなく表示名で選ぶ。GET /v1/account/organizations の clients[] は
+    // 並び順を保証しておらず（OrderBy 無し）、フロントも受け取った順で描画するため、
+    // .nth(1) だと順序が変わったときに既存 Client を掴んで以降の検証がずれる。
+    // 既存 Client の表示名はサイトホスト（expectedOrgCode）なので 'WordPress' とは衝突しない。
+    const added = reloaded.locator('.ci-client').filter({ has: page.locator('.ci-client-name', { hasText: 'WordPress' }) });
+    await expect(added).toHaveCount(1);
+    await expect(added.locator('.ci-client-name')).toHaveText('WordPress');
+
     // 追加 Client の初期 redirect_uri / RP ID は最初の Client と同じ規則で作られ、実 API に残る。
-    const added = reloaded.locator('.ci-client').nth(1);
     const rpIds = added.locator('.ci-settings[data-section="allowed_rp_ids"]');
     await rpIds.locator('summary').click();
     expect(await inputValuesOf(rpIds)).toEqual([secondClientHost]);
