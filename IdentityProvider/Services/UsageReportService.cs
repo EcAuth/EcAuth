@@ -7,9 +7,18 @@ namespace IdentityProvider.Services
     public class UsageReportService : IUsageReportService
     {
         /// <summary>
-        /// 請求対象外とみなす Organization コードの接頭辞（staging 由来）。
+        /// EcAuth 自身の管理用 Organization のコード（<c>AccountsOrganizationSeeder</c> の定義と一致）。
+        /// 顧客ではないので請求対象にしない。
+        ///
+        /// <para>
+        /// コードの接頭辞（<c>stg-</c> 等）では判定しない。組織コードは申込ホストから導出されるため
+        /// （<c>OrganizationProvisioningService.DeriveOrganizationCode</c>）、本番 URL が <c>stg.example.jp</c> の顧客は
+        /// <c>stg-example-jp</c> になり、接頭辞で弾くと請求から静かに落ちる。組織コードはグローバル一意なので、
+        /// 顧客がこの一覧の値を取ることはない。
+        /// </para>
         /// </summary>
-        public const string NonBillableCodePrefix = "stg-";
+        public static readonly IReadOnlySet<string> InternalOrganizationCodes =
+            new HashSet<string>(StringComparer.Ordinal) { "accounts", "stg-accounts" };
 
         private readonly EcAuthDbContext _context;
         private readonly IB2BUserService _b2bUserService;
@@ -41,7 +50,7 @@ namespace IdentityProvider.Services
 
             // 記録時ではなく集計時に適用する除外ポリシー（EcAuthDocs#45 §2「除外の置き場」）。
             // 生データを中立に持つことで、ポリシーが変わっても遡って再計算できる。
-            var billableByOrgId = organizations.ToDictionary(o => o.Id, IsBillable);
+            var billableByOrgId = organizations.ToDictionary(o => o.Id, o => IsBillable(o, query.Month));
             if (!query.IncludeNonBillable)
             {
                 organizations = organizations.Where(o => billableByOrgId[o.Id]).ToList();
@@ -104,13 +113,24 @@ namespace IdentityProvider.Services
         }
 
         /// <summary>
-        /// 請求対象の判定。サンドボックス / staging 由来（<c>stg-</c>）/ 論理削除済みは対象外。
+        /// 対象月における請求対象の判定。サンドボックスと EcAuth 自身の管理用 Organization は常に対象外。
+        ///
+        /// <para>
+        /// 論理削除は「<b>対象月の開始時点で既に削除されていたか</b>」で見る。現在の削除状態で弾くと、
+        /// 月の途中で解約したサイトの当月 MAU（解約前に発生した請求可能な利用）が請求から丸ごと落ちる。
+        /// 請求は月末締め・翌月 10 日（EcAuthDocs#119）なので、集計時点では必ず「削除済み」に見える。
+        /// <c>Organization.DeletedAt</c> が物理削除をしない理由（解約済みサイトも期間つきで残す）もこれ。
+        /// </para>
+        /// <para>
+        /// なお削除済み Organization は認証系の全経路から除外されるため、削除後の月に MAU 行が立つことはない。
+        /// 結果としてこの判定は「MAU 行のある月は請求対象」と一致する。
+        /// </para>
         /// </summary>
-        public static bool IsBillable(Organization organization)
+        public static bool IsBillable(Organization organization, UsageMonth month)
         {
             return !organization.IsSandbox
-                && organization.DeletedAt == null
-                && !organization.Code.StartsWith(NonBillableCodePrefix, StringComparison.Ordinal);
+                && !InternalOrganizationCodes.Contains(organization.Code)
+                && (organization.DeletedAt == null || organization.DeletedAt >= month.Start);
         }
     }
 }

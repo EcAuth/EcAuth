@@ -38,6 +38,12 @@ namespace IdentityProvider.Services
         public string Value => string.Create(CultureInfo.InvariantCulture, $"{Year:D4}-{Month:D2}");
 
         /// <summary>
+        /// この月の開始時刻（JST の月初 00:00:00）。
+        /// 「対象月の時点で有効だったか」を判定するのに使う（<see cref="UsageReportService.IsBillable"/>）。
+        /// </summary>
+        public DateTimeOffset Start => new(Year, Month, 1, 0, 0, 0, JstOffset);
+
+        /// <summary>
         /// 指定時刻が属する JST の月。
         /// </summary>
         public static UsageMonth FromInstant(DateTimeOffset instant)

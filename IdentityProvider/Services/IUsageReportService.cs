@@ -19,8 +19,9 @@ namespace IdentityProvider.Services
         /// <param name="Month">対象月（JST）</param>
         /// <param name="OrganizationIds">集計対象の Organization。空なら DB を引かずに空を返す</param>
         /// <param name="IncludeNonBillable">
-        /// true ならサンドボックス / <c>stg-</c> / 論理削除済みの Organization も <see cref="OrganizationUsage.IsBillable"/> = false
-        /// を付けて返す（マイページ向け）。false なら請求対象だけに絞る（請求作業向け）
+        /// true なら請求対象外の Organization（サンドボックス / EcAuth 自身の管理用 / 対象月より前に削除済み）も
+        /// <see cref="OrganizationUsage.IsBillable"/> = false を付けて返す（マイページ向け）。
+        /// false なら請求対象だけに絞る（請求作業向け）。判定は <see cref="UsageReportService.IsBillable"/>
         /// </param>
         public sealed record UsageReportQuery(UsageMonth Month, IReadOnlyCollection<int> OrganizationIds, bool IncludeNonBillable);
 

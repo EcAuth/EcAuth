@@ -182,9 +182,10 @@ namespace IdentityProvider.Test.Services
         {
             var production = SeedOrganization(1, "shop-a");
             var sandbox = SeedOrganization(2, "shop-a-sandbox", isSandbox: true);
-            var staging = SeedOrganization(3, "stg-shop-a");
-            var deleted = SeedOrganization(4, "shop-old", deletedAt: August);
-            foreach (var org in new[] { production, sandbox, staging, deleted })
+            var internalOrg = SeedOrganization(3, "stg-accounts");
+            // 対象月（2026-08）より前に削除済み。当月の MAU は原理的に立たないが、明示的に対象外にする
+            var deletedBefore = SeedOrganization(4, "shop-old", deletedAt: new DateTimeOffset(2026, 7, 20, 0, 0, 0, TimeSpan.Zero));
+            foreach (var org in new[] { production, sandbox, internalOrg, deletedBefore })
             {
                 var client = SeedClient(org.Id * 10, org.Id, $"client-{org.Code}");
                 SeedMau("2026-08", client, "u1");
@@ -204,6 +205,46 @@ namespace IdentityProvider.Test.Services
             var billable = await ReportAsync(includeNonBillable: false, allIds);
             var only = Assert.Single(billable.Organizations);
             Assert.Equal(1, only.OrganizationId);
+            Assert.Equal(1, only.Clients.Single().MonthlyActiveUsers);
+        }
+
+        [Fact]
+        public async Task GetReportAsync_OrganizationDeletedDuringMonth_StaysBillableForThatMonth()
+        {
+            // 月の途中で解約したサイト。解約前に発生した利用は請求対象に残す
+            // （請求は月末締め・翌月 10 日なので、集計時点では必ず「削除済み」に見える）。
+            var org = SeedOrganization(1, "shop-a", deletedAt: new DateTimeOffset(2026, 8, 20, 0, 0, 0, TimeSpan.Zero));
+            var client = SeedClient(10, org.Id, "client-a");
+            SeedMau("2026-08", client, "u1");
+            SeedMau("2026-08", client, "u2");
+
+            var billable = await ReportAsync(includeNonBillable: false, org.Id);
+
+            var only = Assert.Single(billable.Organizations);
+            Assert.True(only.IsBillable);
+            Assert.Equal(2, only.Clients.Single().MonthlyActiveUsers);
+
+            // 翌月分（利用は無い）は対象外になる
+            var nextMonth = await _service.GetReportAsync(new IUsageReportService.UsageReportQuery(
+                UsageMonth.FromInstant(new DateTimeOffset(2026, 9, 10, 0, 0, 0, TimeSpan.Zero)),
+                new[] { org.Id },
+                IncludeNonBillable: false));
+            Assert.Empty(nextMonth.Organizations);
+        }
+
+        [Fact]
+        public async Task GetReportAsync_CustomerCodeStartingWithStg_IsBillable()
+        {
+            // 本番 URL が stg.example.jp の顧客は組織コードが stg-example-jp になる
+            // （DeriveOrganizationCode）。接頭辞で弾くと請求から静かに落ちるため、顧客は請求対象。
+            var org = SeedOrganization(1, "stg-example-jp");
+            var client = SeedClient(10, org.Id, "client-stg-example-jp");
+            SeedMau("2026-08", client, "u1");
+
+            var billable = await ReportAsync(includeNonBillable: false, org.Id);
+
+            var only = Assert.Single(billable.Organizations);
+            Assert.True(only.IsBillable);
             Assert.Equal(1, only.Clients.Single().MonthlyActiveUsers);
         }
 

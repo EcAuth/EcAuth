@@ -70,6 +70,16 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
+        public void Start_IsJstMonthStart()
+        {
+            Assert.True(UsageMonth.TryParse("2026-08", out var august));
+
+            Assert.Equal(new DateTimeOffset(2026, 8, 1, 0, 0, 0, UsageMonth.JstOffset), august.Start);
+            // UTC では前月末 15:00Z
+            Assert.Equal(new DateTimeOffset(2026, 7, 31, 15, 0, 0, TimeSpan.Zero), august.Start.ToUniversalTime());
+        }
+
+        [Fact]
         public void Comparison_OrdersByYearThenMonth()
         {
             Assert.True(UsageMonth.TryParse("2026-08", out var aug));
