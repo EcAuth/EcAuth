@@ -316,11 +316,22 @@ namespace IdentityProvider.Services
         }
 
         /// <inheritdoc />
-        public async Task<int> CountByOrganizationAsync(int organizationId)
+        public async Task<IReadOnlyDictionary<string, int>> CountByClientsAsync(IReadOnlyCollection<string> clientIds)
         {
-            return await _context.B2BUsers
+            if (clientIds.Count == 0)
+            {
+                return new Dictionary<string, int>();
+            }
+
+            // 呼び出し元は accounts テナント（マイページ）や ConsoleApp なので顧客 Organization の行を横断で読む。
+            var counts = await _context.B2BUserIdentities
                 .IgnoreQueryFilters()
-                .CountAsync(u => u.OrganizationId == organizationId);
+                .Where(i => i.ClientId != null && clientIds.Contains(i.ClientId))
+                .GroupBy(i => i.ClientId!)
+                .Select(g => new { ClientId = g.Key, Count = g.Select(i => i.B2BSubject).Distinct().Count() })
+                .ToListAsync();
+
+            return counts.ToDictionary(c => c.ClientId, c => c.Count);
         }
 
         /// <summary>

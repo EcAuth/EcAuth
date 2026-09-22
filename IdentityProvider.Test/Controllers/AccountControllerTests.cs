@@ -34,6 +34,7 @@ namespace IdentityProvider.Test.Controllers
                 _mockAccountService.Object,
                 new PlaintextSecretProtector(),
                 new OrganizationProvisioningService(_context, new PlaintextSecretProtector()),
+                new UsageReportService(_context, new B2BUserService(_context, new Mock<ILogger<B2BUserService>>().Object)),
                 new Mock<ILogger<AccountController>>().Object);
         }
 
@@ -1218,6 +1219,130 @@ namespace IdentityProvider.Test.Controllers
         {
             var clients = okValue!.GetType().GetProperty("clients")!.GetValue(okValue)!;
             return ((IEnumerable<object>)clients).ToList();
+        }
+
+        // ---- 利用状況（MAU）: GET /v1/account/usage（EcAuthDocs#45） ----
+
+        private async Task SeedMau(string yearMonth, int clientDbId, int orgId, string subject)
+        {
+            _context.MonthlyActiveUsers.Add(new MonthlyActiveUser
+            {
+                YearMonth = yearMonth,
+                ClientId = clientDbId,
+                OrganizationId = orgId,
+                Subject = subject,
+                SubjectType = SubjectType.B2B,
+                AuthMethod = "b2b_passkey",
+                FirstSeenAt = DateTimeOffset.UtcNow
+            });
+            await _context.SaveChangesAsync();
+        }
+
+        [Fact]
+        public async Task GetUsage_NoToken_ReturnsUnauthorized()
+        {
+            SetBearer(null);
+            var result = await _controller.GetUsage();
+            Assert.IsType<UnauthorizedObjectResult>(result);
+        }
+
+        [Fact]
+        public async Task GetUsage_NonAccountToken_ReturnsUnauthorized()
+        {
+            _mockTokenService
+                .Setup(x => x.ValidateAccessTokenWithTypeAsync("b2b-token"))
+                .ReturnsAsync(new ITokenService.AccessTokenValidationResult
+                {
+                    IsValid = true,
+                    Subject = "b2b-subject",
+                    SubjectType = SubjectType.B2B
+                });
+            SetBearer("b2b-token");
+
+            var result = await _controller.GetUsage();
+            Assert.IsType<UnauthorizedObjectResult>(result);
+        }
+
+        [Theory]
+        [InlineData("2026-13")]
+        [InlineData("202608")]
+        [InlineData("2026-8")]
+        public async Task GetUsage_MalformedYearMonth_ReturnsUnprocessableEntity(string yearMonth)
+        {
+            AuthenticateAsOwnerOf((1, "shop1"));
+
+            var result = await _controller.GetUsage(yearMonth);
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal("invalid_request", GetProp(unprocessable.Value!, "error"));
+            Assert.Equal("year_month", GetProp(unprocessable.Value!, "field"));
+        }
+
+        [Fact]
+        public async Task GetUsage_FutureMonth_ReturnsUnprocessableEntity()
+        {
+            // 未来月をゼロで返すと「集計されていない」と誤解されるため弾く
+            AuthenticateAsOwnerOf((1, "shop1"));
+            var nextMonth = UsageMonth.FromInstant(DateTimeOffset.UtcNow.AddMonths(1)).Value;
+
+            var result = await _controller.GetUsage(nextMonth);
+
+            var unprocessable = Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal("year_month", GetProp(unprocessable.Value!, "field"));
+        }
+
+        [Fact]
+        public async Task GetUsage_NoManagedOrganizations_ReturnsEmptyWithCurrentMonth()
+        {
+            AuthenticateAsOwnerOf();
+
+            var result = await _controller.GetUsage();
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            Assert.Equal(UsageMonth.Current().Value, GetProp(ok.Value!, "year_month"));
+            Assert.NotNull(GetProp(ok.Value!, "as_of"));
+            Assert.Empty(GetOrganizationList(ok.Value));
+        }
+
+        [Fact]
+        public async Task GetUsage_ReturnsClientMauAndOrganizationDistinct()
+        {
+            await SeedOrgWithClient(1, "shop1", false, 10, "client-prod", "secret-prod");
+            _context.Clients.Add(new Client { Id = 11, ClientId = "client-prod-wp", ClientSecret = "s", AppName = "shop1 WordPress", OrganizationId = 1 });
+            await _context.SaveChangesAsync();
+            await SeedOrgWithClient(2, "shop1-sandbox", true, 20, "client-sandbox", "secret-sandbox");
+            // 管理外の Organization は返らない
+            await SeedOrgWithClient(3, "other", false, 30, "client-other", "secret-other");
+            await SeedMau("2026-08", 10, 1, "u1");
+            await SeedMau("2026-08", 10, 1, "u2");
+            await SeedMau("2026-08", 11, 1, "u1");
+            await SeedMau("2026-08", 30, 3, "u1");
+            AuthenticateAsOwnerOf((1, "shop1"), (2, "shop1-sandbox"));
+
+            var result = await _controller.GetUsage("2026-08");
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            Assert.Equal("2026-08", GetProp(ok.Value!, "year_month"));
+            var organizations = GetOrganizationList(ok.Value);
+            Assert.Equal(2, organizations.Count);
+
+            var production = organizations.Single(o => (int)GetProp(o, "organization_id") == 1);
+            Assert.True((bool)GetProp(production, "is_billable"));
+            Assert.Equal(2, (int)GetProp(production, "monthly_active_users")); // org distinct（参考値）
+            var clients = GetClientList(production);
+            Assert.Equal(2, clients.Count);
+            var eccube = clients.Single(c => (string)GetProp(c, "client_id") == "client-prod");
+            Assert.Equal(2, (int)GetProp(eccube, "monthly_active_users"));      // 請求値
+            Assert.Equal(0, (int)GetProp(eccube, "registered_b2b_users"));
+            Assert.Equal("b2c", GetProp(eccube, "subject_type"));               // シードの既定値
+            var wordpress = clients.Single(c => (string)GetProp(c, "client_id") == "client-prod-wp");
+            Assert.Equal(1, (int)GetProp(wordpress, "monthly_active_users"));
+
+            // サンドボックスは is_billable = false で返る（一覧を全部出すため除外しない）
+            var sandbox = organizations.Single(o => (int)GetProp(o, "organization_id") == 2);
+            Assert.True((bool)GetProp(sandbox, "is_sandbox"));
+            Assert.False((bool)GetProp(sandbox, "is_billable"));
+            Assert.Equal(0, (int)GetProp(sandbox, "monthly_active_users"));
         }
 
         public void Dispose()

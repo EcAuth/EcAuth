@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
+using Moq;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -33,13 +34,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_ValidRequest_ShouldGenerateValidJwtToken()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid", "email" },
@@ -69,13 +71,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_WithoutNonce_ShouldGenerateTokenWithoutNonceClaim()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid" }
@@ -95,13 +98,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_WithoutEmailScope_ShouldNotIncludeEmailClaims()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid" }
@@ -121,13 +125,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_NullUser_ShouldThrowArgumentException()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, _, _) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = null!,
                 Client = client
             };
@@ -140,13 +145,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_NullClient_ShouldThrowArgumentException()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (_, user, _) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = null!
             };
@@ -159,7 +165,7 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_NoRsaKeyPair_ShouldThrowInvalidOperationException()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange - Create client and user without RSA key pair
             var organization = new Organization { Id = 1, Code = "TESTORG", Name = "TestOrg", TenantName = "test-tenant" };
@@ -186,6 +192,7 @@ namespace IdentityProvider.Test.Services
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client
             };
@@ -198,13 +205,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_ValidRequest_ShouldGenerateAccessToken()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client
             };
@@ -230,13 +238,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_ShouldContainCorrectJwtClaims()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid", "profile" },
@@ -263,13 +272,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateTokensAsync_ValidRequest_ShouldGenerateBothTokens()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid", "email" },
@@ -300,13 +310,14 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateTokenAsync_ValidToken_ShouldReturnSubject()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client
             };
@@ -324,7 +335,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateTokenAsync_InvalidToken_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, _, _) = await SetupTestDataAsync(context);
@@ -340,7 +351,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateTokenAsync_NoRsaKeyPair_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange - Create client without RSA key pair
             var organization = new Organization { Id = 1, Code = "TESTORG", Name = "TestOrg", TenantName = "test-tenant" };
@@ -398,13 +409,14 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_ValidToken_ShouldReturnSubject()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid" }
@@ -423,7 +435,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_InvalidToken_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Act
             var subject = await service.ValidateAccessTokenAsync("invalid-token");
@@ -436,7 +448,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_ExpiredToken_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -502,13 +514,14 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_RevokedJwt_ShouldReturnNull()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid" }
@@ -531,13 +544,14 @@ namespace IdentityProvider.Test.Services
         public async Task RevokeAccessTokenAsync_ValidToken_ShouldRevokeSuccessfully()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client
             };
@@ -566,7 +580,7 @@ namespace IdentityProvider.Test.Services
         public async Task RevokeAccessTokenAsync_InvalidToken_ShouldReturnFalse()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Act
             var result = await service.RevokeAccessTokenAsync("invalid-token");
@@ -579,7 +593,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_DifferentClientKey_ShouldReturnInvalid()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange - Client A のデータを作成
             var (clientA, user, rsaKeyPairA) = await SetupTestDataAsync(context);
@@ -650,7 +664,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_WrongIssuer_ShouldReturnInvalid()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -715,7 +729,7 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenAsync_MissingJtiClaim_ShouldReturnInvalid()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, rsaKeyPair) = await SetupTestDataAsync(context);
@@ -769,13 +783,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_ShouldSaveTokenToDatabase()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, user, _) = await SetupTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid", "email" }
@@ -850,13 +865,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_AccountSubjectType_ShouldContainAccountSubTypeAndManagedOrgs()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, account, managedOrgs) = await SetupAccountTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = account,
                 Client = client,
                 RequestedScopes = new[] { "openid" },
@@ -894,13 +910,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateIdTokenAsync_AccountSubjectType_ShouldContainManagedOrgs()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, account, managedOrgs) = await SetupAccountTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = account,
                 Client = client,
                 RequestedScopes = new[] { "openid" },
@@ -924,13 +941,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_AccountSubjectType_WithoutManagedOrgs_ShouldOmitClaim()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange - ManagedOrgs を指定しない
             var (client, account, _) = await SetupAccountTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = account,
                 Client = client,
                 RequestedScopes = new[] { "openid" },
@@ -951,13 +969,14 @@ namespace IdentityProvider.Test.Services
         public async Task GenerateAccessTokenAsync_AccountSubjectType_EmptyManagedOrgs_ShouldOmitClaim()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange - ManagedOrgs を空リストで指定（クレーム自体を省略する）
             var (client, account, _) = await SetupAccountTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = account,
                 Client = client,
                 RequestedScopes = new[] { "openid" },
@@ -979,13 +998,14 @@ namespace IdentityProvider.Test.Services
         public async Task ValidateAccessTokenWithTypeAsync_AccountToken_ShouldReturnAccountSubjectType()
         {
             using var context = TestDbContextHelper.CreateInMemoryContext();
-            var service = new TokenService(context, _logger, _issuerResolver);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver);
 
             // Arrange
             var (client, account, managedOrgs) = await SetupAccountTestDataAsync(context);
 
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = account,
                 Client = client,
                 RequestedScopes = new[] { "openid" },
@@ -1004,5 +1024,44 @@ namespace IdentityProvider.Test.Services
             Assert.Equal(SubjectType.Account, result.SubjectType);
             Assert.Equal(client.ClientId, result.ClientId);
         }
+
+        #region MAU 記録フック（EcAuthDocs#45）
+
+        [Fact]
+        public async Task GenerateTokensAsync_RecordsMonthlyActiveUserOnceAfterAccessTokenPersisted()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            var recorder = new Mock<IMonthlyActiveUserRecorder>(MockBehavior.Strict);
+            var recorded = new List<(ITokenService.TokenRequest Request, string Subject, DateTimeOffset IssuedAt, int PersistedTokens)>();
+            recorder
+                .Setup(r => r.RecordAsync(It.IsAny<ITokenService.TokenRequest>(), It.IsAny<string>(), It.IsAny<DateTimeOffset>(), CancellationToken.None))
+                .Callback<ITokenService.TokenRequest, string, DateTimeOffset, CancellationToken>((req, subject, issuedAt, _) =>
+                    recorded.Add((req, subject, issuedAt, context.AccessTokens.Count())))
+                .Returns(Task.CompletedTask);
+            var service = TestDbContextHelper.CreateTokenService(context, _logger, _issuerResolver, recorder.Object);
+
+            var (client, user, _) = await SetupTestDataAsync(context);
+            var request = new ITokenService.TokenRequest
+            {
+                GrantType = GrantType.AuthorizationCode,
+                User = user,
+                Client = client,
+                RequestedScopes = new[] { "openid" }
+            };
+
+            var before = DateTimeOffset.UtcNow;
+            var response = await service.GenerateTokensAsync(request);
+
+            // ID トークンと Access トークンの 2 回発行しても、記録は Access トークン発行時の 1 回だけ（二重計上しない）
+            Assert.NotEmpty(response.AccessToken);
+            var entry = Assert.Single(recorded);
+            Assert.Same(request, entry.Request);
+            Assert.Equal(user.Subject, entry.Subject);
+            Assert.InRange(entry.IssuedAt, before.AddSeconds(-1), DateTimeOffset.UtcNow.AddSeconds(1));
+            // SaveChangesAsync の後に呼ばれる（発行できなかったトークンを数えないため）
+            Assert.Equal(1, entry.PersistedTokens);
+        }
+
+        #endregion
     }
 }

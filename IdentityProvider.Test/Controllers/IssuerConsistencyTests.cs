@@ -30,7 +30,7 @@ namespace IdentityProvider.Test.Controllers
 
             using var context = TestDbContextHelper.CreateInMemoryContext();
             var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-            var tokenService = new TokenService(context, loggerFactory.CreateLogger<TokenService>(), issuerResolver);
+            var tokenService = TestDbContextHelper.CreateTokenService(context, loggerFactory.CreateLogger<TokenService>(), issuerResolver);
 
             var (client, user) = await SetupTestDataAsync(context);
 
@@ -43,6 +43,7 @@ namespace IdentityProvider.Test.Controllers
             // ID Token を生成し iss クレームを取得
             var idToken = await tokenService.GenerateIdTokenAsync(new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid" }

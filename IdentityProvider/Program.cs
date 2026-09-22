@@ -78,6 +78,9 @@ builder.Services.AddScoped<IB2BPasskeyService, B2BPasskeyService>();
 builder.Services.AddScoped<ISignupService, SignupService>();
 // サイト（Organization）払い出し。申込フローとマイページのサイト追加が共用する。
 builder.Services.AddScoped<IOrganizationProvisioningService, OrganizationProvisioningService>();
+// MAU 集計（EcAuthDocs#45）。記録は TokenService から、参照はマイページ API と ConsoleApp が共用する。
+builder.Services.AddScoped<IMonthlyActiveUserRecorder, MonthlyActiveUserRecorder>();
+builder.Services.AddScoped<IUsageReportService, UsageReportService>();
 // メール送信プロバイダは Email:Provider で切替。既定は本番 / staging 用の SendGrid（HTTP API）。
 // ローカル開発 / CI E2E では Email:Provider=Smtp で MailKit ベースの SmtpEmailService に切替え、
 // mailpit（Smtp:Host / Smtp:Port）へ送信して実メール経路を検証する。

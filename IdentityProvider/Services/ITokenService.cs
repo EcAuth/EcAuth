@@ -31,6 +31,20 @@ namespace IdentityProvider.Services
             /// Account 以外の SubjectType では使用しない。
             /// </summary>
             public IReadOnlyList<IAccountService.ManagedOrganization>? ManagedOrgs { get; set; }
+
+            /// <summary>
+            /// 発行経路。<see cref="Services.GrantType.AuthorizationCode"/> のときだけ MAU に記録される（EcAuthDocs#45）。
+            /// <c>required</c> で既定値を持たせないのは、refresh 経路（EcAuth#339）の実装で申告を省くと
+            /// サイレントに MAU が過剰計上されるため。省略はコンパイルエラーになる。
+            /// </summary>
+            public required GrantType GrantType { get; init; }
+
+            /// <summary>
+            /// 認証方式（<c>monthly_active_user.auth_method</c>）。未指定なら <see cref="SubjectType"/> から推論する
+            /// （B2B → <c>b2b_passkey</c>、B2C → <c>b2c_social</c>）。B2B SSO（EcAuthDocs#123）を実装する際は
+            /// 推論が黙って誤記録するため、認可コードに認証方式を持たせてここへ明示的に渡すこと。
+            /// </summary>
+            public string? AuthMethod { get; set; }
         }
 
         /// <summary>

@@ -36,7 +36,7 @@ namespace IdentityProvider.Test.Controllers
 
             var issuerResolver = TestDbContextHelper.CreateIssuerResolver(host: "test.ec-cube.io");
 
-            _tokenService = new TokenService(_context, mockLogger.Object, issuerResolver);
+            _tokenService = TestDbContextHelper.CreateTokenService(_context, mockLogger.Object, issuerResolver);
             _userService = new UserService(_context, mockUserLogger.Object);
             _mockB2BUserService = new Mock<IB2BUserService>();
 
@@ -64,6 +64,7 @@ namespace IdentityProvider.Test.Controllers
             var user = await _context.EcAuthUsers.FirstAsync(u => u.Subject == "integration-test-subject");
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid", "profile" },
@@ -170,6 +171,7 @@ namespace IdentityProvider.Test.Controllers
             var user = await _context.EcAuthUsers.FirstAsync(u => u.Subject == "tenant1-user-subject");
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client1,
                 RequestedScopes = new[] { "openid", "profile" },
@@ -202,6 +204,7 @@ namespace IdentityProvider.Test.Controllers
             var user = await _context.EcAuthUsers.FirstAsync(u => u.Subject == "tenant1-user-subject");
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client1,
                 RequestedScopes = new[] { "openid", "profile" },
@@ -235,6 +238,7 @@ namespace IdentityProvider.Test.Controllers
             var user = await _context.EcAuthUsers.FirstAsync(u => u.Subject == "integration-test-subject");
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid", "profile" },
@@ -268,6 +272,7 @@ namespace IdentityProvider.Test.Controllers
             var b2bUser = await _context.B2BUsers.FirstAsync(u => u.Subject == "b2b-integration-test-subject");
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = b2bUser,
                 Client = client,
                 RequestedScopes = new[] { "openid", "profile" },
@@ -302,6 +307,7 @@ namespace IdentityProvider.Test.Controllers
             var user = await _context.EcAuthUsers.FirstAsync(u => u.Subject == "integration-test-subject");
             var request = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = user,
                 Client = client,
                 RequestedScopes = new[] { "openid", "profile" },

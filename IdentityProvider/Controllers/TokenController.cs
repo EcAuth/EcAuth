@@ -358,7 +358,8 @@ namespace IdentityProvider.Controllers
                         User = b2bUser,
                         Client = client,
                         RequestedScopes = scopes,
-                        SubjectType = SubjectType.B2B
+                        SubjectType = SubjectType.B2B,
+                        GrantType = GrantType.AuthorizationCode
                     };
 
                     _logger.LogInformation("Token request created for B2B user: {Subject}, client: {ClientId}, scopes: {Scopes}",
@@ -387,7 +388,8 @@ namespace IdentityProvider.Controllers
                         User = user,
                         Client = client,
                         RequestedScopes = scopes,
-                        SubjectType = SubjectType.B2C
+                        SubjectType = SubjectType.B2C,
+                        GrantType = GrantType.AuthorizationCode
                     };
 
                     _logger.LogInformation("Token request created for user: {Subject}, client: {ClientId}, scopes: {Scopes}",
@@ -419,7 +421,8 @@ namespace IdentityProvider.Controllers
                         Client = client,
                         RequestedScopes = scopes,
                         SubjectType = SubjectType.Account,
-                        ManagedOrgs = managedOrgs
+                        ManagedOrgs = managedOrgs,
+                        GrantType = GrantType.AuthorizationCode
                     };
 
                     _logger.LogInformation("Token request created for account: {Subject}, client: {ClientId}, managedOrgs: {Count}, scopes: {Scopes}",

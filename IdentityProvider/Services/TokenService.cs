@@ -1,4 +1,5 @@
 using IdentityProvider.Models;
+using IdentityProvider.Telemetry;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
@@ -14,12 +15,18 @@ namespace IdentityProvider.Services
         private readonly EcAuthDbContext _context;
         private readonly ILogger<TokenService> _logger;
         private readonly IIssuerResolver _issuerResolver;
+        private readonly IMonthlyActiveUserRecorder _monthlyActiveUserRecorder;
 
-        public TokenService(EcAuthDbContext context, ILogger<TokenService> logger, IIssuerResolver issuerResolver)
+        public TokenService(
+            EcAuthDbContext context,
+            ILogger<TokenService> logger,
+            IIssuerResolver issuerResolver,
+            IMonthlyActiveUserRecorder monthlyActiveUserRecorder)
         {
             _context = context;
             _logger = logger;
             _issuerResolver = issuerResolver;
+            _monthlyActiveUserRecorder = monthlyActiveUserRecorder;
         }
 
         public async Task<ITokenService.TokenResponse> GenerateTokensAsync(ITokenService.TokenRequest request)
@@ -238,6 +245,15 @@ namespace IdentityProvider.Services
 
             _logger.LogInformation("Access token generated for subject {Subject} (type: {SubjectType}) and client {ClientId}",
                 subject, request.SubjectType, request.Client.Id);
+
+            // MAU の記録（EcAuthDocs#45）。ここが全認証経路の唯一の関所。
+            // SaveChangesAsync の後に置くのは、発行できなかったトークンを課金対象に数えないため。
+            // recorder は例外を投げない契約（失敗は Error ログ）。CancellationToken.None は、トークン返却直後の
+            // 切断で記録だけが落ちるのを防ぐため。
+            using (TimingScope.Begin("usage_record"))
+            {
+                await _monthlyActiveUserRecorder.RecordAsync(request, subject, new DateTimeOffset(now, TimeSpan.Zero), CancellationToken.None);
+            }
 
             return accessTokenJwt;
         }

@@ -219,7 +219,8 @@ namespace IdentityProvider.Services
                     User = account,
                     Client = client,
                     SubjectType = SubjectType.Account,
-                    ManagedOrgs = managedOrgs
+                    ManagedOrgs = managedOrgs,
+                    GrantType = GrantType.MagicLink
                 });
             }
 

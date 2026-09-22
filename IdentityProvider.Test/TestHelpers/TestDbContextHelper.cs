@@ -3,6 +3,7 @@ using IdentityProvider.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging;
 using System.Security.Cryptography;
 
 namespace IdentityProvider.Test.TestHelpers
@@ -21,6 +22,23 @@ namespace IdentityProvider.Test.TestHelpers
             httpContext.Request.Host = new HostString(host);
             var httpContextAccessor = new HttpContextAccessor { HttpContext = httpContext };
             return new IssuerResolver(httpContextAccessor);
+        }
+
+        /// <summary>
+        /// テスト用の <see cref="TokenService"/> を生成する。ctor の引数が増えたとき（EcAuthDocs#45 で
+        /// <see cref="IMonthlyActiveUserRecorder"/> を追加）に 30 箇所の <c>new TokenService(...)</c> を
+        /// 追いかけなくて済むよう、生成をここに集約する。
+        /// <paramref name="recorder"/> 省略時は何もしない <see cref="NoOpMonthlyActiveUserRecorder"/>。
+        /// InMemory プロバイダーでは生 SQL を実行できないため、本物の recorder を InMemory の context と
+        /// 組み合わせないこと（記録の検証は <see cref="RetryingSqliteContext"/> で行う）。
+        /// </summary>
+        public static TokenService CreateTokenService(
+            EcAuthDbContext context,
+            ILogger<TokenService> logger,
+            IIssuerResolver issuerResolver,
+            IMonthlyActiveUserRecorder? recorder = null)
+        {
+            return new TokenService(context, logger, issuerResolver, recorder ?? new NoOpMonthlyActiveUserRecorder());
         }
 
         public static EcAuthDbContext CreateInMemoryContext(string? databaseName = null, ITenantService? tenantService = null)
@@ -58,6 +76,17 @@ namespace IdentityProvider.Test.TestHelpers
             };
             context.RsaKeyPairs.Add(rsaKeyPair);
             return rsaKeyPair;
+        }
+    }
+
+    /// <summary>
+    /// MAU を記録しない <see cref="IMonthlyActiveUserRecorder"/>。トークン発行自体を検証するテスト用。
+    /// </summary>
+    public sealed class NoOpMonthlyActiveUserRecorder : IMonthlyActiveUserRecorder
+    {
+        public Task RecordAsync(ITokenService.TokenRequest request, string subject, DateTimeOffset issuedAt, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
         }
     }
 

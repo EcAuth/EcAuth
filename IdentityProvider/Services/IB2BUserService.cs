@@ -131,10 +131,15 @@ namespace IdentityProvider.Services
         Task<bool> ExistsAsync(string subject);
 
         /// <summary>
-        /// Organization内のB2Bユーザー数を取得する（課金・制限チェック用）
+        /// Client ごとの登録 B2B ユーザー数を取得する（利用状況の参考値、EcAuthDocs#45）。
+        ///
+        /// <c>b2b_user</c> は Organization 単位だが、識別子は発行元ごとの <c>b2b_user_identity</c>（EcAuthDocs#110）に
+        /// 分離されているため、<c>client_id</c> で <c>COUNT(DISTINCT b2b_subject)</c> すれば Client 別に数えられる。
+        /// 企業 SSO 由来の identity（<c>client_id = null</c>）はどの Client にも数えない。
+        /// 課金に使うのは MAU であり、この値は参考値（EcAuthDocs#119）。
         /// </summary>
-        /// <param name="organizationId">Organization ID</param>
-        /// <returns>ユーザー数</returns>
-        Task<int> CountByOrganizationAsync(int organizationId);
+        /// <param name="clientIds">数える Client の <see cref="Client.ClientId"/>（文字列。<c>client.id</c> ではない）</param>
+        /// <returns>client_id → 登録ユーザー数。identity の無い Client はキー自体が無い</returns>
+        Task<IReadOnlyDictionary<string, int>> CountByClientsAsync(IReadOnlyCollection<string> clientIds);
     }
 }

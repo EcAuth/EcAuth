@@ -51,7 +51,17 @@ public static class DatabaseResilience
     public static bool IsUniqueConstraintViolation(DbUpdateException ex)
     {
         return ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx
-            && (sqlEx.Number == 2601 || sqlEx.Number == 2627);
+            && IsUniqueConstraintViolation(sqlEx);
+    }
+
+    /// <summary>
+    /// <see cref="Microsoft.Data.SqlClient.SqlException"/> がユニーク／主キー制約違反（2601 / 2627）かを判定する。
+    /// <c>ExecuteSqlInterpolatedAsync</c> 等の生 SQL は <see cref="DbUpdateException"/> に包まれず
+    /// <c>SqlException</c> がそのまま飛ぶため、その経路ではこちらを使う。
+    /// </summary>
+    public static bool IsUniqueConstraintViolation(Microsoft.Data.SqlClient.SqlException ex)
+    {
+        return ex.Number == 2601 || ex.Number == 2627;
     }
 
     /// <summary>
