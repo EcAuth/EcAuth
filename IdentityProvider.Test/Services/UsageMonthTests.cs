@@ -69,6 +69,36 @@ namespace IdentityProvider.Test.Services
             Assert.False(UsageMonth.TryParse(value, out _));
         }
 
+        [Theory]
+        // 正規表現の [0-9]{4} は通るが Start を構築できない月。受理すると 422 のはずの入力が 500 になる。
+        [InlineData("0000-01")] // 西暦 0 年そのものが表現できない
+        [InlineData("0001-01")] // +09:00 を適用すると UTC が 0000-12-31T15:00Z になり範囲外
+        public void TryParse_RejectsMonthsBelowMin(string value)
+        {
+            Assert.False(UsageMonth.TryParse(value, out _));
+        }
+
+        [Theory]
+        [InlineData("0001-02")] // 下限そのもの
+        [InlineData("9999-12")] // 正規表現が許す上限
+        public void TryParse_AcceptsRepresentableBounds(string value)
+        {
+            Assert.True(UsageMonth.TryParse(value, out var month));
+
+            Assert.Equal(value, month.Value);
+            // 受理した月は必ず Start を構築できる（例外を投げない）
+            Assert.Equal(1, month.Start.Day);
+            Assert.Equal(UsageMonth.JstOffset, month.Start.Offset);
+        }
+
+        [Fact]
+        public void Min_IsTheSmallestAcceptedMonth()
+        {
+            Assert.Equal("0001-02", UsageMonth.Min.Value);
+            Assert.True(UsageMonth.TryParse("0001-02", out var min));
+            Assert.Equal(UsageMonth.Min, min);
+        }
+
         [Fact]
         public void Start_IsJstMonthStart()
         {

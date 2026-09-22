@@ -23,6 +23,18 @@ namespace IdentityProvider.Services
         /// </summary>
         public static readonly TimeSpan JstOffset = TimeSpan.FromHours(9);
 
+        /// <summary>
+        /// 受理する最小の月。<see cref="Start"/>（JST の月初）が <see cref="DateTimeOffset"/> として
+        /// 表現できる下限で、<see cref="TryParse"/> がこれ未満を弾くことで <see cref="Start"/> は必ず構築できる。
+        ///
+        /// <para>
+        /// <c>0000-01</c> は西暦 0 年そのものが表現できず、<c>0001-01</c> も +09:00 を適用すると UTC が
+        /// <c>0000-12-31T15:00Z</c> になって範囲外になる。どちらも検証を通すと、不正な <c>year_month</c> が
+        /// 422 ではなく 500 になる。
+        /// </para>
+        /// </summary>
+        public static readonly UsageMonth Min = new(1, 2);
+
         public int Year { get; }
         public int Month { get; }
 
@@ -40,6 +52,7 @@ namespace IdentityProvider.Services
         /// <summary>
         /// この月の開始時刻（JST の月初 00:00:00）。
         /// 「対象月の時点で有効だったか」を判定するのに使う（<see cref="UsageReportService.IsBillable"/>）。
+        /// <see cref="TryParse"/> が <see cref="Min"/> 未満を弾くため、常に構築できる。
         /// </summary>
         public DateTimeOffset Start => new(Year, Month, 1, 0, 0, 0, JstOffset);
 
@@ -58,7 +71,7 @@ namespace IdentityProvider.Services
         public static UsageMonth Current() => FromInstant(DateTimeOffset.UtcNow);
 
         /// <summary>
-        /// <c>"yyyy-MM"</c>（月は 01〜12、桁は ASCII 数字のみ）を受理する。それ以外は false。
+        /// <c>"yyyy-MM"</c>（月は 01〜12、桁は ASCII 数字のみ）かつ <see cref="Min"/> 以降を受理する。それ以外は false。
         /// </summary>
         public static bool TryParse(string? value, out UsageMonth month)
         {
@@ -76,7 +89,16 @@ namespace IdentityProvider.Services
 
             var year = int.Parse(m.Groups["y"].Value, NumberStyles.None, CultureInfo.InvariantCulture);
             var mon = int.Parse(m.Groups["m"].Value, NumberStyles.None, CultureInfo.InvariantCulture);
-            month = new UsageMonth(year, mon);
+
+            // 正規表現の [0-9]{4} は 0000 も通す。下限を弾かないと Start の構築で例外になり、
+            // 不正な入力が 422 ではなく 500 になる（上限 9999-12 は Start を構築できるので追加の検証は不要）。
+            var candidate = new UsageMonth(year, mon);
+            if (candidate < Min)
+            {
+                return false;
+            }
+
+            month = candidate;
             return true;
         }
 

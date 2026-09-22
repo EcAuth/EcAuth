@@ -116,7 +116,7 @@ namespace IdentityProvider.Services
         /// 対象月における請求対象の判定。サンドボックスと EcAuth 自身の管理用 Organization は常に対象外。
         ///
         /// <para>
-        /// 論理削除は「<b>対象月の開始時点で既に削除されていたか</b>」で見る。現在の削除状態で弾くと、
+        /// 論理削除は「<b>対象月に 1 瞬でも有効だったか</b>」（= 削除が対象月の開始より後か）で見る。現在の削除状態で弾くと、
         /// 月の途中で解約したサイトの当月 MAU（解約前に発生した請求可能な利用）が請求から丸ごと落ちる。
         /// 請求は月末締め・翌月 10 日（EcAuthDocs#119）なので、集計時点では必ず「削除済み」に見える。
         /// <c>Organization.DeletedAt</c> が物理削除をしない理由（解約済みサイトも期間つきで残す）もこれ。
@@ -130,7 +130,7 @@ namespace IdentityProvider.Services
         {
             return !organization.IsSandbox
                 && !InternalOrganizationCodes.Contains(organization.Code)
-                && (organization.DeletedAt == null || organization.DeletedAt >= month.Start);
+                && (organization.DeletedAt == null || organization.DeletedAt > month.Start);
         }
     }
 }

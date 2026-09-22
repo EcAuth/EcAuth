@@ -233,6 +233,34 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
+        public async Task GetReportAsync_OrganizationDeletedExactlyAtMonthStart_IsNotBillable()
+        {
+            // 境界: JST 月初ちょうどの削除は「対象月に 1 瞬も有効でなかった」ので対象外
+            var org = SeedOrganization(1, "shop-a", deletedAt: AugustMonth.Start);
+            var client = SeedClient(10, org.Id, "client-a");
+            SeedMau("2026-08", client, "u1");
+
+            var full = await ReportAsync(includeNonBillable: true, org.Id);
+            Assert.False(Assert.Single(full.Organizations).IsBillable);
+
+            var billable = await ReportAsync(includeNonBillable: false, org.Id);
+            Assert.Empty(billable.Organizations);
+        }
+
+        [Fact]
+        public async Task GetReportAsync_OrganizationDeletedJustAfterMonthStart_IsBillable()
+        {
+            // 境界の反対側: 月初を 1 ティックでも過ぎていれば当月は有効だった
+            var org = SeedOrganization(1, "shop-a", deletedAt: AugustMonth.Start.AddTicks(1));
+            var client = SeedClient(10, org.Id, "client-a");
+            SeedMau("2026-08", client, "u1");
+
+            var billable = await ReportAsync(includeNonBillable: false, org.Id);
+
+            Assert.True(Assert.Single(billable.Organizations).IsBillable);
+        }
+
+        [Fact]
         public async Task GetReportAsync_CustomerCodeStartingWithStg_IsBillable()
         {
             // 本番 URL が stg.example.jp の顧客は組織コードが stg-example-jp になる

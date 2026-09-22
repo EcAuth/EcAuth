@@ -1267,6 +1267,9 @@ namespace IdentityProvider.Test.Controllers
         [InlineData("2026-13")]
         [InlineData("202608")]
         [InlineData("2026-8")]
+        // 正規表現は通るが JST 月初を構築できない月。422 で弾かないと集計時に例外になり 500 になる。
+        [InlineData("0000-01")]
+        [InlineData("0001-01")]
         public async Task GetUsage_MalformedYearMonth_ReturnsUnprocessableEntity(string yearMonth)
         {
             AuthenticateAsOwnerOf((1, "shop1"));
