@@ -53,6 +53,24 @@ namespace IdentityProvider.Models
         [Column("max_sites")]
         public int MaxSites { get; set; } = DefaultMaxSites;
 
+        /// <summary>
+        /// Stripe Customer の ID（<c>cus_*</c>）。支払い主体は Account なので 1:1（EcAuthDocs#119）。
+        /// 支払い方法の初回登録（Checkout の setup モード）時に遅延作成し、それまでは null。
+        /// accounts テナントは live、stg-accounts テナントは test モードの Customer を指す。
+        /// </summary>
+        [Column("stripe_customer_id")]
+        [MaxLength(255)]
+        public string? StripeCustomerId { get; set; }
+
+        /// <summary>
+        /// 支払い方法（カード）が Stripe Customer の既定の支払い方法として登録された時刻。
+        /// Stripe の Webhook / 同期で更新する非正規化キャッシュで、上限強制（<c>register/options</c>）の
+        /// 判定はこの列だけを見る（ホットパスから Stripe API を呼ばないため）。
+        /// カードが外れて既定の支払い方法が無くなったら null に戻す。
+        /// </summary>
+        [Column("payment_method_registered_at")]
+        public DateTimeOffset? PaymentMethodRegisteredAt { get; set; }
+
         [Column("created_at")]
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 

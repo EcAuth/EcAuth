@@ -31,6 +31,19 @@ namespace IdentityProvider.Models
         [Required]
         public SubjectType SubjectType { get; set; } = SubjectType.B2C;
 
+        /// <summary>
+        /// この Client を請求対象から外す（EcAuthDocs#119）。Account 全体ではなく特定のサイトだけ課金しない
+        /// （検証用サイト、無償提供先など）ときに使う。運用 CLI（ConsoleApp <c>billing-plan</c>）で設定し、
+        /// マイページには請求対象外理由 <c>client_exempt</c> として見せる。MAU の集計自体は止めない。
+        /// </summary>
+        [Column("billing_exempt")]
+        public bool BillingExempt { get; set; }
+
+        /// <summary>請求対象から外す理由（運用メモ）。</summary>
+        [Column("billing_exempt_reason")]
+        [MaxLength(255)]
+        public string? BillingExemptReason { get; set; }
+
         public Organization? Organization { get; set; }
         // get-only + 初期化子のため null になりえない。null 許容にすると呼び出し側が
         // 毎回 null チェックを強いられる（CS8604）ので、実態どおり非 null で宣言する。
