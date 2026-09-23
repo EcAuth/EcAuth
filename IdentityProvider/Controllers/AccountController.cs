@@ -59,6 +59,7 @@ namespace IdentityProvider.Controllers
         private readonly IAccountService _accountService;
         private readonly ISecretProtector _secretProtector;
         private readonly IOrganizationProvisioningService _provisioning;
+        private readonly IUsageReportService _usageReport;
         private readonly ILogger<AccountController> _logger;
 
         public AccountController(
@@ -67,6 +68,7 @@ namespace IdentityProvider.Controllers
             IAccountService accountService,
             ISecretProtector secretProtector,
             IOrganizationProvisioningService provisioning,
+            IUsageReportService usageReport,
             ILogger<AccountController> logger)
         {
             _context = context;
@@ -74,6 +76,7 @@ namespace IdentityProvider.Controllers
             _accountService = accountService;
             _secretProtector = secretProtector;
             _provisioning = provisioning;
+            _usageReport = usageReport;
             _logger = logger;
         }
 
@@ -402,6 +405,85 @@ namespace IdentityProvider.Controllers
                 organizations = result,
                 max_sites = maxSites,
                 production_site_count = clients.Count(c => productionOrgIds.Contains(c.OrganizationId!.Value))
+            });
+        }
+
+        /// <summary>
+        /// GET /v1/account/usage?year_month=2026-08
+        /// 呼び出し Account が管理する Organization / Client の利用状況（MAU）を返す（EcAuthDocs#45）。
+        ///
+        /// <para>
+        /// 請求に使うのは <c>clients[].monthly_active_users</c>（Client 単位、EcAuthDocs#119）。
+        /// <c>organizations[].monthly_active_users</c> は Organization 単位の distinct で参考値。
+        /// Client 別の合計との差が「同一人物が複数 Client で認証した多重カウント」を示す。
+        /// <c>registered_b2b_users</c> はその月の数ではなく <c>as_of</c> 時点のスナップショット。
+        /// </para>
+        /// <para>
+        /// <c>year_month</c> 未指定は JST の当月。未来月は 422（ゼロで返すと「集計されていない」と誤解されるため）。
+        /// サンドボックス Org も <c>is_billable = false</c> を付けて返す（マイページはサイト一覧を全部出す）。
+        /// </para>
+        /// </summary>
+        [HttpGet("usage")]
+        public async Task<IActionResult> GetUsage([FromQuery] string? year_month = null)
+        {
+            var subject = await ValidateAccountTokenAsync();
+            if (subject == null)
+            {
+                return Unauthorized(new
+                {
+                    error = "invalid_token",
+                    error_description = "有効な Account アクセストークンが必要です。"
+                });
+            }
+
+            var current = UsageMonth.Current();
+            UsageMonth month;
+            if (year_month == null)
+            {
+                month = current;
+            }
+            else if (!UsageMonth.TryParse(year_month, out var parsed))
+            {
+                return InvalidInput("invalid_request", "year_month は yyyy-MM 形式で指定してください。", "year_month");
+            }
+            else if (parsed > current)
+            {
+                return InvalidInput("invalid_request", "year_month に未来の月は指定できません。", "year_month");
+            }
+            else
+            {
+                month = parsed;
+            }
+
+            var managed = await _accountService.GetManagedOrganizationsAsync(subject);
+            var orgIds = managed.Select(m => m.OrganizationId).ToHashSet();
+
+            var report = await _usageReport.GetReportAsync(
+                new IUsageReportService.UsageReportQuery(month, orgIds, IncludeNonBillable: true),
+                HttpContext.RequestAborted);
+
+            return Ok(new
+            {
+                year_month = report.Month.Value,
+                as_of = report.AsOf,
+                organizations = report.Organizations.Select(o => new
+                {
+                    organization_id = o.OrganizationId,
+                    code = o.Code,
+                    name = o.Name,
+                    is_sandbox = o.IsSandbox,
+                    is_billable = o.IsBillable,
+                    monthly_active_users = o.MonthlyActiveUsers,
+                    clients = o.Clients.Select(c => new
+                    {
+                        id = c.Id,
+                        client_id = c.ClientId,
+                        app_name = c.AppName,
+                        subject_type = c.SubjectType.ToString().ToLowerInvariant(),
+                        monthly_active_users = c.MonthlyActiveUsers,
+                        registered_b2b_users = c.RegisteredB2BUsers
+                    }).ToArray()
+                }).ToArray()
             });
         }
 

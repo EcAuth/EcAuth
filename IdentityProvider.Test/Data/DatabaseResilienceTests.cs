@@ -642,6 +642,7 @@ namespace IdentityProvider.Test.Data
                 accountService,
                 protector,
                 new OrganizationProvisioningService(Context, protector),
+                new UsageReportService(Context, new B2BUserService(Context, Mock.Of<ILogger<B2BUserService>>())),
                 Mock.Of<ILogger<AccountController>>());
         }
 

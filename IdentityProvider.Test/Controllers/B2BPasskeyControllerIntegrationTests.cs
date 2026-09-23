@@ -74,7 +74,7 @@ namespace IdentityProvider.Test.Controllers
 
             var tokenLogger = new Mock<ILogger<TokenService>>();
             var issuerResolver = TestDbContextHelper.CreateIssuerResolver(host: "test.ec-cube.io");
-            _tokenService = new TokenService(_context, tokenLogger.Object, issuerResolver);
+            _tokenService = TestDbContextHelper.CreateTokenService(_context, tokenLogger.Object, issuerResolver);
 
             _mockControllerLogger = new Mock<ILogger<B2BPasskeyController>>();
             _mockTokenService = new Mock<ITokenService>();
@@ -717,6 +717,7 @@ namespace IdentityProvider.Test.Controllers
             // ISubjectProvider 導入により、B2BUser を直接渡せるようになった
             var tokenRequest = new ITokenService.TokenRequest
             {
+                GrantType = GrantType.AuthorizationCode,
                 User = testB2BUser,
                 Client = _client,
                 RequestedScopes = new[] { "openid", "profile" },

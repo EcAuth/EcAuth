@@ -33,6 +33,7 @@ namespace IdentityProvider.Models
         public DbSet<MagicLoginToken> MagicLoginTokens { get; set; }
         public DbSet<PasskeyRegistrationToken> PasskeyRegistrationTokens { get; set; }
         public DbSet<SignupRequest> SignupRequests { get; set; }
+        public DbSet<MonthlyActiveUser> MonthlyActiveUsers { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -354,6 +355,31 @@ namespace IdentityProvider.Models
             // 未確認の申込をテナント単位で検索するための補助インデックス
             modelBuilder.Entity<SignupRequest>()
                 .HasIndex(sr => new { sr.TenantName, sr.ConfirmedAt });
+
+            // MonthlyActiveUser（EcAuthDocs#45）: テナント横断（クエリフィルター対象外）。
+            // accounts テナントのマイページ API と ConsoleApp の請求集計が顧客 Organization の行を読むため、
+            // フィルターを付けると 0 件になる。参照経路は IUsageReportService（organizationIds 必須）に
+            // 一本化して構造で守る。subject には FK を張らない（B2BUser は物理削除されるため。詳細はモデルの doc）。
+            modelBuilder.Entity<MonthlyActiveUser>()
+                .HasOne(m => m.Client)
+                .WithMany()
+                .HasForeignKey(m => m.ClientId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<MonthlyActiveUser>()
+                .HasOne(m => m.Organization)
+                .WithMany()
+                .HasForeignKey(m => m.OrganizationId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // 重複排除の本体。記録は INSERT ... WHERE NOT EXISTS で行い、レースはこの制約が最終防衛線になる。
+            modelBuilder.Entity<MonthlyActiveUser>()
+                .HasIndex(m => new { m.YearMonth, m.ClientId, m.Subject })
+                .IsUnique();
+
+            // Organization 単位の distinct MAU（参考値）を JOIN なしで出すための索引。
+            modelBuilder.Entity<MonthlyActiveUser>()
+                .HasIndex(m => new { m.YearMonth, m.OrganizationId });
 
             base.OnModelCreating(modelBuilder);
         }

@@ -14,6 +14,7 @@ namespace IdentityProvider.Test.Services
         /// </summary>
         private const string TestIssuerKey = "client:test-client";
 
+        private readonly string _databaseName = Guid.NewGuid().ToString();
         private readonly EcAuthDbContext _context;
         private readonly B2BUserService _service;
         private readonly Mock<ILogger<B2BUserService>> _mockLogger;
@@ -21,7 +22,7 @@ namespace IdentityProvider.Test.Services
 
         public B2BUserServiceTests()
         {
-            _context = TestDbContextHelper.CreateInMemoryContext();
+            _context = TestDbContextHelper.CreateInMemoryContext(_databaseName);
             _mockLogger = new Mock<ILogger<B2BUserService>>();
             _service = new B2BUserService(_context, _mockLogger.Object);
 
@@ -495,67 +496,87 @@ namespace IdentityProvider.Test.Services
 
         #endregion
 
-        #region CountByOrganizationAsync Tests
+        #region CountByClientsAsync Tests
 
-        [Fact]
-        public async Task CountByOrganizationAsync_WithUsers_ShouldReturnCount()
+        private async Task SeedIdentityAsync(string subject, string issuerKey, string externalId, string? clientId)
         {
-            // Arrange
-            var users = new[]
+            if (!await _context.B2BUsers.AnyAsync(u => u.Subject == subject))
             {
-                new B2BUser { Subject = "user-1", UserType = "admin", OrganizationId = 1, Organization = _organization },
-                new B2BUser { Subject = "user-2", UserType = "staff", OrganizationId = 1, Organization = _organization },
-                new B2BUser { Subject = "user-3", UserType = "staff", OrganizationId = 1, Organization = _organization }
-            };
-            _context.B2BUsers.AddRange(users);
+                _context.B2BUsers.Add(new B2BUser { Subject = subject, UserType = "admin", OrganizationId = 1, Organization = _organization });
+            }
+            _context.B2BUserIdentities.Add(new B2BUserIdentity
+            {
+                B2BSubject = subject,
+                IssuerKey = issuerKey,
+                ExternalId = externalId,
+                ClientId = clientId
+            });
             await _context.SaveChangesAsync();
-
-            // Act
-            var result = await _service.CountByOrganizationAsync(1);
-
-            // Assert
-            Assert.Equal(3, result);
         }
 
         [Fact]
-        public async Task CountByOrganizationAsync_NoUsers_ShouldReturnZero()
+        public async Task CountByClientsAsync_CountsDistinctSubjectsPerClient()
         {
-            // Act
-            var result = await _service.CountByOrganizationAsync(999);
+            // Arrange: client-a に 2 人（うち 1 人は identity 2 件）、client-b に 1 人
+            await SeedIdentityAsync("user-1", "client:client-a", "ext-1", "client-a");
+            await SeedIdentityAsync("user-1", "client:client-a-old", "ext-1-old", "client-a");
+            await SeedIdentityAsync("user-2", "client:client-a", "ext-2", "client-a");
+            await SeedIdentityAsync("user-3", "client:client-b", "ext-3", "client-b");
 
-            // Assert
-            Assert.Equal(0, result);
+            // Act
+            var result = await _service.CountByClientsAsync(new[] { "client-a", "client-b" });
+
+            // Assert: 同一 subject の identity 2 件は 1 人として数える
+            Assert.Equal(2, result["client-a"]);
+            Assert.Equal(1, result["client-b"]);
         }
 
         [Fact]
-        public async Task CountByOrganizationAsync_ShouldOnlyCountOrganizationUsers()
+        public async Task CountByClientsAsync_IgnoresIdentitiesWithoutClientAndUnrequestedClients()
         {
-            // Arrange
-            var org2 = new Organization
-            {
-                Id = 2,
-                Code = "org-2",
-                Name = "組織2",
-                TenantName = "tenant-2"
-            };
-            _context.Organizations.Add(org2);
-
-            var users = new[]
-            {
-                new B2BUser { Subject = "org1-user-1", UserType = "admin", OrganizationId = 1, Organization = _organization },
-                new B2BUser { Subject = "org1-user-2", UserType = "staff", OrganizationId = 1, Organization = _organization },
-                new B2BUser { Subject = "org2-user-1", UserType = "admin", OrganizationId = 2, Organization = org2 }
-            };
-            _context.B2BUsers.AddRange(users);
-            await _context.SaveChangesAsync();
+            // Arrange: 企業 SSO 由来（client_id = null）と、問い合わせ対象外の Client
+            await SeedIdentityAsync("user-1", "client:client-a", "ext-1", "client-a");
+            await SeedIdentityAsync("user-2", "idp:tenant-x", "ext-2", null);
+            await SeedIdentityAsync("user-3", "client:client-c", "ext-3", "client-c");
 
             // Act
-            var org1Count = await _service.CountByOrganizationAsync(1);
-            var org2Count = await _service.CountByOrganizationAsync(2);
+            var result = await _service.CountByClientsAsync(new[] { "client-a", "client-b" });
+
+            // Assert: identity の無い client-b はキー自体が無い（呼び出し側は GetValueOrDefault で 0 にする）
+            Assert.Equal(1, result["client-a"]);
+            Assert.False(result.ContainsKey("client-b"));
+            Assert.False(result.ContainsKey("client-c"));
+        }
+
+        [Fact]
+        public async Task CountByClientsAsync_EmptyInput_ReturnsEmptyWithoutQuery()
+        {
+            // Act
+            var result = await _service.CountByClientsAsync(Array.Empty<string>());
 
             // Assert
-            Assert.Equal(2, org1Count);
-            Assert.Equal(1, org2Count);
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public async Task CountByClientsAsync_CrossesTenantFilter()
+        {
+            // Arrange: 顧客テナントの Organization に identity をシードし、呼び出し側は accounts テナント
+            // （マイページ API / ConsoleApp と同じ立場）から数える
+            await SeedIdentityAsync("user-1", "client:client-a", "ext-1", "client-a");
+            var accountsTenant = new MockTenantService();
+            accountsTenant.SetTenant("accounts");
+            using var accountsContext = TestDbContextHelper.CreateInMemoryContext(_databaseName, accountsTenant);
+            var service = new B2BUserService(accountsContext, _mockLogger.Object);
+
+            // 前提確認: テナントフィルター越しには B2BUser が見えない
+            Assert.Empty(await accountsContext.B2BUsers.ToListAsync());
+
+            // Act
+            var result = await service.CountByClientsAsync(new[] { "client-a" });
+
+            // Assert: IgnoreQueryFilters が効いていれば数えられる
+            Assert.Equal(1, result["client-a"]);
         }
 
         #endregion
