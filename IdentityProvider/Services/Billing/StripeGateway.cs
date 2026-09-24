@@ -152,6 +152,16 @@ namespace IdentityProvider.Services.Billing
                 throw new StripeWebhookSignatureException("Stripe Webhook の署名検証に失敗しました。", ex);
             }
 
+            return ToEnvelope(stripeEvent);
+        }
+
+        /// <summary>
+        /// 検証済みの <see cref="Event"/> から EcAuth が使う情報だけを取り出す。
+        /// <c>payment_method.detached</c> はデタッチ後の PaymentMethod が載るため <c>data.object.customer</c> が null。
+        /// その場合は <c>data.previous_attributes.customer</c>（変更前の値）から元の Customer を取る。
+        /// </summary>
+        public static StripeWebhookEnvelope ToEnvelope(Event stripeEvent)
+        {
             string? customerId = null;
             string? checkoutMode = null;
             switch (stripeEvent.Data.Object)
@@ -174,6 +184,14 @@ namespace IdentityProvider.Services.Billing
                     break;
             }
 
+            if (customerId == null
+                && stripeEvent.Data.PreviousAttributes is Newtonsoft.Json.Linq.JObject previous
+                && previous.TryGetValue("customer", out var previousCustomer)
+                && previousCustomer.Type == Newtonsoft.Json.Linq.JTokenType.String)
+            {
+                customerId = previousCustomer.ToString();
+            }
+
             return new StripeWebhookEnvelope(stripeEvent.Id, stripeEvent.Type, customerId, checkoutMode);
         }
 
@@ -192,7 +210,7 @@ namespace IdentityProvider.Services.Billing
         }
 
         /// <summary><c>Stripe:{name}:{tenant}</c>。テナント部は env-var-safe に正規化。</summary>
-        internal static string ConfigKey(string name, string tenantName)
+        public static string ConfigKey(string name, string tenantName)
             => $"Stripe:{name}:{NonConfigKeyChar.Replace(tenantName, "_")}";
     }
 }

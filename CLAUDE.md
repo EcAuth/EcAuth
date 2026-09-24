@@ -409,7 +409,9 @@ HTTP をモックする前例が無いため、ユニットテストも `IStripe
 本物の Stripe を叩くテストは書かない（Stripe CLI の `stripe listen --forward-to https://localhost:8081/v1/billing/stripe/webhook`
 で手動確認する。`Stripe-Signature` の検証には `Stripe__WebhookSecret__accounts` に CLI が表示する `whsec_*` を渡す）。
 
-**設定キーと配線先**（[環境変数の配線ルール](#環境変数の配線ルール)に従う。すべてリクエスト時消費なので CI yml には入れない）:
+**設定キーと配線先**（[環境変数の配線ルール](#環境変数の配線ルール)に従う。すべてリクエスト時消費なので
+デプロイ CI（`staging.yml` / `production.yml`）には入れない。`playwright.yml` はアプリを起動する E2E 実行環境なので
+`compose.yaml` と同じ扱いで、Fake provider の有効化はそこに書く）:
 
 | キー | 種別 | 既定 | 配線先 |
 |---|---|---|---|
@@ -423,9 +425,17 @@ HTTP をモックする前例が無いため、ユニットテストも `IStripe
 Webhook はテナントごとに 1 エンドポイント（Host で live / test を分け、署名シークレットもテナント別）。
 Account の解決は `Organization.TenantName` も条件にして、live の Customer が test 側の受け口に来ても更新しない。
 
-**Webhook の冪等化**は `stripe_webhook_event` の主キー（Stripe のイベント ID）。存在確認 → INSERT で再送を落とし、
+**Webhook の冪等化**は `stripe_webhook_event` の主キー（Stripe のイベント ID）と `processed_at`。受信時に行を入れ、
+処理が終わったら `processed_at` を立てる。再送は `processed_at != null` の行だけ無視し、処理中に失敗した
+（500 を返した）イベントは行が未完了のまま残るので Stripe の再送で再処理される（行は監査のため消さない）。
 並行配信は主キー違反（`DatabaseResilience.IsUniqueConstraintViolation`）で吸収する。InMemory は一意制約を強制しない
 ので、再送の経路は E2E `account_billing.spec.ts`（本番と同じ SQL Server）でも通す。
+`payment_method.detached` は `data.object.customer` が null になるため、`StripeGateway.ToEnvelope` が
+`data.previous_attributes.customer` から元の Customer を取る。
+
+**見込み額の Organization 解決**は `account_organization` から削除済みも含めて引く（`IAccountService.GetManagedOrganizationsAsync`
+はトークンの `managed_orgs` 用に現在削除済みを除くので使わない）。請求対象かどうかは `UsageReportService.IsBillable` の
+「対象月に有効だったか」に一本化し、月の途中で解約したサイトの当月 MAU を落とさない。
 
 **マイページ側のレース**: Checkout から戻った直後は Webhook より先に描画されるため、フロントは
 `?billing=setup_complete` で戻ったら `GET /v1/account/billing?refresh=1` を呼ぶ（Stripe に既定の支払い方法を

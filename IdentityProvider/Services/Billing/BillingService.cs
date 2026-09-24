@@ -133,40 +133,65 @@ namespace IdentityProvider.Services.Billing
         public async Task<bool> HandleWebhookAsync(
             string tenantName, StripeWebhookEnvelope envelope, CancellationToken cancellationToken)
         {
-            // 冪等化: イベント ID を主キーにした行を先に入れる。既にあれば再送。
-            // 存在確認と INSERT の間に同じイベントが並行して届いた場合は主キー違反になるので、それも再送として扱う。
-            if (await _context.StripeWebhookEvents.AnyAsync(e => e.Id == envelope.Id, cancellationToken))
+            // 冪等化: イベント ID を主キーにした行を先に入れ、処理が終わったら processed_at を立てる。
+            // 完了済み（processed_at != null）なら再送として無視。行はあるが未完了なら前回の処理が失敗して
+            // Stripe が再送してきた（または処理中）なので、もう一度処理する。行を消さないのは監査のため。
+            var existing = await _context.StripeWebhookEvents
+                .FirstOrDefaultAsync(e => e.Id == envelope.Id, cancellationToken);
+            if (existing?.ProcessedAt != null)
             {
                 _logger.LogInformation("Stripe Webhook の再送を無視しました: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
                 return false;
             }
 
-            _context.StripeWebhookEvents.Add(new StripeWebhookEvent
+            var record = existing;
+            if (record == null)
             {
-                Id = envelope.Id,
-                Type = envelope.Type,
-                TenantName = tenantName,
-                ReceivedAt = DateTimeOffset.UtcNow,
-            });
-            try
-            {
-                await _context.SaveChangesAsync(cancellationToken);
+                record = new StripeWebhookEvent
+                {
+                    Id = envelope.Id,
+                    Type = envelope.Type,
+                    TenantName = tenantName,
+                    ReceivedAt = DateTimeOffset.UtcNow,
+                };
+                _context.StripeWebhookEvents.Add(record);
+                try
+                {
+                    await _context.SaveChangesAsync(cancellationToken);
+                }
+                catch (DbUpdateException ex) when (DatabaseResilience.IsUniqueConstraintViolation(ex))
+                {
+                    // 存在確認と INSERT の間に同じイベントが並行して届いた。相手側が処理する（失敗すれば再送で戻る）。
+                    _context.ChangeTracker.Clear();
+                    _logger.LogInformation("Stripe Webhook の並行配信を無視しました: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
+                    return false;
+                }
             }
-            catch (DbUpdateException ex) when (DatabaseResilience.IsUniqueConstraintViolation(ex))
+            else
             {
-                _context.ChangeTracker.Clear();
-                _logger.LogInformation("Stripe Webhook の並行配信を無視しました: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
-                return false;
+                _logger.LogWarning(
+                    "Stripe Webhook を再処理します（前回は未完了）: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
             }
 
+            // ここから先で例外が出ると 500 になり、processed_at が null のまま残る → Stripe の再送で再処理される。
+            await ProcessAsync(tenantName, envelope, cancellationToken);
+
+            record.ProcessedAt = DateTimeOffset.UtcNow;
+            await _context.SaveChangesAsync(cancellationToken);
+            return true;
+        }
+
+        /// <summary>イベントの本処理。関係ないイベントは何もしないで戻る（それも「処理完了」）。</summary>
+        private async Task ProcessAsync(string tenantName, StripeWebhookEnvelope envelope, CancellationToken cancellationToken)
+        {
             if (!PaymentMethodEvents.Contains(envelope.Type) || envelope.CustomerId == null)
             {
-                return true;
+                return;
             }
 
             if (envelope.Type == "checkout.session.completed" && envelope.CheckoutMode != "setup")
             {
-                return true;
+                return;
             }
 
             // Webhook はテナントのクエリフィルター外から Account を引く。live / test の取り違え防止に、
@@ -184,11 +209,10 @@ namespace IdentityProvider.Services.Billing
                 _logger.LogWarning(
                     "Stripe Webhook の Customer に対応する Account がありません: Event={EventId}, Type={Type}, Customer={CustomerId}, Tenant={Tenant}",
                     envelope.Id, envelope.Type, envelope.CustomerId, tenantName);
-                return true;
+                return;
             }
 
             await SyncPaymentMethodAsync(account, cancellationToken);
-            return true;
         }
 
         /// <summary>Stripe Customer が無ければ作って保存する。冪等キーは Account 単位。</summary>
@@ -247,10 +271,16 @@ namespace IdentityProvider.Services.Billing
         private async Task<IBillingService.Estimate> BuildEstimateAsync(
             string accountSubject, UsageMonth month, CancellationToken cancellationToken)
         {
-            var managed = await _accountService.GetManagedOrganizationsAsync(accountSubject);
+            // 管理対象 Organization は削除済みも含めて引く。IAccountService.GetManagedOrganizationsAsync は
+            // トークンの managed_orgs 用に「現在削除されていないもの」へ絞るが、請求は「対象月に有効だったか」で
+            // 見る（UsageReportService.IsBillable）。月の途中で解約したサイトの当月 MAU を落とさないため。
+            var organizationIds = await _context.AccountOrganizations
+                .IgnoreQueryFilters()
+                .Where(ao => ao.AccountSubject == accountSubject)
+                .Select(ao => ao.OrganizationId)
+                .ToListAsync(cancellationToken);
             var report = await _usageReport.GetReportAsync(
-                new IUsageReportService.UsageReportQuery(
-                    month, managed.Select(m => m.OrganizationId).ToHashSet(), IncludeNonBillable: true),
+                new IUsageReportService.UsageReportQuery(month, organizationIds.ToHashSet(), IncludeNonBillable: true),
                 cancellationToken);
             var plan = await _plans.ResolveAsync(accountSubject, month, cancellationToken);
             return BuildEstimate(report, plan);

@@ -38,12 +38,13 @@ namespace IdentityProvider.Test.Services.Billing
             _account = new Account { Id = 1, Subject = Subject, Email = "owner@example.jp", OrganizationId = 1, Organization = accountsOrg };
             _context.Organizations.Add(accountsOrg);
             _context.Accounts.Add(_account);
+            // 管理対象 Organization（account_organization）。見込み額はここから Organization を引く（削除済みも含む）。
+            _context.Organizations.Add(new Organization { Id = 10, Code = "shop", Name = "Shop", TenantName = "shop" });
+            _context.AccountOrganizations.Add(new AccountOrganization { AccountSubject = Subject, OrganizationId = 10, Role = "owner" });
             _context.SaveChanges();
 
             _accounts.Setup(a => a.GetBySubjectAsync(Subject)).ReturnsAsync(() => _account);
             _accounts.Setup(a => a.GetBySubjectAsync(It.IsNotIn(Subject))).ReturnsAsync((Account?)null);
-            _accounts.Setup(a => a.GetManagedOrganizationsAsync(Subject))
-                .ReturnsAsync(new List<IAccountService.ManagedOrganization> { new(10, "shop", "owner") });
 
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
@@ -229,6 +230,29 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.False(est.Plan.CustomB2CPricing);
         }
 
+        [Fact]
+        public async Task Estimate_IncludesOrganizationsDeletedAfterMonthStart()
+        {
+            // 対象月の途中で解約（論理削除）したサイト。GetManagedOrganizationsAsync（トークン用）は現在削除済みを除くが、
+            // 請求は「対象月に有効だったか」（UsageReportService.IsBillable）で見るので report に渡す必要がある。
+            _context.Organizations.Add(new Organization
+            {
+                Id = 11, Code = "closed", Name = "Closed", TenantName = "closed", DeletedAt = _month.Start.AddDays(15),
+            });
+            _context.AccountOrganizations.Add(new AccountOrganization { AccountSubject = Subject, OrganizationId = 11, Role = "owner" });
+            await _context.SaveChangesAsync();
+            IReadOnlyCollection<int>? requested = null;
+            _usage.Setup(u => u.GetReportAsync(It.IsAny<IUsageReportService.UsageReportQuery>(), It.IsAny<CancellationToken>()))
+                .Callback<IUsageReportService.UsageReportQuery, CancellationToken>((q, _) => requested = q.OrganizationIds)
+                .ReturnsAsync(new IUsageReportService.UsageReport(_month, DateTimeOffset.UtcNow, Array.Empty<IUsageReportService.OrganizationUsage>()));
+
+            await _service.GetEstimateAsync(Subject, _month, CancellationToken.None);
+
+            Assert.NotNull(requested);
+            Assert.Equal(new[] { 10, 11 }, requested.OrderBy(x => x));
+            _accounts.Verify(a => a.GetManagedOrganizationsAsync(It.IsAny<string>()), Times.Never);
+        }
+
         // ---- Customer / Checkout / Portal ----
 
         [Fact]
@@ -371,6 +395,52 @@ namespace IdentityProvider.Test.Services.Billing
 
             Assert.True(processed);
             Assert.Null(_account.PaymentMethodRegisteredAt);
+        }
+
+        [Fact]
+        public async Task Webhook_ProcessingFails_LeavesRowUnprocessedAndRetryReprocesses()
+        {
+            await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            var customerId = _account.StripeCustomerId!;
+
+            // 1 回目の同期だけ Stripe 側の障害で失敗させる
+            var flaky = new Mock<IStripeGateway>();
+            var calls = 0;
+            flaky.Setup(s => s.EnsureDefaultPaymentMethodAsync(Tenant, customerId, It.IsAny<CancellationToken>()))
+                .Returns(() => ++calls == 1
+                    ? Task.FromException<bool>(new HttpRequestException("stripe down"))
+                    : Task.FromResult(true));
+            var service = new BillingService(
+                _context, _tenantService, _accounts.Object, _usage.Object,
+                new PricingPlanResolver(_context), new PricingCalculator(), flaky.Object,
+                new ConfigurationBuilder().Build(), new Mock<ILogger<BillingService>>().Object);
+            var evt = Event("evt_retry", "setup_intent.succeeded", customerId);
+
+            await Assert.ThrowsAsync<HttpRequestException>(() => service.HandleWebhookAsync(Tenant, evt, CancellationToken.None));
+
+            var row = Assert.Single(_context.StripeWebhookEvents, e => e.Id == "evt_retry");
+            Assert.Null(row.ProcessedAt);              // 監査行は残るが未完了
+            Assert.Null(_account.PaymentMethodRegisteredAt);
+
+            // Stripe の再送 → 再処理される（再送として無視しない）
+            var processed = await service.HandleWebhookAsync(Tenant, evt, CancellationToken.None);
+
+            Assert.True(processed);
+            Assert.NotNull(row.ProcessedAt);
+            Assert.NotNull(_account.PaymentMethodRegisteredAt);
+            Assert.Equal(2, calls);
+
+            // 完了後の再送は無視
+            Assert.False(await service.HandleWebhookAsync(Tenant, evt, CancellationToken.None));
+            Assert.Equal(2, calls);
+        }
+
+        [Fact]
+        public async Task Webhook_IrrelevantEvent_IsMarkedProcessed()
+        {
+            await _service.HandleWebhookAsync(Tenant, Event("evt_i", "invoice.paid", null), CancellationToken.None);
+
+            Assert.NotNull(Assert.Single(_context.StripeWebhookEvents).ProcessedAt);
         }
 
         // ---- 戻り先 URL ----

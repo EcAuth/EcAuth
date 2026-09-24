@@ -75,7 +75,8 @@ namespace IdentityProvider.Migrations
                     id = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: false),
                     type = table.Column<string>(type: "nvarchar(64)", maxLength: 64, nullable: false),
                     tenant_name = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: false),
-                    received_at = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false)
+                    received_at = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false),
+                    processed_at = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: true)
                 },
                 constraints: table =>
                 {

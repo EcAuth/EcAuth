@@ -1203,6 +1203,10 @@ namespace IdentityProvider.Migrations
                         .HasColumnType("nvarchar(255)")
                         .HasColumnName("id");
 
+                    b.Property<DateTimeOffset?>("ProcessedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("processed_at");
+
                     b.Property<DateTimeOffset>("ReceivedAt")
                         .HasColumnType("datetimeoffset")
                         .HasColumnName("received_at");

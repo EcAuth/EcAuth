@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IdentityProvider.Migrations
 {
     [DbContext(typeof(EcAuthDbContext))]
-    [Migration("20260923092135_AddBillingCustomerAndPlan")]
+    [Migration("20260924232346_AddBillingCustomerAndPlan")]
     partial class AddBillingCustomerAndPlan
     {
         /// <inheritdoc />
@@ -1205,6 +1205,10 @@ namespace IdentityProvider.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("nvarchar(255)")
                         .HasColumnName("id");
+
+                    b.Property<DateTimeOffset?>("ProcessedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("processed_at");
 
                     b.Property<DateTimeOffset>("ReceivedAt")
                         .HasColumnType("datetimeoffset")
