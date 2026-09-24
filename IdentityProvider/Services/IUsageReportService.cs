@@ -53,13 +53,21 @@ namespace IdentityProvider.Services
         /// <c>b2b_user_identity</c> を <c>client_id</c> で数えた登録ユーザー数（参考値、<see cref="UsageReport.AsOf"/> 時点）。
         /// B2BUser は物理削除されるため <c>MonthlyActiveUsers &gt; RegisteredB2BUsers</c> は正常に起こりうる
         /// </param>
+        /// <param name="CreatedAt">
+        /// <c>client.created_at</c>。課金側が「作成月は請求対象外（初月無料、EcAuthDocs#119）」を判定するのに使う
+        /// </param>
+        /// <param name="BillingExempt"><c>client.billing_exempt</c>。この Client を請求対象から外す運用設定</param>
+        /// <param name="BillingExemptReason"><c>client.billing_exempt_reason</c></param>
         public sealed record ClientUsage(
             int Id,
             string ClientId,
             string AppName,
             SubjectType SubjectType,
             int MonthlyActiveUsers,
-            int RegisteredB2BUsers);
+            int RegisteredB2BUsers,
+            DateTimeOffset CreatedAt,
+            bool BillingExempt,
+            string? BillingExemptReason);
 
         /// <summary>
         /// 指定 Organization 群の利用状況を集計する。MAU 0 の Client も返す（一覧を全部出せるように）。

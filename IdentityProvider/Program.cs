@@ -8,6 +8,7 @@ using IdentityProvider.Middlewares;
 using IdentityProvider.Models;
 using IdentityProvider.Security;
 using IdentityProvider.Services;
+using IdentityProvider.Services.Billing;
 using Asp.Versioning;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Microsoft.AspNetCore.HostFiltering;
@@ -105,6 +106,28 @@ builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
 builder.Services.AddScoped<IPasskeyRegistrationTokenService, PasskeyRegistrationTokenService>();
 // 期限切れトークン（マジックリンク / パスキー登録トークン）の日次クリーンアップ（既定の保持期間 7 日）
 builder.Services.AddHostedService<MagicLinkCleanupService>();
+
+// 課金（EcAuthDocs#119）。フラグは既定 false なので、配線しなければ課金 API / Webhook は 404 のまま。
+// Stripe の API キー等は StripeGateway がテナント別設定（Stripe:SecretKey:{tenant}）から読む。
+// Billing:Provider=Fake はローカル / CI E2E 用で、Production では起動を拒否する（金銭を扱う経路にダミーを残さない）。
+builder.Services.Configure<BillingOptions>(builder.Configuration.GetSection(BillingOptions.SectionName));
+var billingProvider = builder.Configuration[$"{BillingOptions.SectionName}:Provider"] ?? BillingOptions.StripeProvider;
+if (string.Equals(billingProvider, BillingOptions.FakeProvider, StringComparison.OrdinalIgnoreCase))
+{
+    if (builder.Environment.IsProduction())
+    {
+        throw new InvalidOperationException("Billing:Provider=Fake は Production 環境では使用できません。");
+    }
+    builder.Services.AddSingleton<FakeStripeGateway>();
+    builder.Services.AddSingleton<IStripeGateway>(sp => sp.GetRequiredService<FakeStripeGateway>());
+}
+else
+{
+    builder.Services.AddSingleton<IStripeGateway, StripeGateway>();
+}
+builder.Services.AddSingleton<IPricingCalculator, PricingCalculator>();
+builder.Services.AddScoped<IPricingPlanResolver, PricingPlanResolver>();
+builder.Services.AddScoped<IBillingService, BillingService>();
 
 // client_secret 等の保存時暗号化（EcAuthDocs#106）。
 // Development はローカル例外として平文パススルー、それ以外は Key Vault の CryptographyClient で暗号化する。
