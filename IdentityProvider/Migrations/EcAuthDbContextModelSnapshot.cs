@@ -122,6 +122,10 @@ namespace IdentityProvider.Migrations
                         .HasColumnType("int")
                         .HasColumnName("organization_id");
 
+                    b.Property<long?>("PaymentMethodCheckedTicks")
+                        .HasColumnType("bigint")
+                        .HasColumnName("payment_method_checked_ticks");
+
                     b.Property<DateTimeOffset?>("PaymentMethodRegisteredAt")
                         .HasColumnType("datetimeoffset")
                         .HasColumnName("payment_method_registered_at");

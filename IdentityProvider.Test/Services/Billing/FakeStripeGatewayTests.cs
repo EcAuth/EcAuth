@@ -48,12 +48,22 @@ namespace IdentityProvider.Test.Services.Billing
         public async Task Checkout_MarksCustomerAsHavingPaymentMethod()
         {
             var customer = await _gateway.CreateCustomerAsync("accounts", "a@example.jp", null, new Dictionary<string, string>(), "k1", default);
-            Assert.False(await _gateway.EnsureDefaultPaymentMethodAsync("accounts", customer, default));
+            Assert.Equal(PaymentMethodState.NotRegistered, await _gateway.EnsureDefaultPaymentMethodAsync("accounts", customer, default));
 
             var url = await _gateway.CreateSetupCheckoutSessionAsync("accounts", customer, "https://x/ok", "https://x/ng", default);
 
             Assert.Equal("https://x/ok", url);
-            Assert.True(await _gateway.EnsureDefaultPaymentMethodAsync("accounts", customer, default));
+            Assert.Equal(PaymentMethodState.Registered, await _gateway.EnsureDefaultPaymentMethodAsync("accounts", customer, default));
+        }
+
+        [Fact]
+        public async Task DeletedOrUnknownCustomer_IsCustomerDeleted()
+        {
+            var customer = await _gateway.CreateCustomerAsync("accounts", "a@example.jp", null, new Dictionary<string, string>(), "k1", default);
+            _gateway.DeleteCustomer(customer);
+
+            Assert.Equal(PaymentMethodState.CustomerDeleted, await _gateway.EnsureDefaultPaymentMethodAsync("accounts", customer, default));
+            Assert.Equal(PaymentMethodState.CustomerDeleted, await _gateway.EnsureDefaultPaymentMethodAsync("accounts", "cus_unknown", default));
         }
 
         [Fact]

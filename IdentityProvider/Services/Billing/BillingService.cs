@@ -18,6 +18,9 @@ namespace IdentityProvider.Services.Billing
             "customer.updated",
             "payment_method.attached",
             "payment_method.detached",
+            // Customer がダッシュボード / API で削除された。紐付けを外さないと、以後の Checkout / Portal が
+            // 削除済み ID を Stripe に送り続けて失敗し、Customer を作り直す経路も無くなる。
+            "customer.deleted",
         };
 
         private readonly EcAuthDbContext _context;
@@ -129,6 +132,13 @@ namespace IdentityProvider.Services.Billing
             if (account.PaymentMethodRegisteredAt == null)
             {
                 await SyncPaymentMethodAsync(account, cancellationToken);
+                if (account.StripeCustomerId == null)
+                {
+                    // 同期で Customer が Stripe 側で削除済みとわかった
+                    throw new BillingException(
+                        StatusCodes.Status409Conflict, "no_customer",
+                        "支払い方法が未登録です。先に支払い方法を登録してください。");
+                }
                 if (account.PaymentMethodRegisteredAt == null)
                 {
                     throw new BillingException(
@@ -152,8 +162,9 @@ namespace IdentityProvider.Services.Billing
             //
             // 保証するのは「完了済みのイベントを再処理しない」ことまで。未完了の間に同じイベントが並行して届くと
             // ProcessAsync が二重に走りうる。イベント単位のロックは置かず、代わりに ProcessAsync を
-            // 「Stripe の現在の状態を読み直して DB に写す」冪等な処理に限ることで結果を一致させる
-            //（別イベント同士の順序逆転も同じ理由で問題にならない）。本処理を足すときはこの規約を守ること。
+            // 「Stripe の現在の状態を読み直して DB に写す」冪等な処理に限ることで結果を一致させる。
+            // 別イベント同士（カード追加と削除など）が並行したときに古い読み取りが新しい結果を上書きしないよう、
+            // 書き込みは読み取り開始時刻で条件付きにする（SyncPaymentMethodAsync）。本処理を足すときはこの規約を守ること。
             var existing = await _context.StripeWebhookEvents
                 .FirstOrDefaultAsync(e => e.Id == envelope.Id, cancellationToken);
             if (existing?.ProcessedAt != null)
@@ -237,7 +248,13 @@ namespace IdentityProvider.Services.Billing
             await SyncPaymentMethodAsync(account, cancellationToken);
         }
 
-        /// <summary>Stripe Customer が無ければ作って保存する。冪等キーは Account 単位。</summary>
+        /// <summary>
+        /// Stripe Customer が無ければ作って保存する。
+        /// 冪等キーは Account と <c>updated_at</c> から作る。同じ行を読んだ並行リクエストや、Customer 作成後に保存だけ
+        /// 失敗したやり直しは同じキー（= 同じ Customer）になる。Customer が Stripe 側で削除されて紐付けを外した後は
+        /// <c>updated_at</c> が進んでいるので別のキーになり、新しい Customer が作られる（Stripe の冪等キーは 24 時間
+        /// 有効なので、Account だけのキーだと削除直後の作り直しで削除済みの Customer が返ってくる）。
+        /// </summary>
         private async Task<string> EnsureCustomerAsync(Account account, string tenant, CancellationToken cancellationToken)
         {
             if (account.StripeCustomerId != null)
@@ -254,7 +271,7 @@ namespace IdentityProvider.Services.Billing
                     ["ecauth_account_subject"] = account.Subject,
                     ["ecauth_tenant"] = tenant,
                 },
-                idempotencyKey: $"customer:{tenant}:{account.Subject}",
+                idempotencyKey: $"customer:{tenant}:{account.Subject}:{account.UpdatedAt.UtcTicks}",
                 cancellationToken);
 
             account.StripeCustomerId = customerId;
@@ -264,30 +281,67 @@ namespace IdentityProvider.Services.Billing
             return customerId;
         }
 
-        /// <summary>Stripe の既定の支払い方法の有無を <c>payment_method_registered_at</c> に反映する。</summary>
+        /// <summary>
+        /// Stripe の現在の状態を <c>payment_method_registered_at</c>（と Customer の紐付け）に反映する。
+        /// <para>
+        /// 書き込みは <c>payment_method_checked_ticks</c> で条件付きにする: Stripe を読み始めた時刻より新しい読み取りが
+        /// 既に反映されていれば、この結果は古いので書かない。これが無いと、カード追加の同期が「あり」を読んだ直後に
+        /// カードが外れ、削除の同期が「なし・変更不要」で戻った後に、追加側が「登録済み」を保存してしまう。
+        /// 最後に書かれるのは常に最も遅く読み始めた同期の結果になり、最後の変更の Webhook は変更後に読み始めるので、
+        /// 最終状態は Stripe と一致する。変更が無くても時刻は必ず書く（「読んだ」ことを後続の古い書き込みに伝えるため）。
+        /// </para>
+        /// <para>
+        /// [前提] 時刻は各インスタンスの時計。App Service のインスタンス間のずれは Webhook の間隔（秒単位）より十分小さい。
+        /// Customer の ID も条件に含め、紐付けが変わった後（削除 → 作り直し）の古い同期で新しい Customer を消さない。
+        /// </para>
+        /// </summary>
         private async Task SyncPaymentMethodAsync(Account account, CancellationToken cancellationToken)
         {
+            var customerId = account.StripeCustomerId!;
             var tenant = account.Organization?.TenantName ?? _tenantService.TenantName;
-            var has = await _stripe.EnsureDefaultPaymentMethodAsync(tenant, account.StripeCustomerId!, cancellationToken);
+            var readTicks = DateTimeOffset.UtcNow.UtcTicks;
+            var state = await _stripe.EnsureDefaultPaymentMethodAsync(tenant, customerId, cancellationToken);
+            var now = DateTimeOffset.UtcNow;
 
-            if (has && account.PaymentMethodRegisteredAt == null)
+            var target = _context.Accounts
+                .IgnoreQueryFilters()
+                .Where(a => a.Id == account.Id
+                    && a.StripeCustomerId == customerId
+                    && (a.PaymentMethodCheckedTicks == null || a.PaymentMethodCheckedTicks < readTicks));
+
+            var updated = state switch
             {
-                account.PaymentMethodRegisteredAt = DateTimeOffset.UtcNow;
-            }
-            else if (!has && account.PaymentMethodRegisteredAt != null)
+                PaymentMethodState.Registered => await target.ExecuteUpdateAsync(s => s
+                    // 既に登録済みなら最初に登録した時刻を保つ
+                    .SetProperty(a => a.PaymentMethodRegisteredAt, a => a.PaymentMethodRegisteredAt ?? now)
+                    .SetProperty(a => a.PaymentMethodCheckedTicks, readTicks)
+                    .SetProperty(a => a.UpdatedAt, now), cancellationToken),
+                PaymentMethodState.NotRegistered => await target.ExecuteUpdateAsync(s => s
+                    .SetProperty(a => a.PaymentMethodRegisteredAt, (DateTimeOffset?)null)
+                    .SetProperty(a => a.PaymentMethodCheckedTicks, readTicks)
+                    .SetProperty(a => a.UpdatedAt, now), cancellationToken),
+                PaymentMethodState.CustomerDeleted => await target.ExecuteUpdateAsync(s => s
+                    .SetProperty(a => a.StripeCustomerId, (string?)null)
+                    .SetProperty(a => a.PaymentMethodRegisteredAt, (DateTimeOffset?)null)
+                    .SetProperty(a => a.PaymentMethodCheckedTicks, readTicks)
+                    .SetProperty(a => a.UpdatedAt, now), cancellationToken),
+                _ => throw new InvalidOperationException($"未知の PaymentMethodState: {state}"),
+            };
+
+            // ExecuteUpdate は追跡中のエンティティを更新しないので読み直す（呼び出し側がこのインスタンスを見て判定する）。
+            await _context.Entry(account).ReloadAsync(cancellationToken);
+
+            if (updated == 0)
             {
-                account.PaymentMethodRegisteredAt = null;
-            }
-            else
-            {
+                _logger.LogInformation(
+                    "より新しい同期が反映済みのため、支払い方法の状態を書きませんでした: Account={Subject}, State={State}",
+                    account.Subject, state);
                 return;
             }
 
-            account.UpdatedAt = DateTimeOffset.UtcNow;
-            await _context.SaveChangesAsync(cancellationToken);
             _logger.LogInformation(
-                "支払い方法の登録状態を更新しました: Account={Subject}, Registered={Registered}",
-                account.Subject, has);
+                "支払い方法の状態を同期しました: Account={Subject}, State={State}, Registered={Registered}",
+                account.Subject, state, account.PaymentMethodRegisteredAt != null);
         }
 
         private async Task<IBillingService.Estimate> BuildEstimateAsync(

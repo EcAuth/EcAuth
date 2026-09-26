@@ -25,6 +25,12 @@ namespace IdentityProvider.Migrations
                 maxLength: 255,
                 nullable: true);
 
+            migrationBuilder.AddColumn<long>(
+                name: "payment_method_checked_ticks",
+                table: "account",
+                type: "bigint",
+                nullable: true);
+
             migrationBuilder.AddColumn<DateTimeOffset>(
                 name: "payment_method_registered_at",
                 table: "account",
@@ -117,6 +123,10 @@ namespace IdentityProvider.Migrations
             migrationBuilder.DropColumn(
                 name: "billing_exempt_reason",
                 table: "client");
+
+            migrationBuilder.DropColumn(
+                name: "payment_method_checked_ticks",
+                table: "account");
 
             migrationBuilder.DropColumn(
                 name: "payment_method_registered_at",

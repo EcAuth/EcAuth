@@ -89,20 +89,30 @@ namespace IdentityProvider.Services.Billing
         }
 
         /// <inheritdoc />
-        public async Task<bool> EnsureDefaultPaymentMethodAsync(
+        public async Task<PaymentMethodState> EnsureDefaultPaymentMethodAsync(
             string tenantName, string customerId, CancellationToken cancellationToken)
         {
             var client = ClientFor(tenantName);
-            var customer = await client.V1.Customers.GetAsync(customerId, cancellationToken: cancellationToken);
+            Customer customer;
+            try
+            {
+                customer = await client.V1.Customers.GetAsync(customerId, cancellationToken: cancellationToken);
+            }
+            catch (StripeException ex) when (ex.StripeError?.Code == "resource_missing")
+            {
+                // 別モード（live / test）の ID や、既に消えた Customer。削除済みと同じ扱いで紐付けを外す。
+                _logger.LogWarning("Stripe Customer が見つかりません: Customer={CustomerId}", customerId);
+                return PaymentMethodState.CustomerDeleted;
+            }
             if (customer.Deleted == true)
             {
                 _logger.LogWarning("Stripe Customer が削除されています: Customer={CustomerId}", customerId);
-                return false;
+                return PaymentMethodState.CustomerDeleted;
             }
 
             if (!string.IsNullOrEmpty(customer.InvoiceSettings?.DefaultPaymentMethodId))
             {
-                return true;
+                return PaymentMethodState.Registered;
             }
 
             // 既定が無い。Checkout の setup モードで付いたカードが残っていれば、最初の 1 枚を既定にする。
@@ -113,7 +123,7 @@ namespace IdentityProvider.Services.Billing
             var first = methods.Data.FirstOrDefault();
             if (first == null)
             {
-                return false;
+                return PaymentMethodState.NotRegistered;
             }
 
             await client.V1.Customers.UpdateAsync(
@@ -126,7 +136,7 @@ namespace IdentityProvider.Services.Billing
             _logger.LogInformation(
                 "Stripe Customer の既定の支払い方法を設定しました: Customer={CustomerId}, PaymentMethod={PaymentMethodId}",
                 customerId, first.Id);
-            return true;
+            return PaymentMethodState.Registered;
         }
 
         /// <inheritdoc />

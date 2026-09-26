@@ -433,7 +433,16 @@ Account の解決は `Organization.TenantName` も条件にして、live の Cus
 保証するのは「完了済みのイベントを再処理しない」ことまでで、**未完了の間に同じイベントが並行して届くと本処理は二重に走りうる**。
 イベント単位のロックは置かない（処理中に落ちたときの解除が要るうえ、別イベント同士の順序逆転は防げない）。
 代わりに Webhook の本処理は **Stripe の現在の状態を読み直して DB に写す冪等な処理に限る**（イベント本文の差分を当てない）。
-PR-2 の `invoice.*` も同じ規約に従う。
+読み直すだけでは、別イベント同士（カード追加と削除など）が並行したときに古い読み取りが新しい結果を上書きしうるので、
+**書き込みは「Stripe を読み始めた時刻」で条件付きにする**（`account.payment_method_checked_ticks` より新しい読み取りの
+ときだけ `ExecuteUpdate` で書く。変更が無くても時刻は書く）。最後に書かれるのは最も遅く読み始めた同期の結果になる。
+PR-2 の `invoice.*` も同じ規約に従う。条件付き `ExecuteUpdate` は InMemory で動かないので、`BillingServiceTests` は
+SQLite（`RetryingSqliteContext`、並行リクエストの再現は `CreateSiblingContext`）で回す。
+
+**Customer の削除**（ダッシュボード / API）は `customer.deleted`、または同期時に Stripe が削除済み / `resource_missing` を
+返したときに検出し、`stripe_customer_id` と `payment_method_registered_at` を外す。作り直しで削除済みの Customer が
+返らないよう、Customer 作成の冪等キーは `customer:{tenant}:{subject}:{account.updated_at の ticks}`（Stripe の冪等キーは
+24 時間有効）。
 `payment_method.detached` は `data.object.customer` が null になるため、`StripeGateway.ToEnvelope` が
 `data.previous_attributes.customer` から元の Customer を取る。
 

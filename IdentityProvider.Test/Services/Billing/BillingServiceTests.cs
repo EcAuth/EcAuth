@@ -14,12 +14,15 @@ namespace IdentityProvider.Test.Services.Billing
     /// <summary>
     /// <see cref="BillingService"/>: 見込み額の組み立て（請求対象外理由・割引・独自帯）、Customer の遅延作成、
     /// Webhook の冪等化とテナント突合。Stripe は <see cref="FakeStripeGateway"/>。
+    /// DB は SQLite（<see cref="RetryingSqliteContext"/>）。支払い方法の同期が条件付きの <c>ExecuteUpdate</c> で、
+    /// InMemory プロバイダーでは実行できないため。
     /// </summary>
     public class BillingServiceTests : IDisposable
     {
         private const string Tenant = "accounts";
         private const string Subject = "acct-subject-1";
 
+        private readonly RetryingSqliteContext _db;
         private readonly EcAuthDbContext _context;
         private readonly MockTenantService _tenantService = new();
         private readonly Mock<IAccountService> _accounts = new();
@@ -32,7 +35,8 @@ namespace IdentityProvider.Test.Services.Billing
         public BillingServiceTests()
         {
             _tenantService.SetTenant(Tenant);
-            _context = TestDbContextHelper.CreateInMemoryContext(tenantService: _tenantService);
+            _db = new RetryingSqliteContext(_tenantService);
+            _context = _db.Context;
 
             var accountsOrg = new Organization { Id = 1, Code = "accounts", Name = "EcAuth", TenantName = Tenant };
             _account = new Account { Id = 1, Subject = Subject, Email = "owner@example.jp", OrganizationId = 1, Organization = accountsOrg };
@@ -460,8 +464,8 @@ namespace IdentityProvider.Test.Services.Billing
             var calls = 0;
             flaky.Setup(s => s.EnsureDefaultPaymentMethodAsync(Tenant, customerId, It.IsAny<CancellationToken>()))
                 .Returns(() => ++calls == 1
-                    ? Task.FromException<bool>(new HttpRequestException("stripe down"))
-                    : Task.FromResult(true));
+                    ? Task.FromException<PaymentMethodState>(new HttpRequestException("stripe down"))
+                    : Task.FromResult(PaymentMethodState.Registered));
             var service = new BillingService(
                 _context, _tenantService, _accounts.Object, _usage.Object,
                 new PricingPlanResolver(_context), new PricingCalculator(), flaky.Object,
@@ -495,6 +499,80 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.NotNull(Assert.Single(_context.StripeWebhookEvents).ProcessedAt);
         }
 
+        [Fact]
+        public async Task Webhook_CustomerDeleted_ClearsCustomerAndAllowsRecreation()
+        {
+            await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            await _service.HandleWebhookAsync(Tenant, Event("evt_1", "setup_intent.succeeded", _account.StripeCustomerId), CancellationToken.None);
+            var oldCustomer = _account.StripeCustomerId!;
+            Assert.NotNull(_account.PaymentMethodRegisteredAt);
+
+            // ダッシュボードで Customer を削除 → customer.deleted
+            _stripe.DeleteCustomer(oldCustomer);
+            Assert.True(await _service.HandleWebhookAsync(Tenant, Event("evt_2", "customer.deleted", oldCustomer), CancellationToken.None));
+
+            Assert.Null(_account.StripeCustomerId);
+            Assert.Null(_account.PaymentMethodRegisteredAt);
+            var stored = await _context.Accounts.AsNoTracking().SingleAsync(a => a.Subject == Subject);
+            Assert.Null(stored.StripeCustomerId);
+
+            // 作り直し: 冪等キーが変わるので削除済みの Customer は返らない
+            await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            Assert.NotNull(_account.StripeCustomerId);
+            Assert.NotEqual(oldCustomer, _account.StripeCustomerId);
+        }
+
+        [Fact]
+        public async Task CreatePortal_CustomerDeletedOnStripe_Throws409NoCustomer()
+        {
+            await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            _stripe.DeleteCustomer(_account.StripeCustomerId!);   // Webhook を取りこぼした
+
+            var ex = await Assert.ThrowsAsync<BillingException>(() => _service.CreatePortalSessionAsync(Subject, CancellationToken.None));
+
+            Assert.Equal("no_customer", ex.Error);
+            Assert.Null(_account.StripeCustomerId);
+        }
+
+        [Fact]
+        public async Task Webhook_StaleReadFromOtherEvent_DoesNotOverwriteNewerState()
+        {
+            // カード追加（attached）の同期が「あり」を読んだ直後にカードが外れ、削除（detached）の同期が先に
+            // 「なし」を書き終える。その後に追加側が保存しようとしても、古い読み取りなので書かれない。
+            await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            var customerId = _account.StripeCustomerId!;
+            _stripe.SetPaymentMethod(customerId, false);
+
+            var sibling = _db.CreateSiblingContext();
+            var siblingTenant = new MockTenantService();
+            siblingTenant.SetTenant(Tenant);
+            var detachedService = new BillingService(
+                sibling, siblingTenant, _accounts.Object, _usage.Object,
+                new PricingPlanResolver(sibling), new PricingCalculator(), _stripe,
+                new ConfigurationBuilder().Build(), new Mock<ILogger<BillingService>>().Object);
+
+            var racing = new Mock<IStripeGateway>();
+            racing.Setup(s => s.EnsureDefaultPaymentMethodAsync(Tenant, customerId, It.IsAny<CancellationToken>()))
+                .Returns(async () =>
+                {
+                    // attached の同期は「あり」を読んだ。この直後にカードが外れ、detached の同期が走り切る。
+                    await detachedService.HandleWebhookAsync(
+                        Tenant, Event("evt_detached", "payment_method.detached", customerId), CancellationToken.None);
+                    return PaymentMethodState.Registered;
+                });
+            var attachedService = new BillingService(
+                _context, _tenantService, _accounts.Object, _usage.Object,
+                new PricingPlanResolver(_context), new PricingCalculator(), racing.Object,
+                new ConfigurationBuilder().Build(), new Mock<ILogger<BillingService>>().Object);
+
+            await attachedService.HandleWebhookAsync(
+                Tenant, Event("evt_attached", "payment_method.attached", customerId), CancellationToken.None);
+
+            var stored = await sibling.Accounts.AsNoTracking().IgnoreQueryFilters().SingleAsync(a => a.Subject == Subject);
+            Assert.Null(stored.PaymentMethodRegisteredAt);   // 最後に読み始めた detached の結果が残る
+            Assert.Null(_account.PaymentMethodRegisteredAt); // 追跡中のインスタンスも読み直されている
+        }
+
         // ---- 戻り先 URL ----
 
         [Fact]
@@ -524,6 +602,6 @@ namespace IdentityProvider.Test.Services.Billing
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateCheckoutSessionAsync(Subject, CancellationToken.None));
         }
 
-        public void Dispose() => _context.Dispose();
+        public void Dispose() => _db.Dispose();
     }
 }

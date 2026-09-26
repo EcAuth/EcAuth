@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IdentityProvider.Migrations
 {
     [DbContext(typeof(EcAuthDbContext))]
-    [Migration("20260924232346_AddBillingCustomerAndPlan")]
+    [Migration("20260926222454_AddBillingCustomerAndPlan")]
     partial class AddBillingCustomerAndPlan
     {
         /// <inheritdoc />
@@ -124,6 +124,10 @@ namespace IdentityProvider.Migrations
                     b.Property<int>("OrganizationId")
                         .HasColumnType("int")
                         .HasColumnName("organization_id");
+
+                    b.Property<long?>("PaymentMethodCheckedTicks")
+                        .HasColumnType("bigint")
+                        .HasColumnName("payment_method_checked_ticks");
 
                     b.Property<DateTimeOffset?>("PaymentMethodRegisteredAt")
                         .HasColumnType("datetimeoffset")

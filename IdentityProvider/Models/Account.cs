@@ -71,6 +71,16 @@ namespace IdentityProvider.Models
         [Column("payment_method_registered_at")]
         public DateTimeOffset? PaymentMethodRegisteredAt { get; set; }
 
+        /// <summary>
+        /// 支払い方法の状態を Stripe から読み始めた時刻（UTC の ticks）。最後に反映した読み取りのもの。
+        /// 別々の Webhook（例: カード追加と削除）が並行して同期すると、古い読み取りの結果が新しい結果を
+        /// 上書きしうる。書き込みを「これより新しい読み取りのときだけ」に限ることで、最終状態を最新の読み取りに揃える
+        /// （<c>BillingService.SyncPaymentMethodAsync</c>）。ticks（bigint）なのは、SQL Server / SQLite の両方で
+        /// 大小比較をそのまま SQL にできるため（SQLite は DateTimeOffset の比較を翻訳できない）。
+        /// </summary>
+        [Column("payment_method_checked_ticks")]
+        public long? PaymentMethodCheckedTicks { get; set; }
+
         [Column("created_at")]
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 

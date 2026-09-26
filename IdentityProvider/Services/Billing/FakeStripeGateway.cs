@@ -15,7 +15,7 @@ namespace IdentityProvider.Services.Billing
     /// </summary>
     public sealed class FakeStripeGateway : IStripeGateway
     {
-        private readonly ConcurrentDictionary<string, bool> _customersHavePaymentMethod = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, PaymentMethodState> _customers = new(StringComparer.Ordinal);
 
         /// <inheritdoc />
         public Task<string> CreateCustomerAsync(
@@ -25,7 +25,7 @@ namespace IdentityProvider.Services.Billing
             // 同じ冪等キーなら同じ ID を返す（本物の Idempotency-Key と同じ性質）。
             var id = "cus_fake_" + Convert.ToHexStringLower(
                 System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(idempotencyKey)))[..24];
-            _customersHavePaymentMethod.TryAdd(id, false);
+            _customers.TryAdd(id, PaymentMethodState.NotRegistered);
             return Task.FromResult(id);
         }
 
@@ -33,7 +33,7 @@ namespace IdentityProvider.Services.Billing
         public Task<string> CreateSetupCheckoutSessionAsync(
             string tenantName, string customerId, string successUrl, string cancelUrl, CancellationToken cancellationToken)
         {
-            _customersHavePaymentMethod[customerId] = true;
+            _customers[customerId] = PaymentMethodState.Registered;
             return Task.FromResult(successUrl);
         }
 
@@ -45,15 +45,22 @@ namespace IdentityProvider.Services.Billing
         }
 
         /// <inheritdoc />
-        public Task<bool> EnsureDefaultPaymentMethodAsync(string tenantName, string customerId, CancellationToken cancellationToken)
+        public Task<PaymentMethodState> EnsureDefaultPaymentMethodAsync(string tenantName, string customerId, CancellationToken cancellationToken)
         {
-            return Task.FromResult(_customersHavePaymentMethod.TryGetValue(customerId, out var has) && has);
+            // 知らない ID は本物の resource_missing と同じく削除済み扱い
+            return Task.FromResult(_customers.TryGetValue(customerId, out var state) ? state : PaymentMethodState.CustomerDeleted);
         }
 
         /// <summary>テスト用: Customer の支払い方法の有無を直接変える（カードが外れた状況の再現）。</summary>
         public void SetPaymentMethod(string customerId, bool hasPaymentMethod)
         {
-            _customersHavePaymentMethod[customerId] = hasPaymentMethod;
+            _customers[customerId] = hasPaymentMethod ? PaymentMethodState.Registered : PaymentMethodState.NotRegistered;
+        }
+
+        /// <summary>テスト用: Customer を Stripe 側で削除した状況を再現する。</summary>
+        public void DeleteCustomer(string customerId)
+        {
+            _customers[customerId] = PaymentMethodState.CustomerDeleted;
         }
 
         /// <inheritdoc />

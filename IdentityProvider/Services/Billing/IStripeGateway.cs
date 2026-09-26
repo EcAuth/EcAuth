@@ -47,9 +47,10 @@ namespace IdentityProvider.Services.Billing
         /// <summary>
         /// Customer に既定の支払い方法があるようにする。既定が未設定でカードが 1 枚以上あれば
         /// 最初のカードを既定にする（Checkout の setup モードはカードを Customer に付けるだけで既定にはしない）。
-        /// 戻り値は「既定の支払い方法がある」か。Webhook 受信時と、Checkout から戻ったマイページの再同期の両方で使う。
+        /// 戻り値は Customer の現在の状態。Customer が Stripe 側で削除されていれば <see cref="PaymentMethodState.CustomerDeleted"/>。
+        /// Webhook 受信時と、Checkout から戻ったマイページの再同期の両方で使う。
         /// </summary>
-        Task<bool> EnsureDefaultPaymentMethodAsync(
+        Task<PaymentMethodState> EnsureDefaultPaymentMethodAsync(
             string tenantName,
             string customerId,
             CancellationToken cancellationToken);
@@ -60,6 +61,17 @@ namespace IdentityProvider.Services.Billing
         /// <see cref="StripeWebhookSignatureException"/>。
         /// </summary>
         StripeWebhookEnvelope ParseWebhookEvent(string tenantName, string payload, string? signatureHeader);
+    }
+
+    /// <summary><see cref="IStripeGateway.EnsureDefaultPaymentMethodAsync"/> が返す Customer の状態。</summary>
+    public enum PaymentMethodState
+    {
+        /// <summary>既定の支払い方法がある</summary>
+        Registered,
+        /// <summary>Customer はあるが支払い方法が無い（Checkout キャンセル、カード削除など）</summary>
+        NotRegistered,
+        /// <summary>Customer が Stripe 側で削除されている（ダッシュボード / API での削除）。EcAuth 側の紐付けを外す</summary>
+        CustomerDeleted,
     }
 
     /// <summary>
