@@ -124,6 +124,19 @@ namespace IdentityProvider.Services.Billing
                     "支払い方法が未登録です。先に支払い方法を登録してください。");
             }
 
+            // Customer はあるが登録が見えていない: Checkout をキャンセルした（Customer だけ残る）か、
+            // 登録直後で Webhook がまだ届いていない。後者を取りこぼさないよう Stripe に 1 回問い合わせてから判定する。
+            if (account.PaymentMethodRegisteredAt == null)
+            {
+                await SyncPaymentMethodAsync(account, cancellationToken);
+                if (account.PaymentMethodRegisteredAt == null)
+                {
+                    throw new BillingException(
+                        StatusCodes.Status409Conflict, "no_payment_method",
+                        "支払い方法が未登録です。先に支払い方法を登録してください。");
+                }
+            }
+
             var tenant = _tenantService.TenantName;
             return await _stripe.CreatePortalSessionAsync(
                 tenant, account.StripeCustomerId, $"{ReturnBaseUrl(tenant)}/mypage/", cancellationToken);
@@ -136,6 +149,11 @@ namespace IdentityProvider.Services.Billing
             // 冪等化: イベント ID を主キーにした行を先に入れ、処理が終わったら processed_at を立てる。
             // 完了済み（processed_at != null）なら再送として無視。行はあるが未完了なら前回の処理が失敗して
             // Stripe が再送してきた（または処理中）なので、もう一度処理する。行を消さないのは監査のため。
+            //
+            // 保証するのは「完了済みのイベントを再処理しない」ことまで。未完了の間に同じイベントが並行して届くと
+            // ProcessAsync が二重に走りうる。イベント単位のロックは置かず、代わりに ProcessAsync を
+            // 「Stripe の現在の状態を読み直して DB に写す」冪等な処理に限ることで結果を一致させる
+            //（別イベント同士の順序逆転も同じ理由で問題にならない）。本処理を足すときはこの規約を守ること。
             var existing = await _context.StripeWebhookEvents
                 .FirstOrDefaultAsync(e => e.Id == envelope.Id, cancellationToken);
             if (existing?.ProcessedAt != null)
@@ -161,7 +179,8 @@ namespace IdentityProvider.Services.Billing
                 }
                 catch (DbUpdateException ex) when (DatabaseResilience.IsUniqueConstraintViolation(ex))
                 {
-                    // 存在確認と INSERT の間に同じイベントが並行して届いた。相手側が処理する（失敗すれば再送で戻る）。
+                    // 存在確認と INSERT の間に同じイベントが並行して届いた。先に INSERT した側が処理する
+                    //（失敗すれば未完了のまま残り、Stripe の再送で戻る）。
                     _context.ChangeTracker.Clear();
                     _logger.LogInformation("Stripe Webhook の並行配信を無視しました: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
                     return false;
@@ -181,7 +200,10 @@ namespace IdentityProvider.Services.Billing
             return true;
         }
 
-        /// <summary>イベントの本処理。関係ないイベントは何もしないで戻る（それも「処理完了」）。</summary>
+        /// <summary>
+        /// イベントの本処理。関係ないイベントは何もしないで戻る（それも「処理完了」）。
+        /// 二重に実行されても結果が変わらないこと（イベントの中身ではなく Stripe の現在の状態から DB を決めること）が前提。
+        /// </summary>
         private async Task ProcessAsync(string tenantName, StripeWebhookEnvelope envelope, CancellationToken cancellationToken)
         {
             if (!PaymentMethodEvents.Contains(envelope.Type) || envelope.CustomerId == null)

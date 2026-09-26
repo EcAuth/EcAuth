@@ -428,14 +428,21 @@ Account の解決は `Organization.TenantName` も条件にして、live の Cus
 **Webhook の冪等化**は `stripe_webhook_event` の主キー（Stripe のイベント ID）と `processed_at`。受信時に行を入れ、
 処理が終わったら `processed_at` を立てる。再送は `processed_at != null` の行だけ無視し、処理中に失敗した
 （500 を返した）イベントは行が未完了のまま残るので Stripe の再送で再処理される（行は監査のため消さない）。
-並行配信は主キー違反（`DatabaseResilience.IsUniqueConstraintViolation`）で吸収する。InMemory は一意制約を強制しない
-ので、再送の経路は E2E `account_billing.spec.ts`（本番と同じ SQL Server）でも通す。
+初回 INSERT の競合は主キー違反（`DatabaseResilience.IsUniqueConstraintViolation`）で片方に寄せる。InMemory は一意制約を
+強制しないので、再送の経路は E2E `account_billing.spec.ts`（本番と同じ SQL Server）でも通す。
+保証するのは「完了済みのイベントを再処理しない」ことまでで、**未完了の間に同じイベントが並行して届くと本処理は二重に走りうる**。
+イベント単位のロックは置かない（処理中に落ちたときの解除が要るうえ、別イベント同士の順序逆転は防げない）。
+代わりに Webhook の本処理は **Stripe の現在の状態を読み直して DB に写す冪等な処理に限る**（イベント本文の差分を当てない）。
+PR-2 の `invoice.*` も同じ規約に従う。
 `payment_method.detached` は `data.object.customer` が null になるため、`StripeGateway.ToEnvelope` が
 `data.previous_attributes.customer` から元の Customer を取る。
 
 **見込み額の Organization 解決**は `account_organization` から削除済みも含めて引く（`IAccountService.GetManagedOrganizationsAsync`
 はトークンの `managed_orgs` 用に現在削除済みを除くので使わない）。請求対象かどうかは `UsageReportService.IsBillable` の
 「対象月に有効だったか」に一本化し、月の途中で解約したサイトの当月 MAU を落とさない。
+
+**Portal の 409**: Customer 未作成は `no_customer`、Customer はあるがカードが無い（Checkout をキャンセルすると Customer だけ残る）は
+`no_payment_method`。後者は判定前に Stripe と 1 回同期する（登録直後で Webhook 未着の場合を 409 にしない）。
 
 **マイページ側のレース**: Checkout から戻った直後は Webhook より先に描画されるため、フロントは
 `?billing=setup_complete` で戻ったら `GET /v1/account/billing?refresh=1` を呼ぶ（Stripe に既定の支払い方法を

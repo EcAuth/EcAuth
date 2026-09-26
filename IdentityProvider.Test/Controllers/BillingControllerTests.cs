@@ -175,6 +175,20 @@ namespace IdentityProvider.Test.Controllers
         }
 
         [Fact]
+        public async Task Portal_NoPaymentMethod_Returns409()
+        {
+            SetupValidAccountToken();
+            _billing.Setup(b => b.CreatePortalSessionAsync(AccountSubject, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new BillingException(StatusCodes.Status409Conflict, "no_payment_method", "支払い方法が未登録です。"));
+            var controller = CreateController(enabled: true, bearer: AccountToken);
+
+            var result = await controller.CreatePortalSession();
+
+            Assert.Equal(409, Assert.IsType<ObjectResult>(result).StatusCode);
+            Assert.Equal("no_payment_method", ErrorOf(result));
+        }
+
+        [Fact]
         public async Task Portal_NoBearer_Returns401()
         {
             var controller = CreateController(enabled: true, bearer: null);

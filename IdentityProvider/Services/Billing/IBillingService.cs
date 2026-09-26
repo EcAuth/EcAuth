@@ -109,7 +109,9 @@ namespace IdentityProvider.Services.Billing
         Task<string?> CreateCheckoutSessionAsync(string accountSubject, CancellationToken cancellationToken);
 
         /// <summary>
-        /// Customer Portal の URL を返す。Customer 未作成なら <see cref="BillingException"/>（<c>no_customer</c>）。
+        /// Customer Portal の URL を返す。Customer 未作成なら <see cref="BillingException"/>（<c>no_customer</c>）、
+        /// Customer はあるが既定の支払い方法が無い（Checkout をキャンセルした等）なら <c>no_payment_method</c>。
+        /// 後者は判定前に Stripe と同期する（登録直後で Webhook が未着の場合を 409 にしないため）。
         /// Account が無ければ null。
         /// </summary>
         Task<string?> CreatePortalSessionAsync(string accountSubject, CancellationToken cancellationToken);

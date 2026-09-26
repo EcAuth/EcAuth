@@ -288,6 +288,58 @@ namespace IdentityProvider.Test.Services.Billing
         }
 
         [Fact]
+        public async Task CreatePortal_CheckoutCancelled_Throws409NoPaymentMethod()
+        {
+            // Checkout を作ったがキャンセルした: Customer だけ残り、カードは無い
+            await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            _stripe.SetPaymentMethod(_account.StripeCustomerId!, false);
+
+            var ex = await Assert.ThrowsAsync<BillingException>(() => _service.CreatePortalSessionAsync(Subject, CancellationToken.None));
+
+            Assert.Equal(StatusCodes.Status409Conflict, ex.StatusCode);
+            Assert.Equal("no_payment_method", ex.Error);
+            Assert.Null(_account.PaymentMethodRegisteredAt);
+        }
+
+        [Fact]
+        public async Task CreatePortal_RegisteredButWebhookNotArrived_SyncsAndReturnsUrl()
+        {
+            // Fake は Checkout 作成でカード付きになる。Webhook も refresh も来ていないので DB 上はまだ未登録。
+            await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            Assert.Null(_account.PaymentMethodRegisteredAt);
+
+            var url = await _service.CreatePortalSessionAsync(Subject, CancellationToken.None);
+
+            Assert.Equal("https://ec-auth.io/mypage/", url);
+            Assert.NotNull(_account.PaymentMethodRegisteredAt);
+        }
+
+        [Fact]
+        public async Task Webhook_ConcurrentDeliveryWhileUnprocessed_ConvergesToSameState()
+        {
+            // 未完了の行があるところへ同じイベントが 2 回届く（並行配信の再現）。二重に処理されても結果は同じ。
+            await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            _context.StripeWebhookEvents.Add(new StripeWebhookEvent
+            {
+                Id = "evt_conc", Type = "setup_intent.succeeded", TenantName = Tenant, ReceivedAt = DateTimeOffset.UtcNow,
+            });
+            await _context.SaveChangesAsync();
+            var evt = Event("evt_conc", "setup_intent.succeeded", _account.StripeCustomerId);
+
+            Assert.True(await _service.HandleWebhookAsync(Tenant, evt, CancellationToken.None));
+            var registeredAt = _account.PaymentMethodRegisteredAt;
+            Assert.NotNull(registeredAt);
+
+            // 1 本目の完了前に読んだ 2 本目を模して、完了マーカーを戻してもう一度流す
+            _context.StripeWebhookEvents.Single(e => e.Id == "evt_conc").ProcessedAt = null;
+            await _context.SaveChangesAsync();
+            Assert.True(await _service.HandleWebhookAsync(Tenant, evt, CancellationToken.None));
+
+            Assert.Equal(registeredAt, _account.PaymentMethodRegisteredAt);   // 既に登録済みなら時刻も動かさない
+            Assert.Single(_context.StripeWebhookEvents, e => e.Id == "evt_conc");
+        }
+
+        [Fact]
         public async Task GetStatus_Refresh_SyncsPaymentMethodFromStripe()
         {
             SetupReport(orgBillable: true);

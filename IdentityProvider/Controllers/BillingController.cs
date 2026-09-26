@@ -159,7 +159,7 @@ namespace IdentityProvider.Controllers
 
         /// <summary>
         /// POST /v1/account/billing/portal
-        /// Stripe Customer Portal（カード変更・請求書閲覧）の URL を返す。支払い方法未登録なら 409 <c>no_customer</c>。
+        /// Stripe Customer Portal（カード変更・請求書閲覧）の URL を返す。支払い方法未登録なら 409（Customer 未作成は <c>no_customer</c>、Customer はあるがカードが無ければ <c>no_payment_method</c>）。
         /// </summary>
         [HttpPost("portal")]
         public async Task<IActionResult> CreatePortalSession()
