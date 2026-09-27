@@ -104,6 +104,25 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.False(b2c.CustomPricing);
         }
 
+        [Theory]
+        [InlineData(8, 0, 0)]
+        [InlineData(10, 0, 0)]
+        [InlineData(12, 2, 200)]
+        public void Calculate_ConsecutiveFreeBands_FreeTierMatchesBillableUnits(int mau, int expectedBillable, long expectedJpy)
+        {
+            var plan = PricingPlan.Default with
+            {
+                B2BTiers = new[] { new PriceTier(5, 0), new PriceTier(10, 0), new PriceTier(null, 100) },
+            };
+
+            var quote = _calculator.Calculate(plan, SubjectType.B2B, mau);
+
+            Assert.Equal(10, quote.FreeTierMau);
+            Assert.Equal(expectedBillable, quote.BillableUnits);
+            Assert.Equal(Math.Max(0, mau - quote.FreeTierMau), quote.BillableUnits);
+            Assert.Equal(expectedJpy, quote.AmountJpy);
+        }
+
         [Fact]
         public void Calculate_CustomTiersWithoutFreeBand_FreeTierIsZero()
         {

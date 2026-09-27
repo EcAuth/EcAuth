@@ -73,11 +73,28 @@ namespace IdentityProvider.Services.Billing
         /// <summary>標準料金表の無料枠。上限強制の閾値に使う。</summary>
         public static int FreeTierMau(SubjectType subjectType) => FreeTierMau(For(subjectType));
 
-        /// <summary>無料枠（単価 0 の先頭帯の上限）。無料帯が無ければ 0、全帯が無料なら <see cref="int.MaxValue"/>。</summary>
+        /// <summary>
+        /// 無料枠（先頭から連続する単価 0 の帯の最後の上限）。無料帯が無ければ 0、全帯が無料なら <see cref="int.MaxValue"/>。
+        /// 単価 0 の帯が続く独自料金表（例: 〜5 が 0 円、〜10 も 0 円）でも、課金対象の数え方
+        /// （<see cref="IPricingCalculator.Quote.BillableUnits"/> は単価 0 より大きい帯だけを数える）と一致させる。
+        /// 最初の帯だけを見ると無料枠を小さく報告し、上限強制が早く発動する。
+        /// </summary>
         public static int FreeTierMau(IReadOnlyList<PriceTier> tiers)
         {
-            var first = tiers[0];
-            return first.UnitPriceJpy == 0 ? first.UpTo ?? int.MaxValue : 0;
+            var free = 0;
+            foreach (var tier in tiers)
+            {
+                if (tier.UnitPriceJpy != 0)
+                {
+                    break;
+                }
+                if (tier.UpTo is not int upTo)
+                {
+                    return int.MaxValue;
+                }
+                free = upTo;
+            }
+            return free;
         }
 
         /// <summary>

@@ -54,6 +54,21 @@ namespace IdentityProvider.Test.Services.Billing
         }
 
         [Fact]
+        public void FreeTierMau_ConsecutiveLeadingFreeBands_CoversAllOfThem()
+        {
+            var tiers = new[] { new PriceTier(5, 0), new PriceTier(10, 0), new PriceTier(null, 100) };
+            Assert.Equal(10, PricingTable.FreeTierMau(tiers));
+        }
+
+        [Fact]
+        public void FreeTierMau_FreeBandAfterPaidBand_IsNotCounted()
+        {
+            // 先頭が有料なら無料枠は 0（途中の 0 円帯は「無料枠」ではない）
+            var tiers = new[] { new PriceTier(5, 10), new PriceTier(10, 0), new PriceTier(null, 100) };
+            Assert.Equal(0, PricingTable.FreeTierMau(tiers));
+        }
+
+        [Fact]
         public void FreeTierMau_AllFreeTable_IsUnbounded()
         {
             Assert.Equal(int.MaxValue, PricingTable.FreeTierMau(new[] { new PriceTier(null, 0) }));
