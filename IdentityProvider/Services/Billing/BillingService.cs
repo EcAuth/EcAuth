@@ -98,6 +98,14 @@ namespace IdentityProvider.Services.Billing
                 return null;
             }
 
+            // 保存済みの Customer が Stripe 側で削除されていないか確かめる。customer.deleted の Webhook を取りこぼした
+            //（エンドポイント設定前の削除、再送切れ）場合、確かめずに渡すと Checkout が失敗し続け、作り直す経路も無くなる。
+            // 削除済みなら同期が紐付けを外すので、下の EnsureCustomerAsync が新しい Customer を作る。
+            if (account.StripeCustomerId != null)
+            {
+                await SyncPaymentMethodAsync(account, cancellationToken);
+            }
+
             var tenant = _tenantService.TenantName;
             var customerId = await EnsureCustomerAsync(account, tenant, cancellationToken);
             var returnBase = ReturnBaseUrl(tenant);
@@ -127,24 +135,24 @@ namespace IdentityProvider.Services.Billing
                     "支払い方法が未登録です。先に支払い方法を登録してください。");
             }
 
-            // Customer はあるが登録が見えていない: Checkout をキャンセルした（Customer だけ残る）か、
-            // 登録直後で Webhook がまだ届いていない。後者を取りこぼさないよう Stripe に 1 回問い合わせてから判定する。
+            // Portal を作る前に Stripe と 1 回同期する。DB の状態だけで判定すると次を取りこぼす:
+            // - 登録直後で Webhook がまだ届いていない（DB は未登録だが実際は登録済み）
+            // - Customer が Stripe 側で削除され、その Webhook を取りこぼした（DB は登録済みだが削除済みの ID を渡すことになる）
+            await SyncPaymentMethodAsync(account, cancellationToken);
+            if (account.StripeCustomerId == null)
+            {
+                // 同期で Customer が Stripe 側で削除済みとわかった
+                throw new BillingException(
+                    StatusCodes.Status409Conflict, "no_customer",
+                    "支払い方法が未登録です。先に支払い方法を登録してください。");
+            }
+
+            // Customer はあるがカードが無い: Checkout をキャンセルした（Customer だけ残る）など
             if (account.PaymentMethodRegisteredAt == null)
             {
-                await SyncPaymentMethodAsync(account, cancellationToken);
-                if (account.StripeCustomerId == null)
-                {
-                    // 同期で Customer が Stripe 側で削除済みとわかった
-                    throw new BillingException(
-                        StatusCodes.Status409Conflict, "no_customer",
-                        "支払い方法が未登録です。先に支払い方法を登録してください。");
-                }
-                if (account.PaymentMethodRegisteredAt == null)
-                {
-                    throw new BillingException(
-                        StatusCodes.Status409Conflict, "no_payment_method",
-                        "支払い方法が未登録です。先に支払い方法を登録してください。");
-                }
+                throw new BillingException(
+                    StatusCodes.Status409Conflict, "no_payment_method",
+                    "支払い方法が未登録です。先に支払い方法を登録してください。");
             }
 
             var tenant = _tenantService.TenantName;
@@ -165,42 +173,46 @@ namespace IdentityProvider.Services.Billing
             // 「Stripe の現在の状態を読み直して DB に写す」冪等な処理に限ることで結果を一致させる。
             // 別イベント同士（カード追加と削除など）が並行したときに古い読み取りが新しい結果を上書きしないよう、
             // 書き込みは読み取り開始時刻で条件付きにする（SyncPaymentMethodAsync）。本処理を足すときはこの規約を守ること。
-            var existing = await _context.StripeWebhookEvents
-                .FirstOrDefaultAsync(e => e.Id == envelope.Id, cancellationToken);
-            if (existing?.ProcessedAt != null)
+            StripeWebhookEvent? record = null;
+            for (var attempt = 0; record == null; attempt++)
             {
-                _logger.LogInformation("Stripe Webhook の再送を無視しました: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
-                return false;
-            }
+                var existing = await _context.StripeWebhookEvents
+                    .FirstOrDefaultAsync(e => e.Id == envelope.Id, cancellationToken);
+                if (existing?.ProcessedAt != null)
+                {
+                    _logger.LogInformation("Stripe Webhook の再送を無視しました: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
+                    return false;
+                }
+                if (existing != null)
+                {
+                    // 前回の処理が失敗した再送、または並行配信の処理中。どちらもこちらで処理してから応答する
+                    //（先に 200 を返すと、相手が失敗したとき Stripe が再送を止めて行が未完了のまま残る）。
+                    _logger.LogWarning(
+                        "Stripe Webhook を処理します（既存の行は未完了）: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
+                    record = existing;
+                    break;
+                }
 
-            var record = existing;
-            if (record == null)
-            {
-                record = new StripeWebhookEvent
+                var added = new StripeWebhookEvent
                 {
                     Id = envelope.Id,
                     Type = envelope.Type,
                     TenantName = tenantName,
                     ReceivedAt = DateTimeOffset.UtcNow,
                 };
-                _context.StripeWebhookEvents.Add(record);
+                _context.StripeWebhookEvents.Add(added);
                 try
                 {
                     await _context.SaveChangesAsync(cancellationToken);
+                    record = added;
                 }
-                catch (DbUpdateException ex) when (DatabaseResilience.IsUniqueConstraintViolation(ex))
+                catch (DbUpdateException ex) when (attempt == 0 && DatabaseResilience.IsUniqueConstraintViolation(ex))
                 {
-                    // 存在確認と INSERT の間に同じイベントが並行して届いた。先に INSERT した側が処理する
-                    //（失敗すれば未完了のまま残り、Stripe の再送で戻る）。
-                    _context.ChangeTracker.Clear();
-                    _logger.LogInformation("Stripe Webhook の並行配信を無視しました: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
-                    return false;
+                    // 存在確認と INSERT の間に同じイベントが並行して届いた。自分の行を捨てて存在確認からやり直す
+                    //（相手の行が未完了なら上の分岐でこちらも処理する）。2 回目も衝突するなら例外 → 500 → Stripe が再送。
+                    _context.Entry(added).State = EntityState.Detached;
+                    _logger.LogInformation("Stripe Webhook の並行配信を検出しました: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
                 }
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "Stripe Webhook を再処理します（前回は未完了）: Event={EventId}, Type={Type}", envelope.Id, envelope.Type);
             }
 
             // ここから先で例外が出ると 500 になり、processed_at が null のまま残る → Stripe の再送で再処理される。

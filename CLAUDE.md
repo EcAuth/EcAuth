@@ -428,8 +428,10 @@ Account の解決は `Organization.TenantName` も条件にして、live の Cus
 **Webhook の冪等化**は `stripe_webhook_event` の主キー（Stripe のイベント ID）と `processed_at`。受信時に行を入れ、
 処理が終わったら `processed_at` を立てる。再送は `processed_at != null` の行だけ無視し、処理中に失敗した
 （500 を返した）イベントは行が未完了のまま残るので Stripe の再送で再処理される（行は監査のため消さない）。
-初回 INSERT の競合は主キー違反（`DatabaseResilience.IsUniqueConstraintViolation`）で片方に寄せる。InMemory は一意制約を
-強制しないので、再送の経路は E2E `account_billing.spec.ts`（本番と同じ SQL Server）でも通す。
+初回 INSERT の競合（主キー違反、`DatabaseResilience.IsUniqueConstraintViolation`）では自分の行を捨てて存在確認からやり直し、
+相手の行が未完了ならこちらも処理してから応答する。**処理が終わる前に 200 を返さない**（相手が失敗したとき、Stripe は
+先に届いた 200 で「配信済み」とみなして再送を止め、行が未完了のまま残るため）。InMemory は一意制約を強制せず、
+主キー違反の判定は SQL Server の例外だけを見るので、再送の経路は E2E `account_billing.spec.ts`（本番と同じ SQL Server）でも通す。
 保証するのは「完了済みのイベントを再処理しない」ことまでで、**未完了の間に同じイベントが並行して届くと本処理は二重に走りうる**。
 イベント単位のロックは置かない（処理中に落ちたときの解除が要るうえ、別イベント同士の順序逆転は防げない）。
 代わりに Webhook の本処理は **Stripe の現在の状態を読み直して DB に写す冪等な処理に限る**（イベント本文の差分を当てない）。
@@ -440,7 +442,8 @@ PR-2 の `invoice.*` も同じ規約に従う。条件付き `ExecuteUpdate` は
 SQLite（`RetryingSqliteContext`、並行リクエストの再現は `CreateSiblingContext`）で回す。
 
 **Customer の削除**（ダッシュボード / API）は `customer.deleted`、または同期時に Stripe が削除済み / `resource_missing` を
-返したときに検出し、`stripe_customer_id` と `payment_method_registered_at` を外す。作り直しで削除済みの Customer が
+返したときに検出し、`stripe_customer_id` と `payment_method_registered_at` を外す。Webhook を取りこぼしても回復できるよう、
+Checkout と Portal は保存済みの Customer を使う前に必ず 1 回同期する（削除済みなら Checkout は作り直し、Portal は `no_customer`）。作り直しで削除済みの Customer が
 返らないよう、Customer 作成の冪等キーは `customer:{tenant}:{subject}:{account.updated_at の ticks}`（Stripe の冪等キーは
 24 時間有効）。
 `payment_method.detached` は `data.object.customer` が null になるため、`StripeGateway.ToEnvelope` が

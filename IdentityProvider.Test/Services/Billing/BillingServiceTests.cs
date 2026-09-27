@@ -573,6 +573,40 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.Null(_account.PaymentMethodRegisteredAt); // 追跡中のインスタンスも読み直されている
         }
 
+        [Fact]
+        public async Task CreateCheckout_SavedCustomerDeletedOnStripe_RecreatesCustomer()
+        {
+            // customer.deleted の Webhook を取りこぼした（エンドポイント設定前の削除、再送切れ）
+            await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            var oldCustomer = _account.StripeCustomerId!;
+            _stripe.DeleteCustomer(oldCustomer);
+
+            var url = await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+
+            Assert.Equal("https://ec-auth.io/mypage/?billing=setup_complete", url);
+            Assert.NotNull(_account.StripeCustomerId);
+            Assert.NotEqual(oldCustomer, _account.StripeCustomerId);
+            var stored = await _context.Accounts.AsNoTracking().SingleAsync(a => a.Subject == Subject);
+            Assert.Equal(_account.StripeCustomerId, stored.StripeCustomerId);
+        }
+
+        [Fact]
+        public async Task CreatePortal_RegisteredButCustomerDeletedOnStripe_Throws409NoCustomer()
+        {
+            // DB 上は登録済みのまま、Stripe 側で Customer が削除された（Webhook 取りこぼし）
+            SetupReport(orgBillable: true);
+            await _service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            await _service.GetStatusAsync(Subject, _month, refresh: true, CancellationToken.None);
+            Assert.NotNull(_account.PaymentMethodRegisteredAt);
+            _stripe.DeleteCustomer(_account.StripeCustomerId!);
+
+            var ex = await Assert.ThrowsAsync<BillingException>(() => _service.CreatePortalSessionAsync(Subject, CancellationToken.None));
+
+            Assert.Equal("no_customer", ex.Error);
+            Assert.Null(_account.StripeCustomerId);
+            Assert.Null(_account.PaymentMethodRegisteredAt);
+        }
+
         // ---- 戻り先 URL ----
 
         [Fact]
