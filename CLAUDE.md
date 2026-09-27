@@ -449,7 +449,8 @@ SQLite（`RetryingSqliteContext`、並行リクエストの再現は `CreateSibl
 返したときに検出し、`stripe_customer_id` と `payment_method_registered_at` を外す。Webhook を取りこぼしても回復できるよう、
 Checkout と Portal は保存済みの Customer を使う前に必ず 1 回同期する（削除済みなら Checkout は作り直し、Portal は `no_customer`）。作り直しで削除済みの Customer が
 返らないよう、Customer 作成の冪等キーは `customer:{tenant}:{subject}:{account.updated_at の ticks}`（Stripe の冪等キーは
-24 時間有効）。
+24 時間有効）。キーが食い違う並行 Checkout で Customer が 2 つできても、紐付けは「まだ無いときだけ」書く条件付き更新なので
+先に書いた方が残り、負けた側もその Customer で Checkout を作る（使われない空の Customer が Stripe に残るだけ）。
 `payment_method.detached` は `data.object.customer` が null になるため、`StripeGateway.ToEnvelope` が
 `data.previous_attributes.customer` から元の Customer を取る。
 

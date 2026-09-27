@@ -286,11 +286,32 @@ namespace IdentityProvider.Services.Billing
                 idempotencyKey: $"customer:{tenant}:{account.Subject}:{account.UpdatedAt.UtcTicks}",
                 cancellationToken);
 
-            account.StripeCustomerId = customerId;
-            account.UpdatedAt = DateTimeOffset.UtcNow;
-            await _context.SaveChangesAsync(cancellationToken);
-            _logger.LogInformation("Stripe Customer を作成しました: Account={Subject}, Customer={CustomerId}", account.Subject, customerId);
-            return customerId;
+            // 紐付けは「まだ無いときだけ」書く。並行する Checkout の間に Account が更新されると冪等キーが食い違い、
+            // Customer が 2 つできうる。無条件に上書きすると、先に返った Checkout が紐付けの外れた Customer に
+            // カードを集めてしまい、状態確認・Webhook・Portal のどれからも見えなくなる。負けた側は保存済みの方を使う。
+            var claimed = await _context.Accounts
+                .IgnoreQueryFilters()
+                .Where(a => a.Id == account.Id && a.StripeCustomerId == null)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(a => a.StripeCustomerId, customerId)
+                    .SetProperty(a => a.UpdatedAt, DateTimeOffset.UtcNow), cancellationToken);
+            await _context.Entry(account).ReloadAsync(cancellationToken);
+
+            if (claimed == 0)
+            {
+                // 作った Customer は誰にも紐付かない（支払い方法も無い空の Customer）。請求は発生しないので残しておき、
+                // Stripe ダッシュボードの metadata（ecauth_account_subject）で追える。
+                _logger.LogWarning(
+                    "並行リクエストが先に Stripe Customer を紐付けたため、作成した Customer は使いません: Account={Subject}, Unused={Unused}, Linked={Linked}",
+                    account.Subject, customerId, account.StripeCustomerId);
+            }
+            else
+            {
+                _logger.LogInformation("Stripe Customer を作成しました: Account={Subject}, Customer={CustomerId}", account.Subject, customerId);
+            }
+
+            return account.StripeCustomerId
+                ?? throw new InvalidOperationException($"Stripe Customer の紐付けを確認できません: Account={account.Subject}");
         }
 
         /// <summary>

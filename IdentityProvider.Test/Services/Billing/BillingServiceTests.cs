@@ -607,6 +607,42 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.Null(_account.PaymentMethodRegisteredAt);
         }
 
+        [Fact]
+        public async Task CreateCheckout_ConcurrentRequestLinkedCustomerFirst_UsesLinkedCustomer()
+        {
+            // こちらが Customer を作っている間に、並行リクエストが別の Customer を先に紐付けた
+            //（間に Account の更新が挟まり冪等キーが食い違ったケース）。後から上書きせず、紐付いた方で Checkout を作る。
+            var sibling = _db.CreateSiblingContext();
+            string? checkoutCustomer = null;
+            var racing = new Mock<IStripeGateway>();
+            racing.Setup(s => s.CreateCustomerAsync(Tenant, It.IsAny<string>(), It.IsAny<string?>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Returns(async () =>
+                {
+                    var other = await sibling.Accounts.IgnoreQueryFilters().SingleAsync(a => a.Subject == Subject);
+                    other.StripeCustomerId = "cus_winner";
+                    await sibling.SaveChangesAsync();
+                    return "cus_loser";
+                });
+            racing.Setup(s => s.CreateSetupCheckoutSessionAsync(Tenant, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, string, string, CancellationToken>((_, c, _, _, _) => checkoutCustomer = c)
+                .ReturnsAsync("https://checkout.example/session");
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Billing:ReturnBaseUrl:accounts"] = "https://ec-auth.io/" })
+                .Build();
+            var service = new BillingService(
+                _context, _tenantService, _accounts.Object, _usage.Object,
+                new PricingPlanResolver(_context), new PricingCalculator(), racing.Object,
+                configuration, new Mock<ILogger<BillingService>>().Object);
+
+            await service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+
+            Assert.Equal("cus_winner", checkoutCustomer);
+            Assert.Equal("cus_winner", _account.StripeCustomerId);
+            var stored = await sibling.Accounts.AsNoTracking().IgnoreQueryFilters().SingleAsync(a => a.Subject == Subject);
+            Assert.Equal("cus_winner", stored.StripeCustomerId);
+        }
+
         // ---- 戻り先 URL ----
 
         [Fact]
