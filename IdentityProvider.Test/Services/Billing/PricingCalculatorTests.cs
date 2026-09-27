@@ -150,6 +150,23 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.Throws<ArgumentException>(() => _calculator.CalculateDiscount(plan, 10_000));
         }
 
+        [Theory]
+        [InlineData(-1)]
+        [InlineData(-100)]
+        public void CalculateDiscount_NegativePercent_Throws(int percent)
+        {
+            // 黙って「割引なし」にすると、約束した割引が消えて過大請求になる
+            var plan = PricingPlan.Default with { DiscountPercent = percent };
+            Assert.Throws<ArgumentOutOfRangeException>(() => _calculator.CalculateDiscount(plan, 10_000));
+        }
+
+        [Fact]
+        public void CalculateDiscount_NegativeFixed_Throws()
+        {
+            var plan = PricingPlan.Default with { DiscountJpy = -500 };
+            Assert.Throws<ArgumentOutOfRangeException>(() => _calculator.CalculateDiscount(plan, 10_000));
+        }
+
         [Fact]
         public void CalculateDiscount_PercentOver100_Throws()
         {

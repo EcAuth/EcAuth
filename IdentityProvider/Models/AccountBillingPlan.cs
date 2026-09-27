@@ -41,11 +41,11 @@ namespace IdentityProvider.Models
         [MaxLength(255)]
         public string? ExemptReason { get; set; }
 
-        /// <summary>Account 合計に対する割引率（0〜100）。<see cref="DiscountJpy"/> とは併用不可。</summary>
+        /// <summary>Account 合計に対する割引率（0〜100、DB の CHECK 制約あり）。<see cref="DiscountJpy"/> とは併用不可。</summary>
         [Column("discount_percent")]
         public int? DiscountPercent { get; set; }
 
-        /// <summary>Account 合計から引く定額（円、税込）。合計を超える分は切り捨て（0 円止まり）。</summary>
+        /// <summary>Account 合計から引く定額（円、税込、0 以上、DB の CHECK 制約あり）。合計を超える分は切り捨て（0 円止まり）。</summary>
         [Column("discount_jpy")]
         public long? DiscountJpy { get; set; }
 

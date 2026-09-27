@@ -397,6 +397,10 @@ Stripe は Subscription / Meter ではなく **月次 Invoice 方式**（毎月 
 `first_month`（`client.created_at` が対象月の中 = 初月無料）。対象外でも料金表どおりの `list_price_jpy` は見せ、
 `amount_jpy` だけ 0 にする。割引（率または定額、併用不可）は Account の請求対象合計に 1 回だけ掛け、
 Invoice では負の 1 行になる。Account / Client 別の設定は運用 CLI（ConsoleApp `billing-plan`）で行い、管理 UI は無い。
+**不正な設定は黙って既定値に落とさず例外にする**（見込み額も請求も止まる）。範囲外の割引を「割引なし」、単価を書き間違えた帯を
+「無料」として扱うと、過大 / 過少請求になるため。独自料金表の JSON は `up_to` / `unit_price_jpy` とも必須（最後の帯も
+`"up_to": null` を明示）で、未知のプロパティも拒否する。割引率 0〜100・定額 0 以上・併用不可は、アプリ側
+（`PricingPlan.ValidateDiscount`）と DB の CHECK 制約の両方で縛る。
 
 **Stripe との境界は `IStripeGateway` だけ**。実装は 2 つ:
 

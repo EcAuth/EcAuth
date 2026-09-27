@@ -39,26 +39,23 @@ namespace IdentityProvider.Services.Billing
                 return PricingPlan.Default;
             }
 
-            if (row.DiscountPercent != null && row.DiscountJpy != null)
-            {
-                throw new InvalidOperationException(
-                    $"account_billing_plan(id={row.Id}) は割引率と定額割引を両方持っています。どちらか一方にしてください。");
-            }
-
             try
             {
-                return new PricingPlan(
+                var plan = new PricingPlan(
                     row.BillingExempt,
                     row.ExemptReason,
                     row.DiscountPercent,
                     row.DiscountJpy,
                     row.B2BTiersJson == null ? null : PricingTable.ParseTiers(row.B2BTiersJson),
                     row.B2CTiersJson == null ? null : PricingTable.ParseTiers(row.B2CTiersJson));
+                plan.ValidateDiscount();
+                return plan;
             }
             catch (ArgumentException ex)
             {
+                // 不正な設定で黙って標準料金・割引なしに落とさない（過少 / 過大請求になる）。見込み額も請求も止める。
                 throw new InvalidOperationException(
-                    $"account_billing_plan(id={row.Id}) の独自料金表が不正です: {ex.Message}", ex);
+                    $"account_billing_plan(id={row.Id}) の設定が不正です: {ex.Message}", ex);
             }
         }
     }

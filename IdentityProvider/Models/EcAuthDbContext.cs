@@ -403,6 +403,19 @@ namespace IdentityProvider.Models
                 .HasIndex(p => p.AccountSubject)
                 .IsUnique();
 
+            // 割引の範囲は DB でも縛る（運用 CLI や手作業の UPDATE で範囲外が入ると、計算時に例外で請求が止まる。
+            // 入口で弾く方が早い）。アプリ側の検証は PricingPlan.ValidateDiscount。
+            modelBuilder.Entity<AccountBillingPlan>()
+                .ToTable(t =>
+                {
+                    t.HasCheckConstraint("CK_account_billing_plan_discount_percent",
+                        "[discount_percent] IS NULL OR ([discount_percent] >= 0 AND [discount_percent] <= 100)");
+                    t.HasCheckConstraint("CK_account_billing_plan_discount_jpy",
+                        "[discount_jpy] IS NULL OR [discount_jpy] >= 0");
+                    t.HasCheckConstraint("CK_account_billing_plan_discount_exclusive",
+                        "[discount_percent] IS NULL OR [discount_jpy] IS NULL");
+                });
+
             modelBuilder.Entity<AccountBillingPlan>()
                 .HasOne(p => p.Account)
                 .WithMany()

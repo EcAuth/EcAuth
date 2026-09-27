@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IdentityProvider.Migrations
 {
     [DbContext(typeof(EcAuthDbContext))]
-    [Migration("20260926222454_AddBillingCustomerAndPlan")]
+    [Migration("20260927004452_AddBillingCustomerAndPlan")]
     partial class AddBillingCustomerAndPlan
     {
         /// <inheritdoc />
@@ -229,7 +229,14 @@ namespace IdentityProvider.Migrations
                     b.HasIndex("AccountSubject")
                         .IsUnique();
 
-                    b.ToTable("account_billing_plan");
+                    b.ToTable("account_billing_plan", t =>
+                        {
+                            t.HasCheckConstraint("CK_account_billing_plan_discount_exclusive", "[discount_percent] IS NULL OR [discount_jpy] IS NULL");
+
+                            t.HasCheckConstraint("CK_account_billing_plan_discount_jpy", "[discount_jpy] IS NULL OR [discount_jpy] >= 0");
+
+                            t.HasCheckConstraint("CK_account_billing_plan_discount_percent", "[discount_percent] IS NULL OR ([discount_percent] >= 0 AND [discount_percent] <= 100)");
+                        });
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.AccountOrganization", b =>

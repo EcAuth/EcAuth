@@ -61,17 +61,10 @@ namespace IdentityProvider.Services.Billing
             {
                 throw new ArgumentOutOfRangeException(nameof(subtotalJpy), subtotalJpy, "小計は 0 以上です。");
             }
-            if (plan.DiscountPercent != null && plan.DiscountJpy != null)
-            {
-                throw new ArgumentException("割引率と定額割引は併用できません。", nameof(plan));
-            }
+            plan.ValidateDiscount();
 
             if (plan.DiscountPercent is int percent && percent > 0)
             {
-                if (percent > 100)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(plan), percent, "割引率は 0〜100 です。");
-                }
                 // 切り捨て（¥1 未満は顧客側に寄せない）。100% なら小計そのまま。
                 return subtotalJpy * percent / 100;
             }

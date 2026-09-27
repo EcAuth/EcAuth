@@ -23,6 +23,26 @@ namespace IdentityProvider.Services.Billing
         /// <summary>標準料金表そのまま。</summary>
         public static readonly PricingPlan Default = new(false, null, null, null, null, null);
 
+        /// <summary>
+        /// 割引の設定値を検証する。割引率は 0〜100、定額は 0 以上、併用不可。違反は <see cref="ArgumentException"/>。
+        /// 範囲外の値を「割引なし」として黙って扱うと、顧客に約束した割引が消えて過大請求になるため、計算前に必ず弾く。
+        /// </summary>
+        public void ValidateDiscount()
+        {
+            if (DiscountPercent != null && DiscountJpy != null)
+            {
+                throw new ArgumentException("割引率と定額割引は併用できません。");
+            }
+            if (DiscountPercent is int percent && (percent < 0 || percent > 100))
+            {
+                throw new ArgumentOutOfRangeException(nameof(DiscountPercent), percent, "割引率は 0〜100 です。");
+            }
+            if (DiscountJpy is long fixedJpy && fixedJpy < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(DiscountJpy), fixedJpy, "定額割引は 0 以上です。");
+            }
+        }
+
         /// <summary>割引が設定されているか。</summary>
         public bool HasDiscount => (DiscountPercent ?? 0) > 0 || (DiscountJpy ?? 0) > 0;
 

@@ -110,7 +110,7 @@ namespace IdentityProvider.Test.Services.Billing
             });
 
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _resolver.ResolveAsync("acct-1", Month("2026-09")));
-            Assert.Contains("独自料金表が不正", ex.Message);
+            Assert.Contains("設定が不正", ex.Message);
         }
 
         [Fact]
@@ -119,6 +119,53 @@ namespace IdentityProvider.Test.Services.Billing
             await Seed(new AccountBillingPlan { AccountSubject = "acct-1", DiscountPercent = 10, DiscountJpy = 100 });
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => _resolver.ResolveAsync("acct-1", Month("2026-09")));
+        }
+
+        [Theory]
+        [InlineData(-10, null)]
+        [InlineData(101, null)]
+        [InlineData(null, -500L)]
+        public async Task Resolve_OutOfRangeDiscount_ThrowsInsteadOfDroppingDiscount(int? percent, long? fixedJpy)
+        {
+            // InMemory は CHECK 制約を強制しないので、DB を素通りした値もアプリ側で弾けることを確かめる
+            await Seed(new AccountBillingPlan { AccountSubject = "acct-1", DiscountPercent = percent, DiscountJpy = fixedJpy });
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _resolver.ResolveAsync("acct-1", Month("2026-09")));
+            Assert.Contains("設定が不正", ex.Message);
+        }
+
+        [Theory]
+        [InlineData(-1, null)]
+        [InlineData(101, null)]
+        [InlineData(null, -1L)]
+        [InlineData(10, 100L)]
+        public async Task CheckConstraints_RejectOutOfRangeDiscountsInDatabase(int? percent, long? fixedJpy)
+        {
+            using var db = new RetryingSqliteContext();
+            db.Context.Organizations.Add(new Organization { Id = 1, Code = "accounts", Name = "EcAuth", TenantName = "accounts" });
+            db.Context.Accounts.Add(new Account { Id = 1, Subject = "acct-1", Email = "a@example.jp", OrganizationId = 1 });
+            await db.Context.SaveChangesAsync();
+
+            db.Context.AccountBillingPlans.Add(new AccountBillingPlan { AccountSubject = "acct-1", DiscountPercent = percent, DiscountJpy = fixedJpy });
+
+            await Assert.ThrowsAsync<Microsoft.EntityFrameworkCore.DbUpdateException>(() => db.Context.SaveChangesAsync());
+        }
+
+        [Fact]
+        public async Task CheckConstraints_AcceptBoundaryDiscounts()
+        {
+            using var db = new RetryingSqliteContext();
+            db.Context.Organizations.Add(new Organization { Id = 1, Code = "accounts", Name = "EcAuth", TenantName = "accounts" });
+            db.Context.Accounts.AddRange(
+                new Account { Id = 1, Subject = "acct-1", Email = "a@example.jp", OrganizationId = 1 },
+                new Account { Id = 2, Subject = "acct-2", Email = "b@example.jp", OrganizationId = 1 },
+                new Account { Id = 3, Subject = "acct-3", Email = "c@example.jp", OrganizationId = 1 });
+            db.Context.AccountBillingPlans.AddRange(
+                new AccountBillingPlan { AccountSubject = "acct-1", DiscountPercent = 0 },
+                new AccountBillingPlan { AccountSubject = "acct-2", DiscountPercent = 100 },
+                new AccountBillingPlan { AccountSubject = "acct-3", DiscountJpy = 0 });
+
+            await db.Context.SaveChangesAsync();
         }
 
         public void Dispose() => _context.Dispose();

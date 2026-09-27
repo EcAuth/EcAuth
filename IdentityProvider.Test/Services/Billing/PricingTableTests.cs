@@ -40,6 +40,12 @@ namespace IdentityProvider.Test.Services.Billing
         [InlineData("""[{"up_to":10,"unit_price_jpy":0},{"up_to":10,"unit_price_jpy":5},{"up_to":null,"unit_price_jpy":1}]""", "より大きく")]
         [InlineData("""[{"up_to":10,"unit_price_jpy":-1},{"up_to":null,"unit_price_jpy":1}]""", "単価が負")]
         [InlineData("not json", "JSON を読めません")]
+        // 単価の省略・書き間違いを 0（無料）として受け入れない
+        [InlineData("""[{"up_to":5,"unit_price_jpy":0},{"up_to":null}]""", "JSON を読めません")]
+        [InlineData("""[{"up_to":5,"unit_price_jpy":0},{"up_to":null,"unit_price_jpyy":100}]""", "JSON を読めません")]
+        // 最後の帯も up_to を明示させる（省略・書き間違いを「上限なし」として受け入れない）
+        [InlineData("""[{"up_to":5,"unit_price_jpy":0},{"unit_price_jpy":100}]""", "JSON を読めません")]
+        [InlineData("""[{"upto":5,"unit_price_jpy":0},{"up_to":null,"unit_price_jpy":100}]""", "JSON を読めません")]
         [InlineData("null", "null")]
         public void ParseTiers_RejectsMalformedTables(string json, string expectedMessagePart)
         {

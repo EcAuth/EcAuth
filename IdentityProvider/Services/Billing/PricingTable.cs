@@ -9,9 +9,14 @@ namespace IdentityProvider.Services.Billing
     /// </summary>
     /// <param name="UpTo">この帯の上限 MAU（含む）。最後の帯は null</param>
     /// <param name="UnitPriceJpy">この帯の 1 MAU あたりの単価（円、税込）</param>
+    /// <remarks>
+    /// 独自料金表の JSON では両方のプロパティを必須にする（最後の帯も <c>"up_to": null</c> を明示）。
+    /// 省略や書き間違い（<c>unit_price_jpyy</c> 等）を既定値 0 / null で黙って受け入れると、上限なしの帯が無料になって
+    /// 請求が過少になるため。未知のプロパティも拒否する（<see cref="PricingTable.ParseTiers"/>）。
+    /// </remarks>
     public sealed record PriceTier(
-        [property: JsonPropertyName("up_to")] int? UpTo,
-        [property: JsonPropertyName("unit_price_jpy")] int UnitPriceJpy);
+        [property: JsonPropertyName("up_to"), JsonRequired] int? UpTo,
+        [property: JsonPropertyName("unit_price_jpy"), JsonRequired] int UnitPriceJpy);
 
     /// <summary>
     /// 料金表（requirements.html §5.1、EcAuthDocs#119、2026-09-24 決定）。
@@ -32,6 +37,8 @@ namespace IdentityProvider.Services.Billing
     {
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
+            // 書き間違えたプロパティ名を無視せず、形式不正として弾く
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
             DefaultIgnoreCondition = JsonIgnoreCondition.Never,
             WriteIndented = false,
         };
