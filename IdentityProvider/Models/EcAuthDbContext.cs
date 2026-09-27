@@ -414,6 +414,9 @@ namespace IdentityProvider.Models
                         "[discount_jpy] IS NULL OR [discount_jpy] >= 0");
                     t.HasCheckConstraint("CK_account_billing_plan_discount_exclusive",
                         "[discount_percent] IS NULL OR [discount_jpy] IS NULL");
+                    // 逆転・空の有効期間は「どの月にも効かない」行になり、合意した条件が黙って消えるので入口で弾く
+                    t.HasCheckConstraint("CK_account_billing_plan_validity",
+                        "[valid_from] IS NULL OR [valid_until] IS NULL OR [valid_from] < [valid_until]");
                 });
 
             modelBuilder.Entity<AccountBillingPlan>()

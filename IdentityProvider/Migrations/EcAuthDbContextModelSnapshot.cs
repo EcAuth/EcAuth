@@ -233,6 +233,8 @@ namespace IdentityProvider.Migrations
                             t.HasCheckConstraint("CK_account_billing_plan_discount_jpy", "[discount_jpy] IS NULL OR [discount_jpy] >= 0");
 
                             t.HasCheckConstraint("CK_account_billing_plan_discount_percent", "[discount_percent] IS NULL OR ([discount_percent] >= 0 AND [discount_percent] <= 100)");
+
+                            t.HasCheckConstraint("CK_account_billing_plan_validity", "[valid_from] IS NULL OR [valid_until] IS NULL OR [valid_from] < [valid_until]");
                         });
                 });
 

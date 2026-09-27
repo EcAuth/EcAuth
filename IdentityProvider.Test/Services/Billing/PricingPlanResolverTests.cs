@@ -168,6 +168,42 @@ namespace IdentityProvider.Test.Services.Billing
             await db.Context.SaveChangesAsync();
         }
 
+        [Theory]
+        [InlineData(0)]     // 空の期間（from == until）
+        [InlineData(-31)]   // 逆転（until が from より前）
+        public async Task Resolve_InvertedOrEmptyValidity_ThrowsInsteadOfFallingBackToDefault(int untilOffsetDays)
+        {
+            // 逆転した期間はどの月にも効かず、合意した除外が黙って消える。期間判定より先に弾く。
+            var from = Month("2026-09").Start;
+            await Seed(new AccountBillingPlan
+            {
+                AccountSubject = "acct-1",
+                BillingExempt = true,
+                ValidFrom = from,
+                ValidUntil = from.AddDays(untilOffsetDays),
+            });
+
+            foreach (var month in new[] { "2026-07", "2026-09", "2026-11" })
+            {
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _resolver.ResolveAsync("acct-1", Month(month)));
+                Assert.Contains("valid_from", ex.Message);
+            }
+        }
+
+        [Fact]
+        public async Task CheckConstraints_RejectInvertedValidityInDatabase()
+        {
+            using var db = new RetryingSqliteContext();
+            db.Context.Organizations.Add(new Organization { Id = 1, Code = "accounts", Name = "EcAuth", TenantName = "accounts" });
+            db.Context.Accounts.Add(new Account { Id = 1, Subject = "acct-1", Email = "a@example.jp", OrganizationId = 1 });
+            await db.Context.SaveChangesAsync();
+            var from = Month("2026-09").Start;
+
+            db.Context.AccountBillingPlans.Add(new AccountBillingPlan { AccountSubject = "acct-1", ValidFrom = from, ValidUntil = from.AddDays(-1) });
+
+            await Assert.ThrowsAsync<Microsoft.EntityFrameworkCore.DbUpdateException>(() => db.Context.SaveChangesAsync());
+        }
+
         public void Dispose() => _context.Dispose();
     }
 }

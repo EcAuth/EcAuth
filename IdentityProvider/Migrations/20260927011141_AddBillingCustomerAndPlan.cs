@@ -69,6 +69,7 @@ namespace IdentityProvider.Migrations
                     table.CheckConstraint("CK_account_billing_plan_discount_exclusive", "[discount_percent] IS NULL OR [discount_jpy] IS NULL");
                     table.CheckConstraint("CK_account_billing_plan_discount_jpy", "[discount_jpy] IS NULL OR [discount_jpy] >= 0");
                     table.CheckConstraint("CK_account_billing_plan_discount_percent", "[discount_percent] IS NULL OR ([discount_percent] >= 0 AND [discount_percent] <= 100)");
+                    table.CheckConstraint("CK_account_billing_plan_validity", "[valid_from] IS NULL OR [valid_until] IS NULL OR [valid_from] < [valid_until]");
                     table.ForeignKey(
                         name: "FK_account_billing_plan_account_account_subject",
                         column: x => x.account_subject,

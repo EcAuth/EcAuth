@@ -36,6 +36,29 @@ namespace IdentityProvider.Services.Billing
         public string Provider { get; set; } = StripeProvider;
 
         /// <summary>
+        /// <c>Billing:Provider</c> の値を検証して正規の表記（<see cref="StripeProvider"/> / <see cref="FakeProvider"/>）で返す。
+        /// 未設定は <see cref="StripeProvider"/>。それ以外の値（<c>Fkae</c> などの書き間違い）は <see cref="InvalidOperationException"/>。
+        /// 未知の値を黙って Stripe 扱いにすると、Fake のつもりの環境で本物の Stripe を叩きうるため、起動時に止める。
+        /// </summary>
+        public static string ResolveProvider(string? configured)
+        {
+            if (string.IsNullOrWhiteSpace(configured))
+            {
+                return StripeProvider;
+            }
+            if (string.Equals(configured, StripeProvider, StringComparison.OrdinalIgnoreCase))
+            {
+                return StripeProvider;
+            }
+            if (string.Equals(configured, FakeProvider, StringComparison.OrdinalIgnoreCase))
+            {
+                return FakeProvider;
+            }
+            throw new InvalidOperationException(
+                $"{SectionName}:Provider の値が不正です: '{configured}'（{StripeProvider} または {FakeProvider} を指定してください）。");
+        }
+
+        /// <summary>
         /// 無料枠超過 + 支払い方法未登録の Client で新規パスキー登録をブロックする（402）。
         /// 顧客への告知が済むまで false のままにする。
         /// </summary>

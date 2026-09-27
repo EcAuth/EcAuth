@@ -33,6 +33,14 @@ namespace IdentityProvider.Services.Billing
         /// </summary>
         public static PricingPlan ToPlan(AccountBillingPlan row, UsageMonth month)
         {
+            // 期間が逆転（または空）していると、どの月も期間外と判定されて合意した除外・割引・独自料金が黙って消える。
+            // 期間判定より先に弾く（DB の CHECK 制約 CK_account_billing_plan_validity と同じ条件）。
+            if (row.ValidFrom != null && row.ValidUntil != null && row.ValidFrom >= row.ValidUntil)
+            {
+                throw new InvalidOperationException(
+                    $"account_billing_plan(id={row.Id}) の設定が不正です: valid_from（{row.ValidFrom:O}）は valid_until（{row.ValidUntil:O}）より前にしてください。");
+            }
+
             var at = month.Start;
             if ((row.ValidFrom != null && row.ValidFrom > at) || (row.ValidUntil != null && row.ValidUntil <= at))
             {

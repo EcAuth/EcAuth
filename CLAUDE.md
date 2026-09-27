@@ -399,8 +399,9 @@ Stripe は Subscription / Meter ではなく **月次 Invoice 方式**（毎月 
 Invoice では負の 1 行になる。Account / Client 別の設定は運用 CLI（ConsoleApp `billing-plan`）で行い、管理 UI は無い。
 **不正な設定は黙って既定値に落とさず例外にする**（見込み額も請求も止まる）。範囲外の割引を「割引なし」、単価を書き間違えた帯を
 「無料」として扱うと、過大 / 過少請求になるため。独自料金表の JSON は `up_to` / `unit_price_jpy` とも必須（最後の帯も
-`"up_to": null` を明示）で、未知のプロパティも拒否する。割引率 0〜100・定額 0 以上・併用不可は、アプリ側
-（`PricingPlan.ValidateDiscount`）と DB の CHECK 制約の両方で縛る。
+`"up_to": null` を明示）で、未知のプロパティも拒否する。割引率 0〜100・定額 0 以上・併用不可、有効期間の
+`valid_from < valid_until` は、アプリ側（`PricingPlan.ValidateDiscount` / `PricingPlanResolver.ToPlan`）と DB の CHECK 制約の
+両方で縛る（逆転した期間は「どの月にも効かない」行になり、合意した条件が黙って消えるため）。
 
 **Stripe との境界は `IStripeGateway` だけ**。実装は 2 つ:
 
@@ -420,7 +421,7 @@ HTTP をモックする前例が無いため、ユニットテストも `IStripe
 | キー | 種別 | 既定 | 配線先 |
 |---|---|---|---|
 | `Billing__Enabled` / `Billing__EnforcementEnabled` / `Billing__InvoicingEnabled` | 機能フラグ | すべて false | 有効化するときだけ production `app_settings`。ローカル / CI は `Enabled=true` |
-| `Billing__Provider` | 非秘密 | `Stripe` | ローカル / CI のみ `Fake`（compose.yaml / `.env.dev.tpl` / playwright.yml）。本番は書かない |
+| `Billing__Provider` | 非秘密 | `Stripe` | ローカル / CI のみ `Fake`（compose.yaml / `.env.dev.tpl` / playwright.yml）。本番は書かない。`Stripe` / `Fake` 以外は起動時に例外（書き間違いを黙って Stripe 扱いにしない） |
 | `Billing__FinalizeAfterDays` | チューニング定数 | 2 | 配線しない（コード既定値） |
 | `Billing__ReturnBaseUrl__{accounts,stg_accounts}` | 非秘密・テナント別・https 必須 | なし（未設定は例外） | `.env.dev.tpl` + production `main.tf`（`MagicLink__BaseUrl__*` と同じ） |
 | `Stripe__SecretKey__{accounts,stg_accounts}` / `Stripe__WebhookSecret__{accounts,stg_accounts}` | **秘密**・テナント別 | なし | production `main.tf` の Key Vault 参照のみ（1Password `ecauth-prod-stripe` が一次情報）。staging には配線しない（accounts 系機能は本番のみ） |

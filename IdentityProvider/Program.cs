@@ -111,8 +111,9 @@ builder.Services.AddHostedService<MagicLinkCleanupService>();
 // Stripe の API キー等は StripeGateway がテナント別設定（Stripe:SecretKey:{tenant}）から読む。
 // Billing:Provider=Fake はローカル / CI E2E 用で、Production では起動を拒否する（金銭を扱う経路にダミーを残さない）。
 builder.Services.Configure<BillingOptions>(builder.Configuration.GetSection(BillingOptions.SectionName));
-var billingProvider = builder.Configuration[$"{BillingOptions.SectionName}:Provider"] ?? BillingOptions.StripeProvider;
-if (string.Equals(billingProvider, BillingOptions.FakeProvider, StringComparison.OrdinalIgnoreCase))
+// 未知の値（書き間違い）は起動時に止める。黙って Stripe 扱いにすると、Fake のつもりの環境で本物の Stripe を叩きうる。
+var billingProvider = BillingOptions.ResolveProvider(builder.Configuration[$"{BillingOptions.SectionName}:Provider"]);
+if (billingProvider == BillingOptions.FakeProvider)
 {
     if (builder.Environment.IsProduction())
     {
