@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -1624,42 +1623,11 @@ namespace IdentityProvider.Controllers
         }
 
         /// <summary>
-        /// Authorization: Bearer を検証し、SubjectType=Account のトークンのみ受理する。
+        /// Authorization: Bearer を検証し、SubjectType=Account のトークンのみ受理する（<see cref="AccountTokenAuthentication"/>）。
         /// 有効な場合は subject を返し、そうでなければ null を返す。
         /// </summary>
-        private async Task<string?> ValidateAccountTokenAsync()
-        {
-            var authorizationHeader = HttpContext.Request.Headers["Authorization"].FirstOrDefault();
-            if (string.IsNullOrEmpty(authorizationHeader))
-            {
-                return null;
-            }
-
-            AuthenticationHeaderValue authHeaderValue;
-            try
-            {
-                authHeaderValue = AuthenticationHeaderValue.Parse(authorizationHeader);
-            }
-            catch (FormatException)
-            {
-                return null;
-            }
-
-            // RFC 7235: auth-scheme は大文字小文字を区別しない
-            if (!string.Equals(authHeaderValue.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase)
-                || string.IsNullOrEmpty(authHeaderValue.Parameter))
-            {
-                return null;
-            }
-
-            var validation = await _tokenService.ValidateAccessTokenWithTypeAsync(authHeaderValue.Parameter);
-            if (!validation.IsValid || validation.SubjectType != SubjectType.Account || string.IsNullOrEmpty(validation.Subject))
-            {
-                return null;
-            }
-
-            return validation.Subject;
-        }
+        private Task<string?> ValidateAccountTokenAsync()
+            => AccountTokenAuthentication.ValidateAccountTokenAsync(HttpContext.Request, _tokenService);
 
         /// <summary>
         /// SignupService と同一形式（32バイトのランダム値を Base64URL）で client_secret を生成する。

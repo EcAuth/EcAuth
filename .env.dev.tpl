@@ -153,6 +153,16 @@ Signup__ConfirmBaseUrl__stg_accounts=https://localhost:8081
 MagicLink__BaseUrl__accounts=https://localhost:8081
 MagicLink__BaseUrl__stg_accounts=https://localhost:8081
 
+# 課金 (EcAuthDocs#119)。ローカルは Stripe に接続しない Fake provider で課金 API を有効にする
+# (Billing__Provider=Fake は Production では起動時に拒否される)。本物の Stripe を試すときは
+# Billing__Provider=Stripe にし、Stripe__SecretKey__accounts / Stripe__WebhookSecret__accounts 等を
+# op run で注入する (テナント別・Key Vault 参照が本番の配線。ここには置かない)。
+# Checkout / Portal の戻り先はテナント別・https 必須 (Billing:ReturnBaseUrl:{tenant})。
+Billing__Enabled=true
+Billing__Provider=Fake
+Billing__ReturnBaseUrl__accounts=https://localhost:8081
+Billing__ReturnBaseUrl__stg_accounts=https://localhost:8081
+
 # =============================================================================
 # EC-CUBE 2系プラグイン Settings (ローカル開発用ダミー値)
 # =============================================================================

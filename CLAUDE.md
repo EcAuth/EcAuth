@@ -383,6 +383,90 @@ spec は受信口を直接触らず、`tests/helpers/mailbox.ts` の `Mailbox` �
 - 本文のフィールド名が mailpit（`Text` / `HTML` / `Subject` / `ID`）と異なるが、
   `Mailbox` が `{subject, text, html}` に正規化するので spec 側は意識しなくてよい。
 
+### 課金（Stripe）の実装と配線（EcAuthDocs#119）
+
+支払い主体は Account、集計単位は Client、料金は `Services/Billing/PricingTable.cs` の段階従量
+（B2B 〜5 無料 / 6〜 ¥100、B2C 〜50 無料 / 51〜1,000 ¥20 / 1,001〜5,000 ¥15 / 5,001〜 ¥10、税込）。
+Stripe は Subscription / Meter ではなく **月次 Invoice 方式**（毎月 1 日に前月分を起票、2 日後に自動確定）。
+見込み額（`GET /v1/account/billing`）と請求額は必ず `IBillingService.BuildEstimate` →
+`IPricingPlanResolver` / `IPricingCalculator` を通す。帯の計算・割引の丸め・請求対象外の判定を他所に複製しない
+（`IUsageReportService` の集計と同じ複製禁止ルール）。
+
+**請求対象外の判定順**（`exempt_reason`）: `account_exempt`（`account_billing_plan.billing_exempt`）→
+`organization_not_billable`（サンドボックス / 内部 / 対象月前に削除）→ `client_exempt`（`client.billing_exempt`）→
+`first_month`（`client.created_at` が対象月の中 = 初月無料）。対象外でも料金表どおりの `list_price_jpy` は見せ、
+`amount_jpy` だけ 0 にする。割引（率または定額、併用不可）は Account の請求対象合計に 1 回だけ掛け、
+Invoice では負の 1 行になる。Account / Client 別の設定は運用 CLI（ConsoleApp `billing-plan`）で行い、管理 UI は無い。
+**不正な設定は黙って既定値に落とさず例外にする**（見込み額も請求も止まる）。範囲外の割引を「割引なし」、単価を書き間違えた帯を
+「無料」として扱うと、過大 / 過少請求になるため。独自料金表の JSON は `up_to` / `unit_price_jpy` とも必須（最後の帯も
+`"up_to": null` を明示）で、未知のプロパティも拒否する。割引率 0〜100・定額 0 以上・併用不可、有効期間の
+`valid_from < valid_until` は、アプリ側（`PricingPlan.ValidateDiscount` / `PricingPlanResolver.ToPlan`）と DB の CHECK 制約の
+両方で縛る（逆転した期間は「どの月にも効かない」行になり、合意した条件が黙って消えるため）。
+
+**Stripe との境界は `IStripeGateway` だけ**。実装は 2 つ:
+
+| `Billing__Provider` | 実装 | 用途 |
+|---|---|---|
+| `Stripe`（既定） | `StripeGateway`（Stripe.net、テナント別 `StripeClient`） | 本番。accounts = live、stg-accounts = test |
+| `Fake` | `FakeStripeGateway`（メモリ、Checkout 作成で即カード登録扱い、Webhook は署名検証なし） | ローカル / CI E2E。**Production 環境では起動時に拒否** |
+
+HTTP をモックする前例が無いため、ユニットテストも `IStripeGateway`（Fake または Moq）で切る。
+本物の Stripe を叩くテストは書かない（Stripe CLI の `stripe listen --forward-to https://localhost:8081/v1/billing/stripe/webhook`
+で手動確認する。`Stripe-Signature` の検証には `Stripe__WebhookSecret__accounts` に CLI が表示する `whsec_*` を渡す）。
+
+**設定キーと配線先**（[環境変数の配線ルール](#環境変数の配線ルール)に従う。すべてリクエスト時消費なので
+デプロイ CI（`staging.yml` / `production.yml`）には入れない。`playwright.yml` はアプリを起動する E2E 実行環境なので
+`compose.yaml` と同じ扱いで、Fake provider の有効化はそこに書く）:
+
+| キー | 種別 | 既定 | 配線先 |
+|---|---|---|---|
+| `Billing__Enabled` / `Billing__EnforcementEnabled` / `Billing__InvoicingEnabled` | 機能フラグ | すべて false | 有効化するときだけ production `app_settings`。ローカル / CI は `Enabled=true` |
+| `Billing__Provider` | 非秘密 | `Stripe` | ローカル / CI のみ `Fake`（compose.yaml / `.env.dev.tpl` / playwright.yml）。本番は書かない。`Stripe` / `Fake` 以外は起動時に例外（書き間違いを黙って Stripe 扱いにしない） |
+| `Billing__FinalizeAfterDays` | チューニング定数 | 2 | 配線しない（コード既定値） |
+| `Billing__ReturnBaseUrl__{accounts,stg_accounts}` | 非秘密・テナント別・https 必須 | なし（未設定は例外） | `.env.dev.tpl` + production `main.tf`（`MagicLink__BaseUrl__*` と同じ） |
+| `Stripe__SecretKey__{accounts,stg_accounts}` / `Stripe__WebhookSecret__{accounts,stg_accounts}` | **秘密**・テナント別 | なし | production `main.tf` の Key Vault 参照のみ（1Password `ecauth-prod-stripe` が一次情報）。staging には配線しない（accounts 系機能は本番のみ） |
+
+テナント名の正規化は他のテナント別キーと同じ（`stg-accounts` → `stg_accounts`、`[^A-Za-z0-9_]` → `_`）。
+Webhook はテナントごとに 1 エンドポイント（Host で live / test を分け、署名シークレットもテナント別）。
+Account の解決は `Organization.TenantName` も条件にして、live の Customer が test 側の受け口に来ても更新しない。
+
+**Webhook の冪等化**は `stripe_webhook_event` の主キー（Stripe のイベント ID）と `processed_at`。受信時に行を入れ、
+処理が終わったら `processed_at` を立てる。再送は `processed_at != null` の行だけ無視し、処理中に失敗した
+（500 を返した）イベントは行が未完了のまま残るので Stripe の再送で再処理される（行は監査のため消さない）。
+初回 INSERT の競合（主キー違反、`DatabaseResilience.IsUniqueConstraintViolation`）では自分の行を捨てて存在確認からやり直し、
+相手の行が未完了ならこちらも処理してから応答する。**処理が終わる前に 200 を返さない**（相手が失敗したとき、Stripe は
+先に届いた 200 で「配信済み」とみなして再送を止め、行が未完了のまま残るため）。InMemory は一意制約を強制せず、
+主キー違反の判定は SQL Server の例外だけを見るので、再送の経路は E2E `account_billing.spec.ts`（本番と同じ SQL Server）でも通す。
+保証するのは「完了済みのイベントを再処理しない」ことまでで、**未完了の間に同じイベントが並行して届くと本処理は二重に走りうる**。
+イベント単位のロックは置かない（処理中に落ちたときの解除が要るうえ、別イベント同士の順序逆転は防げない）。
+代わりに Webhook の本処理は **Stripe の現在の状態を読み直して DB に写す冪等な処理に限る**（イベント本文の差分を当てない）。
+読み直すだけでは、別イベント同士（カード追加と削除など）が並行したときに古い読み取りが新しい結果を上書きしうるので、
+**書き込みは「Stripe を読み始めた時刻」で条件付きにする**（`account.payment_method_checked_ticks` より新しい読み取りの
+ときだけ `ExecuteUpdate` で書く。変更が無くても時刻は書く）。最後に書かれるのは最も遅く読み始めた同期の結果になる。
+PR-2 の `invoice.*` も同じ規約に従う。条件付き `ExecuteUpdate` は InMemory で動かないので、`BillingServiceTests` は
+SQLite（`RetryingSqliteContext`、並行リクエストの再現は `CreateSiblingContext`）で回す。
+
+**Customer の削除**（ダッシュボード / API）は `customer.deleted`、または同期時に Stripe が削除済み / `resource_missing` を
+返したときに検出し、`stripe_customer_id` と `payment_method_registered_at` を外す。Webhook を取りこぼしても回復できるよう、
+Checkout と Portal は保存済みの Customer を使う前に必ず 1 回同期する（削除済みなら Checkout は作り直し、Portal は `no_customer`）。作り直しで削除済みの Customer が
+返らないよう、Customer 作成の冪等キーは `customer:{tenant}:{subject}:{account.updated_at の ticks}`（Stripe の冪等キーは
+24 時間有効）。キーが食い違う並行 Checkout で Customer が 2 つできても、紐付けは「まだ無いときだけ」書く条件付き更新なので
+先に書いた方が残り、負けた側もその Customer で Checkout を作る（使われない空の Customer が Stripe に残るだけ）。
+`payment_method.detached` は `data.object.customer` が null になるため、`StripeGateway.ToEnvelope` が
+`data.previous_attributes.customer` から元の Customer を取る。
+
+**見込み額の Organization 解決**は `account_organization` から削除済みも含めて引く（`IAccountService.GetManagedOrganizationsAsync`
+はトークンの `managed_orgs` 用に現在削除済みを除くので使わない）。請求対象かどうかは `UsageReportService.IsBillable` の
+「対象月に有効だったか」に一本化し、月の途中で解約したサイトの当月 MAU を落とさない。
+
+**Portal の 409**: Customer 未作成は `no_customer`、Customer はあるがカードが無い（Checkout をキャンセルすると Customer だけ残る）は
+`no_payment_method`。後者は判定前に Stripe と 1 回同期する（登録直後で Webhook 未着の場合を 409 にしない）。
+
+**マイページ側のレース**: Checkout から戻った直後は Webhook より先に描画されるため、フロントは
+`?billing=setup_complete` で戻ったら `GET /v1/account/billing?refresh=1` を呼ぶ（Stripe に既定の支払い方法を
+問い合わせて `account.payment_method_registered_at` を同期する）。上限強制（PR-3）はこの列だけを見る
+（ホットパスから Stripe API を呼ばない）。
+
 ### 本番デプロイ後の申込スモーク
 
 `production.yml` の `verify` ジョブは、シード済み Client を使う

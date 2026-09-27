@@ -105,7 +105,10 @@ namespace IdentityProvider.Services
                         AppName: c.AppName,
                         SubjectType: c.SubjectType,
                         MonthlyActiveUsers: mauByClient.GetValueOrDefault(c.Id),
-                        RegisteredB2BUsers: registeredByClientId.GetValueOrDefault(c.ClientId)))
+                        RegisteredB2BUsers: registeredByClientId.GetValueOrDefault(c.ClientId),
+                        CreatedAt: c.CreatedAt,
+                        BillingExempt: c.BillingExempt,
+                        BillingExemptReason: c.BillingExemptReason))
                     .ToList()))
                 .ToList();
 
@@ -118,7 +121,7 @@ namespace IdentityProvider.Services
         /// <para>
         /// 論理削除は「<b>対象月に 1 瞬でも有効だったか</b>」（= 削除が対象月の開始より後か）で見る。現在の削除状態で弾くと、
         /// 月の途中で解約したサイトの当月 MAU（解約前に発生した請求可能な利用）が請求から丸ごと落ちる。
-        /// 請求は月末締め・翌月 10 日（EcAuthDocs#119）なので、集計時点では必ず「削除済み」に見える。
+        /// 請求は月末締め・翌月 1 日起票（EcAuthDocs#119）なので、集計時点では必ず「削除済み」に見える。
         /// <c>Organization.DeletedAt</c> が物理削除をしない理由（解約済みサイトも期間つきで残す）もこれ。
         /// </para>
         /// <para>

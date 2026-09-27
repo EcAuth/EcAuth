@@ -96,6 +96,12 @@ services:
       Signup__ConfirmBaseUrl__stg_accounts: ${Signup__ConfirmBaseUrl__stg_accounts:-https://localhost:8081}
       MagicLink__BaseUrl__accounts: ${MagicLink__BaseUrl__accounts:-https://localhost:8081}
       MagicLink__BaseUrl__stg_accounts: ${MagicLink__BaseUrl__stg_accounts:-https://localhost:8081}
+      # 課金（EcAuthDocs#119）。ローカル / CI E2E は Stripe に接続しない Fake provider で課金 API を有効にする
+      # （Production では Fake は起動時に拒否される）。戻り先はテナント別・https 必須で、ローカルは IdP 自身。
+      Billing__Enabled: ${Billing__Enabled:-true}
+      Billing__Provider: ${Billing__Provider:-Fake}
+      Billing__ReturnBaseUrl__accounts: ${Billing__ReturnBaseUrl__accounts:-https://localhost:8081}
+      Billing__ReturnBaseUrl__stg_accounts: ${Billing__ReturnBaseUrl__stg_accounts:-https://localhost:8081}
       # メール送信プロバイダ。ローカル / CI E2E は mailpit（SMTP）に送信して実メール経路を検証する。
       Email__Provider: ${Email__Provider:-Smtp}
       Smtp__Host: ${Smtp__Host:-mailpit}

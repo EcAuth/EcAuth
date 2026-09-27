@@ -34,6 +34,8 @@ namespace IdentityProvider.Models
         public DbSet<PasskeyRegistrationToken> PasskeyRegistrationTokens { get; set; }
         public DbSet<SignupRequest> SignupRequests { get; set; }
         public DbSet<MonthlyActiveUser> MonthlyActiveUsers { get; set; }
+        public DbSet<StripeWebhookEvent> StripeWebhookEvents { get; set; }
+        public DbSet<AccountBillingPlan> AccountBillingPlans { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -380,6 +382,55 @@ namespace IdentityProvider.Models
             // Organization 単位の distinct MAU（参考値）を JOIN なしで出すための索引。
             modelBuilder.Entity<MonthlyActiveUser>()
                 .HasIndex(m => new { m.YearMonth, m.OrganizationId });
+
+            // Stripe Customer は Account と 1:1（EcAuthDocs#119）。null を許すため filtered unique にする
+            //（SQL Server の UNIQUE は NULL を 1 つしか許さないので、そのままだと 2 人目の未登録 Account が弾かれる）。
+            modelBuilder.Entity<Account>()
+                .HasIndex(a => a.StripeCustomerId)
+                .IsUnique()
+                .HasFilter("[stripe_customer_id] IS NOT NULL")
+                .HasDatabaseName("IX_account_stripe_customer_id");
+
+            // StripeWebhookEvent（EcAuthDocs#119）: テナント横断（クエリフィルター対象外）。
+            // 主キー = Stripe のイベント ID。重複配信の排除は INSERT の主キー違反で検出する。
+            modelBuilder.Entity<StripeWebhookEvent>()
+                .Property(e => e.Id)
+                .ValueGeneratedNever();
+
+            // AccountBillingPlan（EcAuthDocs#119）: Account と 1:1、テナント横断（クエリフィルター対象外）。
+            // AccountOrganization と同じく Account.Subject（代替キー）で結ぶ。Account 削除時は一緒に消す。
+            modelBuilder.Entity<AccountBillingPlan>()
+                .HasIndex(p => p.AccountSubject)
+                .IsUnique();
+
+            // 割引の範囲は DB でも縛る（運用 CLI や手作業の UPDATE で範囲外が入ると、計算時に例外で請求が止まる。
+            // 入口で弾く方が早い）。アプリ側の検証は PricingPlan.ValidateDiscount。
+            modelBuilder.Entity<AccountBillingPlan>()
+                .ToTable(t =>
+                {
+                    t.HasCheckConstraint("CK_account_billing_plan_discount_percent",
+                        "[discount_percent] IS NULL OR ([discount_percent] >= 0 AND [discount_percent] <= 100)");
+                    t.HasCheckConstraint("CK_account_billing_plan_discount_jpy",
+                        "[discount_jpy] IS NULL OR [discount_jpy] >= 0");
+                    t.HasCheckConstraint("CK_account_billing_plan_discount_exclusive",
+                        "[discount_percent] IS NULL OR [discount_jpy] IS NULL");
+                    // 逆転・空の有効期間は「どの月にも効かない」行になり、合意した条件が黙って消えるので入口で弾く
+                    t.HasCheckConstraint("CK_account_billing_plan_validity",
+                        "[valid_from] IS NULL OR [valid_until] IS NULL OR [valid_from] < [valid_until]");
+                });
+
+            modelBuilder.Entity<AccountBillingPlan>()
+                .HasOne(p => p.Account)
+                .WithMany()
+                .HasForeignKey(p => p.AccountSubject)
+                .HasPrincipalKey(a => a.Subject)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Client.BillingExempt: 既存行はすべて請求対象（false）。DB 側にも既定値を置き、
+            // 列を追加するマイグレーションが既存 Client を課金対象外にしないようにする。
+            modelBuilder.Entity<Client>()
+                .Property(c => c.BillingExempt)
+                .HasDefaultValue(false);
 
             base.OnModelCreating(modelBuilder);
         }

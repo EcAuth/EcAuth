@@ -78,6 +78,8 @@ namespace IdentityProvider.Test.TestHelpers
     public sealed class RetryingSqliteContext : IDisposable
     {
         private readonly SqliteConnection _connection;
+        private readonly ITenantService _tenantService;
+        private readonly List<EcAuthDbContext> _siblings = new();
 
         public EcAuthDbContext Context { get; }
 
@@ -91,12 +93,31 @@ namespace IdentityProvider.Test.TestHelpers
                 .AddInterceptors(interceptors)
                 .Options;
 
-            Context = new EcAuthDbContext(options, tenantService ?? new MockTenantService());
+            _tenantService = tenantService ?? new MockTenantService();
+            Context = new EcAuthDbContext(options, _tenantService);
             Context.Database.EnsureCreated();
+        }
+
+        /// <summary>
+        /// 同じ DB（同じ接続）を見る別の <see cref="EcAuthDbContext"/>。別リクエストが並行して同じ行を読み書きする
+        /// 状況（Webhook の並行配信など）を再現するのに使う。ChangeTracker は <see cref="Context"/> と独立。
+        /// </summary>
+        public EcAuthDbContext CreateSiblingContext()
+        {
+            var options = new DbContextOptionsBuilder<EcAuthDbContext>()
+                .UseSqlite(_connection, sqlite => sqlite.ExecutionStrategy(d => new RetryingTestExecutionStrategy(d)))
+                .Options;
+            var sibling = new EcAuthDbContext(options, _tenantService);
+            _siblings.Add(sibling);
+            return sibling;
         }
 
         public void Dispose()
         {
+            foreach (var sibling in _siblings)
+            {
+                sibling.Dispose();
+            }
             Context.Dispose();
             _connection.Dispose();
         }

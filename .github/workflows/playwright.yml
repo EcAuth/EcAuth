@@ -146,6 +146,9 @@ jobs:
           ACCOUNTS_REDIRECT_URI=https://localhost:8081/auth/callback
           Signup__ConfirmBaseUrl__accounts=https://localhost:8081
           MagicLink__BaseUrl__accounts=https://localhost:8081
+          Billing__Enabled=true
+          Billing__Provider=Fake
+          Billing__ReturnBaseUrl__accounts=https://localhost:8081
           Email__Provider=Smtp
           Smtp__Host=localhost
           Smtp__Port=1025
