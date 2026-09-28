@@ -93,6 +93,9 @@ namespace IdentityProvider.Controllers
                     as_of = status.Estimate.AsOf,
                     subtotal_jpy = status.Estimate.SubtotalJpy,
                     discount_jpy = status.Estimate.DiscountJpy,
+                    taxable_amount_jpy = status.Estimate.TaxableAmountJpy,
+                    tax_rate_percent = status.Estimate.TaxRatePercent,
+                    consumption_tax_jpy = status.Estimate.ConsumptionTaxJpy,
                     total_jpy = status.Estimate.TotalJpy,
                     plan = new
                     {

@@ -76,5 +76,17 @@ namespace IdentityProvider.Services.Billing
 
             return 0;
         }
+
+        /// <inheritdoc />
+        public long CalculateConsumptionTax(long taxableAmountJpy)
+        {
+            if (taxableAmountJpy < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(taxableAmountJpy), taxableAmountJpy, "課税対象額は 0 以上です。");
+            }
+
+            // 切り捨て（1 請求書・1 税率につき 1 回）。
+            return taxableAmountJpy * IPricingCalculator.ConsumptionTaxRatePercent / 100;
+        }
     }
 }

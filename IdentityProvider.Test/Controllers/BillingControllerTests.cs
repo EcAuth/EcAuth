@@ -48,7 +48,7 @@ namespace IdentityProvider.Test.Controllers
 
         private static IBillingService.Status EmptyStatus(UsageMonth month) =>
             new(false, null, new IBillingService.Estimate(
-                month, DateTimeOffset.UtcNow, 0, 0, 0,
+                month, DateTimeOffset.UtcNow, 0, 0, 0, IPricingCalculator.ConsumptionTaxRatePercent, 0, 0,
                 new IBillingService.PlanSummary(false, null, null, false, false),
                 Array.Empty<IBillingService.OrganizationEstimate>()));
 

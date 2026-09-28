@@ -8,7 +8,7 @@ namespace IdentityProvider.Services.Billing
     /// 料金の 1 帯。<see cref="UpTo"/> 以下の MAU に <see cref="UnitPriceJpy"/> を適用する（<c>null</c> は上限なし）。
     /// </summary>
     /// <param name="UpTo">この帯の上限 MAU（含む）。最後の帯は null</param>
-    /// <param name="UnitPriceJpy">この帯の 1 MAU あたりの単価（円、税込）</param>
+    /// <param name="UnitPriceJpy">この帯の 1 MAU あたりの単価（円、税抜）</param>
     /// <remarks>
     /// 独自料金表の JSON では両方のプロパティを必須にする（最後の帯も <c>"up_to": null</c> を明示）。
     /// 省略や書き間違い（<c>unit_price_jpyy</c> 等）を既定値 0 / null で黙って受け入れると、上限なしの帯が無料になって
@@ -23,7 +23,8 @@ namespace IdentityProvider.Services.Billing
     /// <para>
     /// どちらも段階従量（graduated）: 各帯の単価はその帯に属する MAU の分だけに適用する。
     /// 無料枠を超えた瞬間に一定額が発生する崖を作らず、規模が大きくなるほど限界単価が下がる。
-    /// 表示価格・請求額は税込で、Stripe Tax は使わない。
+    /// 単価は<b>税抜</b>。表示と請求は、Account（1 請求書）ごとに消費税を加えた税込額にする
+    /// （<see cref="IPricingCalculator.CalculateConsumptionTax"/>）。Stripe Tax は使わない。
     /// </para>
     /// <para>
     /// 単価はここにだけ書く。マイページの見込み額と請求額は必ず <see cref="IPricingCalculator"/> を通し、
@@ -43,14 +44,14 @@ namespace IdentityProvider.Services.Billing
             WriteIndented = false,
         };
 
-        /// <summary>B2B パスキー（管理画面）: Client ごとに 5 MAU まで無料、6 MAU 目以降 ¥100/MAU/月。</summary>
+        /// <summary>B2B パスキー（管理画面）: Client ごとに 5 MAU まで無料、6 MAU 目以降 ¥100/MAU/月（税抜）。</summary>
         public static readonly IReadOnlyList<PriceTier> B2B = new[]
         {
             new PriceTier(5, 0),
             new PriceTier(null, 100),
         };
 
-        /// <summary>B2C フロント認証: 〜50 無料 / 51〜1,000 ¥20 / 1,001〜5,000 ¥15 / 5,001〜 ¥10。</summary>
+        /// <summary>B2C フロント認証: 〜50 無料 / 51〜1,000 ¥20 / 1,001〜5,000 ¥15 / 5,001〜 ¥10（税抜）。</summary>
         public static readonly IReadOnlyList<PriceTier> B2C = new[]
         {
             new PriceTier(50, 0),

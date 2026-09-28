@@ -26,8 +26,8 @@ namespace IdentityProvider.Services.Billing
         /// <param name="MonthlyActiveUsers">Client の当月 MAU</param>
         /// <param name="FreeTierMau">無料枠（適用した料金表）</param>
         /// <param name="BillableUnits">無料枠を超えた MAU</param>
-        /// <param name="ListPriceJpy">料金表どおりの金額（円、税込、割引前）。請求対象外でも計算して見せる</param>
-        /// <param name="AmountJpy">請求見込み（円、税込、割引前）。請求対象外なら 0</param>
+        /// <param name="ListPriceJpy">料金表どおりの金額（円、税抜、割引前）。請求対象外でも計算して見せる</param>
+        /// <param name="AmountJpy">請求見込み（円、税抜、割引前）。請求対象外なら 0</param>
         /// <param name="IsBillable">この Client の当月分を請求するか</param>
         /// <param name="ExemptReason">請求しない理由（<see cref="ExemptReasons"/>）。請求対象なら null</param>
         /// <param name="CustomPricing">Account の独自料金表で計算したか</param>
@@ -46,7 +46,7 @@ namespace IdentityProvider.Services.Billing
             bool CustomPricing);
 
         /// <param name="IsBillable">Organization として請求対象か（サンドボックス / 内部 / 対象月前に削除済みは false）</param>
-        /// <param name="AmountJpy">配下 Client の <see cref="ClientEstimate.AmountJpy"/> の和（割引前）</param>
+        /// <param name="AmountJpy">配下 Client の <see cref="ClientEstimate.AmountJpy"/> の和（税抜、割引前）</param>
         public sealed record OrganizationEstimate(
             int OrganizationId,
             string Code,
@@ -70,14 +70,20 @@ namespace IdentityProvider.Services.Billing
 
         /// <param name="Month">対象月</param>
         /// <param name="AsOf">集計時刻（UTC）</param>
-        /// <param name="SubtotalJpy">請求対象 Client の合計（割引前）</param>
-        /// <param name="DiscountJpy">割引額（正の値）。請求書では負の 1 行</param>
-        /// <param name="TotalJpy"><c>SubtotalJpy - DiscountJpy</c>（0 以上）</param>
+        /// <param name="SubtotalJpy">請求対象 Client の合計（税抜、割引前）</param>
+        /// <param name="DiscountJpy">割引額（正の値、税抜）。請求書では負の 1 行</param>
+        /// <param name="TaxableAmountJpy">課税対象額 = <c>SubtotalJpy - DiscountJpy</c>（税抜、0 以上）</param>
+        /// <param name="TaxRatePercent">消費税率（%）</param>
+        /// <param name="ConsumptionTaxJpy">消費税額。<see cref="IPricingCalculator.CalculateConsumptionTax"/> で請求書 1 枚につき 1 回計算</param>
+        /// <param name="TotalJpy">請求額（税込）= <c>TaxableAmountJpy + ConsumptionTaxJpy</c>。マイページはこれを総額表示する</param>
         public sealed record Estimate(
             UsageMonth Month,
             DateTimeOffset AsOf,
             long SubtotalJpy,
             long DiscountJpy,
+            long TaxableAmountJpy,
+            int TaxRatePercent,
+            long ConsumptionTaxJpy,
             long TotalJpy,
             PlanSummary Plan,
             IReadOnlyList<OrganizationEstimate> Organizations);
