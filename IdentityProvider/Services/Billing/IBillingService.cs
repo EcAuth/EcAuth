@@ -72,18 +72,12 @@ namespace IdentityProvider.Services.Billing
         /// <param name="AsOf">集計時刻（UTC）</param>
         /// <param name="SubtotalJpy">請求対象 Client の合計（税抜、割引前）</param>
         /// <param name="DiscountJpy">割引額（正の値、税抜）。請求書では負の 1 行</param>
-        /// <param name="TaxableAmountJpy">課税対象額 = <c>SubtotalJpy - DiscountJpy</c>（税抜、0 以上）</param>
-        /// <param name="TaxRatePercent">消費税率（%）</param>
-        /// <param name="ConsumptionTaxJpy">消費税額。<see cref="IPricingCalculator.CalculateConsumptionTax"/> で請求書 1 枚につき 1 回計算</param>
-        /// <param name="TotalJpy">請求額（税込）= <c>TaxableAmountJpy + ConsumptionTaxJpy</c>。マイページはこれを総額表示する</param>
+        /// <param name="TotalJpy"><c>SubtotalJpy - DiscountJpy</c>（税抜、0 以上）。消費税は請求時に Stripe の TaxRate で加わる</param>
         public sealed record Estimate(
             UsageMonth Month,
             DateTimeOffset AsOf,
             long SubtotalJpy,
             long DiscountJpy,
-            long TaxableAmountJpy,
-            int TaxRatePercent,
-            long ConsumptionTaxJpy,
             long TotalJpy,
             PlanSummary Plan,
             IReadOnlyList<OrganizationEstimate> Organizations);

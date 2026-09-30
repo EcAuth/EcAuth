@@ -122,9 +122,6 @@ test.describe.serial('課金 API（Fake provider）', () => {
     expect(estimate.year_month).toBe(currentYearMonth);
     expect(estimate.subtotal_jpy).toBe(0);
     expect(estimate.discount_jpy).toBe(0);
-    expect(estimate.taxable_amount_jpy).toBe(0);
-    expect(estimate.tax_rate_percent).toBe(10);
-    expect(estimate.consumption_tax_jpy).toBe(0);
     expect(estimate.total_jpy).toBe(0);
     expect(estimate.plan.exempt).toBe(false);
 

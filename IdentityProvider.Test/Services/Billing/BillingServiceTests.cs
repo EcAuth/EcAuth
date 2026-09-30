@@ -107,10 +107,7 @@ namespace IdentityProvider.Test.Services.Billing
             var est = status.Estimate;
             Assert.Equal(1_500, est.SubtotalJpy);   // B2B 10 → ¥500, B2C 100 → ¥1,000（税抜）
             Assert.Equal(0, est.DiscountJpy);
-            Assert.Equal(1_500, est.TaxableAmountJpy);
-            Assert.Equal(10, est.TaxRatePercent);
-            Assert.Equal(150, est.ConsumptionTaxJpy);
-            Assert.Equal(1_650, est.TotalJpy);     // 税込
+            Assert.Equal(1_500, est.TotalJpy);
             Assert.False(est.Plan.Exempt);
             var org = Assert.Single(est.Organizations);
             Assert.Equal(1_500, org.AmountJpy);
@@ -140,8 +137,7 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.Equal(0, clients[0].AmountJpy);
             Assert.Null(clients[1].ExemptReason);
             Assert.Null(clients[2].ExemptReason);
-            Assert.Equal(1_000, est.TaxableAmountJpy);
-            Assert.Equal(1_100, est.TotalJpy);
+            Assert.Equal(1_000, est.TotalJpy);
         }
 
         [Fact]
@@ -155,8 +151,7 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.Equal(IBillingService.ExemptReasons.ClientExempt, clients[0].ExemptReason);
             Assert.False(clients[0].IsBillable);
             Assert.Equal(1_000, clients[0].ListPriceJpy);
-            Assert.Equal(1_000, est.TaxableAmountJpy);
-            Assert.Equal(1_100, est.TotalJpy);
+            Assert.Equal(1_000, est.TotalJpy);
         }
 
         [Fact]
@@ -184,7 +179,6 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.All(est.Organizations.Single().Clients, c => Assert.Equal(IBillingService.ExemptReasons.AccountExempt, c.ExemptReason));
             Assert.Equal(19_000, est.Organizations.Single().Clients[0].ListPriceJpy);
             Assert.Equal(0, est.SubtotalJpy);
-            Assert.Equal(0, est.ConsumptionTaxJpy);
             Assert.Equal(0, est.TotalJpy);
         }
 
@@ -199,9 +193,7 @@ namespace IdentityProvider.Test.Services.Billing
 
             Assert.Equal(10_000, est!.SubtotalJpy);   // 1,000 + 9,000（除外 Client は含まない）
             Assert.Equal(1_000, est.DiscountJpy);
-            Assert.Equal(9_000, est.TaxableAmountJpy);  // 消費税は割引後に掛ける
-            Assert.Equal(900, est.ConsumptionTaxJpy);
-            Assert.Equal(9_900, est.TotalJpy);
+            Assert.Equal(9_000, est.TotalJpy);
             Assert.Equal(10, est.Plan.DiscountPercent);
         }
 
@@ -216,34 +208,19 @@ namespace IdentityProvider.Test.Services.Billing
 
             Assert.Equal(1_000, est!.SubtotalJpy);
             Assert.Equal(1_000, est.DiscountJpy);
-            Assert.Equal(0, est.TaxableAmountJpy);
-            Assert.Equal(0, est.ConsumptionTaxJpy);
             Assert.Equal(0, est.TotalJpy);
-        }
-
-        [Fact]
-        public async Task Estimate_ConsumptionTax_RoundedOncePerAccountNotPerClient()
-        {
-            // B2C 1,001 MAU = ¥19,000 + ¥15 = ¥19,015（税抜）。Client ごとに税額を出すと 1,901.5 → 1,901 が 2 つで ¥3,802 だが、
-            // 適格請求書の端数処理は 1 請求書・1 税率につき 1 回（国税庁 インボイス Q&A 問 57）なので ¥38,030 × 10% = ¥3,803。
-            SetupReport(orgBillable: true, Client(1, SubjectType.B2C, 1_001), Client(2, SubjectType.B2C, 1_001));
-
-            var est = await _service.GetEstimateAsync(Subject, _month, CancellationToken.None);
-
-            Assert.Equal(38_030, est!.TaxableAmountJpy);
-            Assert.Equal(3_803, est.ConsumptionTaxJpy);
-            Assert.Equal(41_833, est.TotalJpy);
         }
 
         [Fact]
         public async Task Estimate_AmountBeyondLongRange_ThrowsInsteadOfWrappedTotal()
         {
             // 検証を通る極端な独自料金表（単価 int.MaxValue）× MAU int.MaxValue。小計（約 4.6×10^18）は long に収まるが、
-            // 消費税の計算で収まらなくなる。負の見込み額を黙って返さず例外にする。
+            // 割引率を掛けた時点で収まらなくなる。負の見込み額を黙って返さず例外にする。
             _context.AccountBillingPlans.Add(new AccountBillingPlan
             {
                 AccountSubject = Subject,
                 B2BTiersJson = $$"""[{"up_to":null,"unit_price_jpy":{{int.MaxValue}}}]""",
+                DiscountPercent = 10,
             });
             await _context.SaveChangesAsync();
             SetupReport(orgBillable: true, Client(1, SubjectType.B2B, int.MaxValue));

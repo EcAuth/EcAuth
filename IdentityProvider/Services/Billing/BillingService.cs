@@ -400,8 +400,7 @@ namespace IdentityProvider.Services.Billing
         /// <para>
         /// 請求対象外の判定順: Account 全体の除外 → Organization（サンドボックス / 内部 / 削除済み）→ Client の除外 →
         /// 初月無料（<c>client.created_at</c> が対象月の中）。対象外でも料金表どおりの金額（<c>ListPriceJpy</c>）は見せ、
-        /// 請求見込み（<c>AmountJpy</c>）だけ 0 にする。Client ごとの金額は税抜で、割引と消費税は請求対象 Client の
-        /// 合計に対して 1 回ずつ（割引 → 消費税の順。消費税は割引後の課税対象額に掛ける）。
+        /// 請求見込み（<c>AmountJpy</c>）だけ 0 にする。金額はすべて税抜で、割引は請求対象 Client の合計に対して 1 回。
         /// </para>
         /// </summary>
         public IBillingService.Estimate BuildEstimate(IUsageReportService.UsageReport report, PricingPlan plan)
@@ -436,18 +435,12 @@ namespace IdentityProvider.Services.Billing
             }
 
             var discount = _pricing.CalculateDiscount(plan, subtotal);
-            var taxable = subtotal - discount;
-            // 消費税は Account（= 月次 Invoice 1 枚）の課税対象額に対して 1 回だけ計算する（明細ごとに丸めない）。
-            var tax = _pricing.CalculateConsumptionTax(taxable);
             return new IBillingService.Estimate(
                 report.Month,
                 report.AsOf,
                 subtotal,
                 discount,
-                taxable,
-                IPricingCalculator.ConsumptionTaxRatePercent,
-                tax,
-                checked(taxable + tax),
+                subtotal - discount,
                 new IBillingService.PlanSummary(
                     plan.Exempt, plan.DiscountPercent, plan.DiscountJpy,
                     plan.B2BTiers != null, plan.B2CTiers != null),

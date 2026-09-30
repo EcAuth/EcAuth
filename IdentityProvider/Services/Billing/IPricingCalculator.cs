@@ -5,7 +5,8 @@ namespace IdentityProvider.Services.Billing
     /// <summary>
     /// MAU から月額を計算する（EcAuthDocs#119）。料金表は <see cref="PricingTable"/>、Account 別の調整は <see cref="PricingPlan"/>。
     /// マイページの見込み額（<c>GET /v1/account/billing</c>）と月次の Invoice 起票が同じ実装を通ることで、
-    /// 顧客に見せた金額と請求額が構造的に一致する。帯の計算・割引・消費税の丸めはここ以外に書かないこと。
+    /// 顧客に見せた金額と請求額（どちらも税抜）が構造的に一致する。帯の計算と割引の丸めはここ以外に書かないこと。
+    /// 消費税は EcAuth では計算せず、Invoice に付けた Stripe の TaxRate で Stripe が計算する（<see cref="PricingTable"/>）。
     /// </summary>
     public interface IPricingCalculator
     {
@@ -20,7 +21,7 @@ namespace IdentityProvider.Services.Billing
         /// <param name="MonthlyActiveUsers">入力の MAU</param>
         /// <param name="FreeTierMau">無料枠（適用した料金表の先頭無料帯の上限）</param>
         /// <param name="BillableUnits">無料枠を超えた MAU 数</param>
-        /// <param name="AmountJpy">合計（円、税抜）。割引と消費税は含まない（どちらも Account 合計に対して 1 回）</param>
+        /// <param name="AmountJpy">合計（円、税抜）。割引は含まない（割引は Account 合計に対して 1 回）</param>
         /// <param name="Bands">帯ごとの内訳（MAU 0 の帯は含めない）。請求書の明細とマイページの内訳表示に使う</param>
         /// <param name="CustomPricing">標準ではなく Account の独自料金表で計算したか</param>
         public sealed record Quote(
@@ -47,18 +48,5 @@ namespace IdentityProvider.Services.Billing
         /// 割引が無ければ 0。請求書には負の 1 行として載せる。
         /// </summary>
         long CalculateDiscount(PricingPlan plan, long subtotalJpy);
-
-        /// <summary>消費税率（%）。軽減税率の対象は無いので 1 税率のみ。</summary>
-        const int ConsumptionTaxRatePercent = 10;
-
-        /// <summary>
-        /// 課税対象額（Account の税抜合計から割引を引いた額）に対する消費税額（円）。
-        /// <para>
-        /// 国税庁の適格請求書の端数処理（インボイス Q&amp;A 問 57、消令 70 の 10）に従い、<b>1 請求書・1 税率につき 1 回だけ</b>
-        /// 端数処理する。Client（明細）ごとに税額を出して合計してはいけない。端数処理の方法は任意とされており、切り捨てにする。
-        /// 月次の Invoice は Account ごとに 1 枚なので、Account 合計に対して 1 回呼ぶ。
-        /// </para>
-        /// </summary>
-        long CalculateConsumptionTax(long taxableAmountJpy);
     }
 }

@@ -389,16 +389,17 @@ spec は受信口を直接触らず、`tests/helpers/mailbox.ts` の `Mailbox` �
 （B2B 〜5 無料 / 6〜 ¥100、B2C 〜50 無料 / 51〜1,000 ¥20 / 1,001〜5,000 ¥15 / 5,001〜 ¥10、**単価は税抜**）。
 Stripe は Subscription / Meter ではなく **月次 Invoice 方式**（毎月 1 日に前月分を起票、2 日後に自動確定）。
 見込み額（`GET /v1/account/billing`）と請求額は必ず `IBillingService.BuildEstimate` →
-`IPricingPlanResolver` / `IPricingCalculator` を通す。帯の計算・割引と消費税の丸め・請求対象外の判定を他所に複製しない
+`IPricingPlanResolver` / `IPricingCalculator` を通す。帯の計算・割引の丸め・請求対象外の判定を他所に複製しない
 （`IUsageReportService` の集計と同じ複製禁止ルール）。
 
-**消費税も EcAuth で計算する**（Stripe Tax も Stripe の TaxRate も使わず、Stripe には計算済みの金額だけを送る）。
-Client ごとの金額は税抜で、Account（= 月次 Invoice 1 枚）の税抜合計 − 割引 = 課税対象額に 10% を掛け、
-**1 請求書・1 税率につき 1 回だけ切り捨て**る（`IPricingCalculator.CalculateConsumptionTax`）。国税庁の適格請求書の
-端数処理（インボイス Q&A 問 57、消令 70 の 10）で、Client（明細）ごとに税額を丸めて合計するのは認められないため。
-見込み額は `subtotal_jpy`（税抜）/ `discount_jpy` / `taxable_amount_jpy` / `tax_rate_percent` / `consumption_tax_jpy` /
-`total_jpy`（税込）を返し、マイページは `total_jpy` を総額表示（「110 円（税込）」の形）する。適格請求書発行事業者の
-登録番号は T2140001114345（スキルニル株式会社）。
+**消費税は EcAuth では計算しない**。見込み額も請求額（InvoiceItem）も税抜で、消費税は月次 Invoice に Stripe の
+**TaxRate**（10%、`inclusive=false`）を付けて Stripe に計算させる。国税庁の適格請求書の端数処理（1 請求書・1 税率につき
+1 回。インボイス Q&A 問 57）を満たすため、Stripe の請求書設定の端数処理は**請求書レベル**にしておく（既定の明細ごとの
+丸めは不可）。丸め方向は Stripe の仕様で四捨五入。登録番号 T2140001114345（スキルニル株式会社）はアカウントの tax ID
+（`jp_trn`）として請求書 PDF に出す。顧客側の Customer には `jp_trn` を付けない（Stripe Tax では課税判定に使われる tax ID のため。国内取引での挙動は未検証）。
+**Stripe Tax は使わない**（手数料がかかるため）。海外の顧客に売るときに Stripe Tax（`automatic_tax`）へ切り替える。
+EcAuth 側は税抜の金額を渡すだけなので、切り替えは Invoice の作り方の差で済む。見込み額（`GET /v1/account/billing`）の
+`subtotal_jpy` / `discount_jpy` / `total_jpy` はすべて税抜で、マイページは「別途消費税」と添えて見せる。
 
 **請求対象外の判定順**（`exempt_reason`）: `account_exempt`（`account_billing_plan.billing_exempt`）→
 `organization_not_billable`（サンドボックス / 内部 / 対象月前に削除）→ `client_exempt`（`client.billing_exempt`）→

@@ -23,8 +23,8 @@ namespace IdentityProvider.Services.Billing
     /// <para>
     /// どちらも段階従量（graduated）: 各帯の単価はその帯に属する MAU の分だけに適用する。
     /// 無料枠を超えた瞬間に一定額が発生する崖を作らず、規模が大きくなるほど限界単価が下がる。
-    /// 単価は<b>税抜</b>。表示と請求は、Account（1 請求書）ごとに消費税を加えた税込額にする
-    /// （<see cref="IPricingCalculator.CalculateConsumptionTax"/>）。Stripe Tax は使わない。
+    /// 単価は<b>税抜</b>。消費税は EcAuth では計算せず、月次 Invoice に Stripe の TaxRate（10%、税抜）を付けて Stripe に
+    /// 計算させる。見込み額（マイページ）も税抜で見せる。海外の顧客に売るときは Stripe Tax に切り替える（EcAuthDocs#119）。
     /// </para>
     /// <para>
     /// 単価はここにだけ書く。マイページの見込み額と請求額は必ず <see cref="IPricingCalculator"/> を通し、

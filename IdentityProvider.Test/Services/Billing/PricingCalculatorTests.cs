@@ -193,33 +193,6 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.Throws<ArgumentOutOfRangeException>(() => _calculator.CalculateDiscount(plan, 10_000));
         }
 
-        // ---- 消費税（1 請求書・1 税率につき 1 回、切り捨て。国税庁 インボイス Q&A 問 57） ----
-
-        [Theory]
-        [InlineData(0, 0)]
-        [InlineData(100, 10)]          // B2B 6 MAU = ¥100 → 税込 ¥110
-        [InlineData(19_015, 1_901)]    // 1,901.5 → 切り捨て
-        [InlineData(38_030, 3_803)]
-        [InlineData(9, 0)]             // 0.9 → 切り捨て
-        public void CalculateConsumptionTax_TenPercentFloored(long taxable, long expected)
-        {
-            Assert.Equal(10, IPricingCalculator.ConsumptionTaxRatePercent);
-            Assert.Equal(expected, _calculator.CalculateConsumptionTax(taxable));
-        }
-
-        [Fact]
-        public void CalculateConsumptionTax_Negative_Throws()
-        {
-            Assert.Throws<ArgumentOutOfRangeException>(() => _calculator.CalculateConsumptionTax(-1));
-        }
-
-        [Fact]
-        public void CalculateConsumptionTax_Overflow_ThrowsInsteadOfNegative()
-        {
-            // 税率を掛けた時点で long を超える額。桁あふれした負の税額を返さず例外にする。
-            Assert.Throws<OverflowException>(() => _calculator.CalculateConsumptionTax(long.MaxValue / 10 + 1));
-        }
-
         [Fact]
         public void CalculateDiscount_PercentOverflow_ThrowsInsteadOfNegative()
         {
