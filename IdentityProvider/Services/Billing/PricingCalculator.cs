@@ -66,7 +66,7 @@ namespace IdentityProvider.Services.Billing
             if (plan.DiscountPercent is int percent && percent > 0)
             {
                 // 切り捨て（¥1 未満は顧客側に寄せない）。100% なら小計そのまま。
-                return subtotalJpy * percent / 100;
+                return checked(subtotalJpy * percent) / 100;
             }
 
             if (plan.DiscountJpy is long fixedJpy && fixedJpy > 0)
@@ -85,8 +85,8 @@ namespace IdentityProvider.Services.Billing
                 throw new ArgumentOutOfRangeException(nameof(taxableAmountJpy), taxableAmountJpy, "課税対象額は 0 以上です。");
             }
 
-            // 切り捨て（1 請求書・1 税率につき 1 回）。
-            return taxableAmountJpy * IPricingCalculator.ConsumptionTaxRatePercent / 100;
+            // 切り捨て（1 請求書・1 税率につき 1 回）。桁あふれは負の税額を黙って返さず OverflowException にする。
+            return checked(taxableAmountJpy * IPricingCalculator.ConsumptionTaxRatePercent) / 100;
         }
     }
 }

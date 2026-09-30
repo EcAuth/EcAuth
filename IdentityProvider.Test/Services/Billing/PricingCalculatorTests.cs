@@ -212,5 +212,19 @@ namespace IdentityProvider.Test.Services.Billing
         {
             Assert.Throws<ArgumentOutOfRangeException>(() => _calculator.CalculateConsumptionTax(-1));
         }
+
+        [Fact]
+        public void CalculateConsumptionTax_Overflow_ThrowsInsteadOfNegative()
+        {
+            // 税率を掛けた時点で long を超える額。桁あふれした負の税額を返さず例外にする。
+            Assert.Throws<OverflowException>(() => _calculator.CalculateConsumptionTax(long.MaxValue / 10 + 1));
+        }
+
+        [Fact]
+        public void CalculateDiscount_PercentOverflow_ThrowsInsteadOfNegative()
+        {
+            var plan = PricingPlan.Default with { DiscountPercent = 50 };
+            Assert.Throws<OverflowException>(() => _calculator.CalculateDiscount(plan, long.MaxValue / 50 + 1));
+        }
     }
 }

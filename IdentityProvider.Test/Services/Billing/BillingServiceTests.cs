@@ -236,6 +236,22 @@ namespace IdentityProvider.Test.Services.Billing
         }
 
         [Fact]
+        public async Task Estimate_AmountBeyondLongRange_ThrowsInsteadOfWrappedTotal()
+        {
+            // 検証を通る極端な独自料金表（単価 int.MaxValue）× MAU int.MaxValue。小計（約 4.6×10^18）は long に収まるが、
+            // 消費税の計算で収まらなくなる。負の見込み額を黙って返さず例外にする。
+            _context.AccountBillingPlans.Add(new AccountBillingPlan
+            {
+                AccountSubject = Subject,
+                B2BTiersJson = $$"""[{"up_to":null,"unit_price_jpy":{{int.MaxValue}}}]""",
+            });
+            await _context.SaveChangesAsync();
+            SetupReport(orgBillable: true, Client(1, SubjectType.B2B, int.MaxValue));
+
+            await Assert.ThrowsAsync<OverflowException>(() => _service.GetEstimateAsync(Subject, _month, CancellationToken.None));
+        }
+
+        [Fact]
         public async Task Estimate_CustomTiers_UsedForThatSubjectType()
         {
             _context.AccountBillingPlans.Add(new AccountBillingPlan

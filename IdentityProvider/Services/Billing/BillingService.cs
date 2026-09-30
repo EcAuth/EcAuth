@@ -428,11 +428,11 @@ namespace IdentityProvider.Services.Billing
                         IsBillable: reason == null,
                         ExemptReason: reason,
                         CustomPricing: quote.CustomPricing));
-                    orgTotal += amount;
+                    orgTotal = checked(orgTotal + amount);
                 }
                 organizations.Add(new IBillingService.OrganizationEstimate(
                     org.OrganizationId, org.Code, org.Name, org.IsSandbox, org.IsBillable, orgTotal, clients));
-                subtotal += orgTotal;
+                subtotal = checked(subtotal + orgTotal);
             }
 
             var discount = _pricing.CalculateDiscount(plan, subtotal);
@@ -447,7 +447,7 @@ namespace IdentityProvider.Services.Billing
                 taxable,
                 IPricingCalculator.ConsumptionTaxRatePercent,
                 tax,
-                taxable + tax,
+                checked(taxable + tax),
                 new IBillingService.PlanSummary(
                     plan.Exempt, plan.DiscountPercent, plan.DiscountJpy,
                     plan.B2BTiers != null, plan.B2CTiers != null),
