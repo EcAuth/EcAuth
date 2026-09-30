@@ -400,7 +400,7 @@ namespace IdentityProvider.Services.Billing
         /// <para>
         /// 請求対象外の判定順: Account 全体の除外 → Organization（サンドボックス / 内部 / 削除済み）→ Client の除外 →
         /// 初月無料（<c>client.created_at</c> が対象月の中）。対象外でも料金表どおりの金額（<c>ListPriceJpy</c>）は見せ、
-        /// 請求見込み（<c>AmountJpy</c>）だけ 0 にする。割引は請求対象 Client の合計に対して 1 回。
+        /// 請求見込み（<c>AmountJpy</c>）だけ 0 にする。金額はすべて税抜で、割引は請求対象 Client の合計に対して 1 回。
         /// </para>
         /// </summary>
         public IBillingService.Estimate BuildEstimate(IUsageReportService.UsageReport report, PricingPlan plan)
@@ -427,11 +427,11 @@ namespace IdentityProvider.Services.Billing
                         IsBillable: reason == null,
                         ExemptReason: reason,
                         CustomPricing: quote.CustomPricing));
-                    orgTotal += amount;
+                    orgTotal = checked(orgTotal + amount);
                 }
                 organizations.Add(new IBillingService.OrganizationEstimate(
                     org.OrganizationId, org.Code, org.Name, org.IsSandbox, org.IsBillable, orgTotal, clients));
-                subtotal += orgTotal;
+                subtotal = checked(subtotal + orgTotal);
             }
 
             var discount = _pricing.CalculateDiscount(plan, subtotal);

@@ -66,7 +66,7 @@ namespace IdentityProvider.Services.Billing
             if (plan.DiscountPercent is int percent && percent > 0)
             {
                 // 切り捨て（¥1 未満は顧客側に寄せない）。100% なら小計そのまま。
-                return subtotalJpy * percent / 100;
+                return checked(subtotalJpy * percent) / 100;
             }
 
             if (plan.DiscountJpy is long fixedJpy && fixedJpy > 0)

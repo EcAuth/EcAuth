@@ -5,14 +5,15 @@ namespace IdentityProvider.Services.Billing
     /// <summary>
     /// MAU から月額を計算する（EcAuthDocs#119）。料金表は <see cref="PricingTable"/>、Account 別の調整は <see cref="PricingPlan"/>。
     /// マイページの見込み額（<c>GET /v1/account/billing</c>）と月次の Invoice 起票が同じ実装を通ることで、
-    /// 顧客に見せた金額と請求額が構造的に一致する。帯の計算と割引の丸めはここ以外に書かないこと。
+    /// 顧客に見せた金額と請求額（どちらも税抜）が構造的に一致する。帯の計算と割引の丸めはここ以外に書かないこと。
+    /// 消費税は EcAuth では計算せず、Invoice に付けた Stripe の TaxRate で Stripe が計算する（<see cref="PricingTable"/>）。
     /// </summary>
     public interface IPricingCalculator
     {
         /// <param name="From">この帯で数えた最初の MAU（1 始まり）</param>
         /// <param name="To">この帯で数えた最後の MAU</param>
         /// <param name="Units">この帯に属する MAU 数（<c>To - From + 1</c>）</param>
-        /// <param name="UnitPriceJpy">単価（円）</param>
+        /// <param name="UnitPriceJpy">単価（円、税抜）</param>
         /// <param name="AmountJpy"><c>Units × UnitPriceJpy</c></param>
         public sealed record Band(int From, int To, int Units, int UnitPriceJpy, long AmountJpy);
 
@@ -20,7 +21,7 @@ namespace IdentityProvider.Services.Billing
         /// <param name="MonthlyActiveUsers">入力の MAU</param>
         /// <param name="FreeTierMau">無料枠（適用した料金表の先頭無料帯の上限）</param>
         /// <param name="BillableUnits">無料枠を超えた MAU 数</param>
-        /// <param name="AmountJpy">合計（円、税込）。割引は含まない（割引は Account 合計に対して 1 回）</param>
+        /// <param name="AmountJpy">合計（円、税抜）。割引は含まない（割引は Account 合計に対して 1 回）</param>
         /// <param name="Bands">帯ごとの内訳（MAU 0 の帯は含めない）。請求書の明細とマイページの内訳表示に使う</param>
         /// <param name="CustomPricing">標準ではなく Account の独自料金表で計算したか</param>
         public sealed record Quote(

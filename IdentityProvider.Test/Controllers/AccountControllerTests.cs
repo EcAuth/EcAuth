@@ -1286,7 +1286,8 @@ namespace IdentityProvider.Test.Controllers
         {
             // 未来月をゼロで返すと「集計されていない」と誤解されるため弾く
             AuthenticateAsOwnerOf((1, "shop1"));
-            var nextMonth = UsageMonth.FromInstant(DateTimeOffset.UtcNow.AddMonths(1)).Value;
+            // UTC の現在時刻に 1 か月足すと、JST の月初 0〜9 時は JST の当月になってしまう。JST の当月の月初から数える。
+            var nextMonth = UsageMonth.FromInstant(UsageMonth.Current().Start.AddMonths(1)).Value;
 
             var result = await _controller.GetUsage(nextMonth);
 

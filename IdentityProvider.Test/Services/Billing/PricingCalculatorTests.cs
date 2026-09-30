@@ -192,5 +192,12 @@ namespace IdentityProvider.Test.Services.Billing
             var plan = PricingPlan.Default with { DiscountPercent = 101 };
             Assert.Throws<ArgumentOutOfRangeException>(() => _calculator.CalculateDiscount(plan, 10_000));
         }
+
+        [Fact]
+        public void CalculateDiscount_PercentOverflow_ThrowsInsteadOfNegative()
+        {
+            var plan = PricingPlan.Default with { DiscountPercent = 50 };
+            Assert.Throws<OverflowException>(() => _calculator.CalculateDiscount(plan, long.MaxValue / 50 + 1));
+        }
     }
 }
