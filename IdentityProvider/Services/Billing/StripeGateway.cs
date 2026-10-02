@@ -149,6 +149,13 @@ namespace IdentityProvider.Services.Billing
                     $"Stripe の Webhook 署名シークレットが未設定です（{ConfigKey("WebhookSecret", tenantName)}）。");
             }
 
+            // Stripe.net はヘッダーが無いと StripeException ではなく NullReferenceException を投げる（500 になる）ので、
+            // 署名不正と同じ扱いにして先に弾く。本物の Stripe の配信には必ず付く。
+            if (string.IsNullOrWhiteSpace(signatureHeader))
+            {
+                throw new StripeWebhookSignatureException("Stripe-Signature ヘッダーがありません。");
+            }
+
             Event stripeEvent;
             try
             {

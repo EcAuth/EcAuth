@@ -1,4 +1,8 @@
+using System.Security.Cryptography;
+using System.Text;
 using IdentityProvider.Services.Billing;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Newtonsoft.Json.Linq;
 using Stripe;
 using Xunit;
@@ -72,6 +76,47 @@ namespace IdentityProvider.Test.Services.Billing
         {
             var envelope = StripeGateway.ToEnvelope(MakeEvent("customer.updated", new Customer { Id = "cus_2" }));
             Assert.Equal("cus_2", envelope.CustomerId);
+        }
+
+        // ---- ParseWebhookEvent（署名検証は Stripe.net。ここでは例外の種類を 400 に揃えることを確かめる） ----
+
+        private const string WebhookSecret = "whsec_test_secret";
+        private const string WebhookPayload = """{"id":"evt_1","object":"event","type":"customer.updated","data":{"object":{"id":"cus_1","object":"customer"}}}""";
+
+        private static StripeGateway MakeGateway() => new(
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Stripe:WebhookSecret:accounts"] = WebhookSecret })
+                .Build(),
+            NullLogger<StripeGateway>.Instance);
+
+        private static string Sign(string payload, long timestamp)
+        {
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(WebhookSecret));
+            var signature = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{timestamp}.{payload}"));
+            return $"t={timestamp},v1={Convert.ToHexString(signature).ToLowerInvariant()}";
+        }
+
+        [Fact]
+        public void ParseWebhookEvent_ValidSignature_ReturnsEnvelope()
+        {
+            var header = Sign(WebhookPayload, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+            var envelope = MakeGateway().ParseWebhookEvent("accounts", WebhookPayload, header);
+
+            Assert.Equal("evt_1", envelope.Id);
+            Assert.Equal("cus_1", envelope.CustomerId);
+        }
+
+        [Theory]
+        [InlineData(null)]       // ヘッダー無し。Stripe.net は NullReferenceException を投げる（本番で 500 になった）
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("garbage")]  // t= / v1= の無い形
+        [InlineData("t=1,v1=deadbeef")]
+        public void ParseWebhookEvent_MissingOrInvalidSignature_ThrowsSignatureException(string? header)
+        {
+            Assert.Throws<StripeWebhookSignatureException>(
+                () => MakeGateway().ParseWebhookEvent("accounts", WebhookPayload, header));
         }
 
         [Fact]
