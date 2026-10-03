@@ -61,6 +61,9 @@ builder.Services.PostConfigure<HostFilteringOptions>(options =>
 
 builder.Services.AddScoped<IIssuerResolver, IssuerResolver>();
 builder.Services.AddScoped<ITenantService, TenantService>();
+// ecauth-website の PR プレビュー（stg-accounts の *.ecauth-website-stg.pages.dev 等）をテナント別のパターンで許可する（EcAuthDocs#159）。
+// CORS・確認 URL・マジックリンク・課金の戻り先・パスキーページの戻り先、プレビュー redirect_uri 登録 API が共用する。
+builder.Services.AddScoped<IPreviewOriginResolver, PreviewOriginResolver>();
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<IAccountService, AccountService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
@@ -253,6 +256,9 @@ builder.Services.AddCors(options =>
               .WithMethods("GET", "POST", "OPTIONS");
     });
 });
+// SignupApiCors にテナント別の PR プレビューのオリジンを足す（PreviewOriginCorsPolicyProvider）。
+// AddCors が登録する DefaultCorsPolicyProvider を置き換え、内部で委譲する。
+builder.Services.AddTransient<Microsoft.AspNetCore.Cors.Infrastructure.ICorsPolicyProvider, PreviewOriginCorsPolicyProvider>();
 builder.Services.AddControllers();
 builder.Services.AddMvc();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -357,11 +363,13 @@ app.UseWhen(
     appBuilder => appBuilder.UseCors(PlatformApiConstants.CorsPolicy)
 );
 
+app.UseMiddleware<TenantMiddleware>();
+
 // Account 申込 API（/api/signup）の CORS。Controller の [EnableCors] 属性で
 // SignupController.CorsPolicy を適用するため、パイプラインに CORS ミドルウェアを配置する。
+// PR プレビューの許可はテナント別（PreviewOriginCorsPolicyProvider が ITenantService を見る）なので、
+// TenantMiddleware の後に置く。
 app.UseCors();
-
-app.UseMiddleware<TenantMiddleware>();
 
 // 開発環境ではHTTPSリダイレクトを無効化（E2Eテストのため）
 if (!app.Environment.IsDevelopment())

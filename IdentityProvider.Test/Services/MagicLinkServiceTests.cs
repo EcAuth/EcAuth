@@ -52,8 +52,9 @@ namespace IdentityProvider.Test.Services
                 IEmailService emailService,
                 IConfiguration configuration,
                 IOptions<MagicLinkOptions> options,
-                ILogger<MagicLinkService> logger)
-                : base(ctx, tenantService, accountService, tokenService, emailService, configuration, options, logger)
+                ILogger<MagicLinkService> logger,
+                IPreviewOriginResolver previewOrigins)
+                : base(ctx, tenantService, accountService, tokenService, emailService, configuration, options, logger, previewOrigins)
             {
                 _ctx = ctx;
             }
@@ -143,7 +144,8 @@ namespace IdentityProvider.Test.Services
             ITenantService tenantService,
             out Mock<IEmailService> emailMock,
             out Mock<IAccountService> accountMock,
-            out Mock<ITokenService> tokenMock)
+            out Mock<ITokenService> tokenMock,
+            IPreviewOriginResolver? previewOrigins = null)
         {
             emailMock = new Mock<IEmailService>();
             accountMock = new Mock<IAccountService>();
@@ -173,10 +175,36 @@ namespace IdentityProvider.Test.Services
                 emailMock.Object,
                 CreateConfiguration(),
                 Options.Create(new MagicLinkOptions()),
-                _logger);
+                _logger,
+                previewOrigins ?? Mock.Of<IPreviewOriginResolver>());
         }
 
         // ---- RequestAsync ----
+
+        [Fact]
+        public async Task RequestAsync_FromPreviewOrigin_LinkPointsToPreview()
+        {
+            // PR プレビュー（EcAuthDocs#159）からの要求は、リンクもそのプレビューへ向ける。
+            var tenant = CreateTenantService();
+            using var context = TestDbContextHelper.CreateInMemoryContext(tenantService: tenant);
+            SeedAccountsOrg(context);
+            SeedAccount(context);
+            var previewOrigins = new Mock<IPreviewOriginResolver>();
+            previewOrigins.Setup(p => p.ResolveRequestOrigin()).Returns("https://abc.ecauth-website-stg.pages.dev");
+
+            var service = CreateService(context, tenant, out var emailMock, out _, out _, previewOrigins.Object);
+
+            string? sentUrl = null;
+            emailMock
+                .Setup(e => e.SendMagicLoginLinkAsync(AccountEmail, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, CancellationToken>((_, url, _) => sentUrl = url)
+                .Returns(Task.CompletedTask);
+
+            await service.RequestAsync(AccountEmail, "203.0.113.1", "UnitTest/1.0");
+
+            Assert.NotNull(sentUrl);
+            Assert.StartsWith("https://abc.ecauth-website-stg.pages.dev/signin/magic-link?token=", sentUrl);
+        }
 
         [Fact]
         public async Task RequestAsync_ExistingAccount_SendsMagicLinkAndPersistsToken()

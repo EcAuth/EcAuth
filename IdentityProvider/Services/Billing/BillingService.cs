@@ -32,6 +32,7 @@ namespace IdentityProvider.Services.Billing
         private readonly IStripeGateway _stripe;
         private readonly IConfiguration _configuration;
         private readonly ILogger<BillingService> _logger;
+        private readonly IPreviewOriginResolver _previewOrigins;
 
         public BillingService(
             EcAuthDbContext context,
@@ -42,7 +43,8 @@ namespace IdentityProvider.Services.Billing
             IPricingCalculator pricing,
             IStripeGateway stripe,
             IConfiguration configuration,
-            ILogger<BillingService> logger)
+            ILogger<BillingService> logger,
+            IPreviewOriginResolver previewOrigins)
         {
             _context = context;
             _tenantService = tenantService;
@@ -53,6 +55,7 @@ namespace IdentityProvider.Services.Billing
             _stripe = stripe;
             _configuration = configuration;
             _logger = logger;
+            _previewOrigins = previewOrigins;
         }
 
         /// <inheritdoc />
@@ -477,9 +480,17 @@ namespace IdentityProvider.Services.Billing
         /// <summary>
         /// Checkout / Portal からの戻り先の基底 URL。<c>Billing:ReturnBaseUrl:{tenant}</c>（https のみ）。
         /// Host ヘッダへのフォールバックはしない（MagicLink:BaseUrl と同じ理由）。
+        /// Origin がテナントの PR プレビューのパターンに一致する場合だけはそのオリジンを使う（EcAuthDocs#159）。
         /// </summary>
         private string ReturnBaseUrl(string tenantName)
         {
+            // マイページが PR プレビューから開かれている場合は、戻り先もそのプレビューにする（EcAuthDocs#159）。
+            var previewOrigin = _previewOrigins.ResolveRequestOrigin();
+            if (previewOrigin != null)
+            {
+                return previewOrigin;
+            }
+
             var key = $"Billing:ReturnBaseUrl:{NonConfigKeyChar.Replace(tenantName, "_")}";
             var configured = _configuration[key];
             if (string.IsNullOrWhiteSpace(configured)

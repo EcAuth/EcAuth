@@ -476,6 +476,34 @@ Checkout と Portal は保存済みの Customer を使う前に必ず 1 回同�
 問い合わせて `account.payment_method_registered_at` を同期する）。上限強制（PR-3）はこの列だけを見る
 （ホットパスから Stripe API を呼ばない）。
 
+### ecauth-website の PR プレビュー（EcAuthDocs#159）
+
+ecauth-website の PR は stg 専用の Cloudflare Pages プロジェクト `ecauth-website-stg` にデプロイされ、
+`https://<hash|branch>.ecauth-website-stg.pages.dev` から stg-accounts の実 API を叩く。オリジンが PR ごとに
+変わるため、stg-accounts だけパターンで許可する（accounts = live には効かせない）。
+
+| 経路 | 仕組み |
+|---|---|
+| CORS（`SignupApiCors`） | `PreviewOriginCorsPolicyProvider` がテナントのパターンに一致する Origin を足す。テナントを見るため `app.UseCors()` は `TenantMiddleware` の後 |
+| 確認 URL / マジックリンク / 課金の戻り先 | Origin がパターンに一致すればそのオリジン、しなければ従来の固定値（`IPreviewOriginResolver.ResolveRequestOrigin`） |
+| パスキーページの戻り先（`/passkey/*`） | フロントがクエリ `frontend_origin` に自身のオリジンを載せ、パターンに一致したときだけ使う |
+| 管理コンソール Client の `redirect_uri` | **パターン許可しない**（完全一致のまま）。PR のワークフローが `PUT` / `DELETE /v1/preview/redirect-uris?uri=` でブランチエイリアスの `/auth/callback` を登録・削除する |
+
+- パターンは `https://*.<suffix>` だけ受け付け、`*` は DNS ラベル 1 つに一致する。suffix は 3 ラベル以上を必須にし
+  （`*.pages.dev` で他人の Pages プロジェクトまで許してしまう誤設定を拒否）、不正なパターンは警告して無視する。
+- 登録 API の認証は Basic。資格情報は設定値で、**DB の Client としては作らない**。管理コンソール Client は
+  「テナントの Organization にある `SubjectType.Account` の Client」で引かれており（`MagicLinkService.ResolveAccountClientAsync`）、
+  同じ Organization に Client を足すとどちらが返るか不定になるため。受け付ける URI はパターンに一致する
+  `{origin}/auth/callback` だけなので、Seeder が入れる固定の `redirect_uri` はこの API からは消せない。
+
+| キー | 種別 | 配線先 |
+|---|---|---|
+| `PreviewOrigins__stg_accounts__0`（= `https://*.ecauth-website-stg.pages.dev`） | 非秘密・テナント別 | production `main.tf` のみ（リクエスト時消費。CI / `.env.dev.tpl` には入れない） |
+| `PreviewRedirectApi__ClientId__stg_accounts` / `PreviewRedirectApi__ClientSecret__stg_accounts` | **秘密**・テナント別 | production `main.tf` の Key Vault 参照のみ。ecauth-website のワークフローは 1Password から読む |
+
+どれも未設定なら従来どおり（CORS・URL は固定値のみ、登録 API は 404）。Pages プロジェクトを削除するときは
+パターンも同時に外す（Pages のプロジェクト名はグローバルに一意で、削除後に第三者が同名を取得できるため）。
+
 ### 本番デプロイ後の申込スモーク
 
 `production.yml` の `verify` ジョブは、シード済み Client を使う

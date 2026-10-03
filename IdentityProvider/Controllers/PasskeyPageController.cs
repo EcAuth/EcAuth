@@ -1,3 +1,4 @@
+using IdentityProvider.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IdentityProvider.Controllers
@@ -16,18 +17,32 @@ namespace IdentityProvider.Controllers
     public class PasskeyPageController : Controller
     {
         private readonly IConfiguration _configuration;
+        private readonly ITenantService _tenantService;
+        private readonly IPreviewOriginResolver _previewOrigins;
 
-        public PasskeyPageController(IConfiguration configuration)
+        public PasskeyPageController(
+            IConfiguration configuration,
+            ITenantService tenantService,
+            IPreviewOriginResolver previewOrigins)
         {
             _configuration = configuration;
+            _tenantService = tenantService;
+            _previewOrigins = previewOrigins;
         }
 
         /// <summary>
         /// フロント（申込〜マイページ）の配信元 base URL。環境ごとに切り替える
         /// （本番 ec-auth.io / staging プレビュー / ローカル）。ビューの遷移先に使う。
+        /// <para>
+        /// PR プレビュー（EcAuthDocs#159）から遷移してきた場合、フロントはクエリ <c>frontend_origin</c> に
+        /// 自身のオリジンを載せる。テナントで許可されたプレビューのパターンに一致するときだけそれを使い、
+        /// 未指定・不一致なら設定値に戻す（任意の URL へ誘導させない）。
+        /// </para>
         /// </summary>
-        private string FrontendBaseUrl =>
-            (_configuration["Frontend:BaseUrl"] ?? "https://ec-auth.io").TrimEnd('/');
+        private string FrontendBaseUrl(string? frontendOrigin) =>
+            _previewOrigins.IsAllowed(_tenantService.TenantName, frontendOrigin)
+                ? frontendOrigin!
+                : (_configuration["Frontend:BaseUrl"] ?? "https://ec-auth.io").TrimEnd('/');
 
         /// <summary>
         /// GET /passkey/authenticate
@@ -35,9 +50,9 @@ namespace IdentityProvider.Controllers
         /// JS が読み取り、パスキー認証 → authenticate/verify → 認可コードで redirect_uri へ遷移する。
         /// </summary>
         [HttpGet("authenticate")]
-        public IActionResult Authenticate()
+        public IActionResult Authenticate([FromQuery(Name = "frontend_origin")] string? frontendOrigin)
         {
-            ViewData["FrontendBaseUrl"] = FrontendBaseUrl;
+            ViewData["FrontendBaseUrl"] = FrontendBaseUrl(frontendOrigin);
             return View("Authenticate");
         }
 
@@ -49,9 +64,9 @@ namespace IdentityProvider.Controllers
         /// を行い、成功後マイページへ誘導する。
         /// </summary>
         [HttpGet("register")]
-        public IActionResult Register()
+        public IActionResult Register([FromQuery(Name = "frontend_origin")] string? frontendOrigin)
         {
-            ViewData["FrontendBaseUrl"] = FrontendBaseUrl;
+            ViewData["FrontendBaseUrl"] = FrontendBaseUrl(frontendOrigin);
             return View("Register");
         }
     }
