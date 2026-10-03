@@ -41,7 +41,15 @@ namespace IdentityProvider.Controllers
         /// <summary>プレビューのフロントが認可コードを受け取るパス（ecauth-website の <c>authRedirectUri</c>）。</summary>
         public const string CallbackPath = "/auth/callback";
 
-        /// <summary>1 Client に登録できるプレビュー <c>redirect_uri</c> の上限（クローズ時の削除漏れで無制限に増えないように）。</summary>
+        /// <summary>
+        /// 1 Client に登録できるプレビュー <c>redirect_uri</c> の上限（クローズ時の削除漏れで無制限に増えないように）。
+        /// <para>
+        /// 件数確認から挿入までは直列化していないので、並行した登録で 1〜2 件超えうる。目安の歯止めであって
+        /// セキュリティ上の境界ではないため許容する。同じ URI の並行登録でできる重複行も無害（照合は存在判定
+        /// （<see cref="AuthorizationController"/> / <c>B2BPasskeyController</c>）、削除は一致する行をすべて消す）。
+        /// 一意制約で防ぐには <c>uri</c>（<c>nvarchar(max)</c>）のハッシュ列と 2 段のリリースが要り、見合わない。
+        /// </para>
+        /// </summary>
         public const int MaxPreviewRedirectUris = 50;
 
         private const string ConfigSection = "PreviewRedirectApi";
