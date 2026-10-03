@@ -96,6 +96,41 @@ namespace IdentityProvider.Test.Controllers
         }
 
         [Fact]
+        public async Task Register_OtherOrganizationWithSameTenantName_IsNotUsed()
+        {
+            // tenant_name は一意制約が無い。受付 Organization（code == tenant_name）以外の Account Client に付けない。
+            var tenantService = new MockTenantService();
+            tenantService.SetTenant(StgTenant);
+            using var context = TestDbContextHelper.CreateInMemoryContext(tenantService: tenantService);
+            context.Organizations.Add(new Organization { Id = 2, Code = "other-org", Name = "Other", TenantName = StgTenant });
+            context.Clients.Add(new Client
+            {
+                ClientId = "other-account-client",
+                ClientSecret = "secret",
+                AppName = "Other",
+                OrganizationId = 2,
+                SubjectType = SubjectType.Account
+            });
+            context.SaveChanges();
+            context.Organizations.Add(new Organization { Id = 1, Code = StgTenant, Name = "EcAuth Accounts (Staging)", TenantName = StgTenant });
+            context.Clients.Add(new Client
+            {
+                ClientId = "ecauth-admin-console",
+                ClientSecret = "secret",
+                AppName = "EcAuth Accounts (Staging)",
+                OrganizationId = 1,
+                SubjectType = SubjectType.Account
+            });
+            context.SaveChanges();
+
+            var result = await CreateController(context).Register(PreviewRedirectUri, CancellationToken.None);
+
+            Assert.Equal(201, StatusOf(result));
+            var owner = context.RedirectUris.AsNoTracking().Include(r => r.Client).Single(r => r.Uri == PreviewRedirectUri);
+            Assert.Equal("ecauth-admin-console", owner.Client.ClientId);
+        }
+
+        [Fact]
         public async Task Register_Twice_IsIdempotent()
         {
             using var context = CreateContext();

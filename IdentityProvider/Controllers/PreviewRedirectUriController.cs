@@ -252,8 +252,9 @@ namespace IdentityProvider.Controllers
             && _previewOrigins.IsAllowed(_tenantService.TenantName, uri[..^CallbackPath.Length]);
 
         /// <summary>
-        /// テナントの管理コンソール Client（Organization にある <see cref="SubjectType.Account"/> の Client）。
-        /// <c>MagicLinkService.ResolveAccountClientAsync</c> と同じ引き方（Seeder が投入する Client）。
+        /// テナントの管理コンソール Client（受付 Organization にある <see cref="SubjectType.Account"/> の Client。
+        /// Seeder が投入する）。<c>tenant_name</c> は一意制約が無いため、受付 Organization は
+        /// <c>SignupService</c> と同じく code も tenant_name と一致するもので特定する（AccountsOrganizationSeeder の定義）。
         /// </summary>
         private Task<Client?> ResolveAdminConsoleClientAsync(CancellationToken ct)
         {
@@ -263,6 +264,7 @@ namespace IdentityProvider.Controllers
                 .FirstOrDefaultAsync(
                     c => c.Organization != null
                         && c.Organization.TenantName == tenantName
+                        && c.Organization.Code == tenantName
                         && c.SubjectType == SubjectType.Account,
                     ct);
         }
