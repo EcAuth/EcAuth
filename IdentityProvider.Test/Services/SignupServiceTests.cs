@@ -108,7 +108,8 @@ namespace IdentityProvider.Test.Services
             ITenantService tenantService,
             out Mock<IEmailService> emailServiceMock,
             out Mock<IDisposableEmailChecker> disposableCheckerMock,
-            bool withConfirmBaseUrl = true)
+            bool withConfirmBaseUrl = true,
+            IPreviewOriginResolver? previewOrigins = null)
         {
             emailServiceMock = new Mock<IEmailService>();
             disposableCheckerMock = new Mock<IDisposableEmailChecker>();
@@ -122,7 +123,8 @@ namespace IdentityProvider.Test.Services
                 CreateConfiguration(withConfirmBaseUrl),
                 _logger,
                 new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()),
-                new OrganizationProvisioningService(context, new PlaintextSecretProtector()));
+                new OrganizationProvisioningService(context, new PlaintextSecretProtector()),
+                previewOrigins ?? Mock.Of<IPreviewOriginResolver>());
         }
 
         /// <summary>
@@ -200,6 +202,29 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
+        public async Task RequestAsync_FromPreviewOrigin_ConfirmUrlPointsToPreview()
+        {
+            // PR プレビュー（EcAuthDocs#159）からの申込は、確認ページもそのプレビューへ向ける。
+            var tenantService = CreateTenantService();
+            using var context = CreateContextWithAccountsOrg(tenantService);
+            var previewOrigins = new Mock<IPreviewOriginResolver>();
+            previewOrigins.Setup(p => p.ResolveRequestOrigin()).Returns("https://abc.ecauth-website-stg.pages.dev");
+            var service = CreateService(context, tenantService, out var emailMock, out _, previewOrigins: previewOrigins.Object);
+
+            string? capturedUrl = null;
+            emailMock
+                .Setup(x => x.SendSignupConfirmationAsync(
+                    It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, string, CancellationToken>((_, _, url, _) => capturedUrl = url)
+                .Returns(Task.CompletedTask);
+
+            await service.RequestAsync(ValidInput());
+
+            Assert.NotNull(capturedUrl);
+            Assert.StartsWith("https://abc.ecauth-website-stg.pages.dev/signup/confirm?token=", capturedUrl);
+        }
+
+        [Fact]
         public async Task RequestAsync_MissingConfirmBaseUrl_Throws()
         {
             var tenantService = CreateTenantService();
@@ -249,7 +274,8 @@ namespace IdentityProvider.Test.Services
             var service = new SignupService(
                 context, tenantService, emailMock.Object, disposableMock.Object, config, _logger,
                 new PasskeyRegistrationTokenService(context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()),
-                new OrganizationProvisioningService(context, new PlaintextSecretProtector()));
+                new OrganizationProvisioningService(context, new PlaintextSecretProtector()),
+                Mock.Of<IPreviewOriginResolver>());
 
             await service.RequestAsync(ValidInput());
 

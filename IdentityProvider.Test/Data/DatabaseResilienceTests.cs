@@ -564,7 +564,8 @@ namespace IdentityProvider.Test.Data
                 configuration,
                 Mock.Of<ILogger<SignupService>>(),
                 new PasskeyRegistrationTokenService(Context, Mock.Of<ILogger<PasskeyRegistrationTokenService>>()),
-                new OrganizationProvisioningService(Context, protector));
+                new OrganizationProvisioningService(Context, protector),
+                Mock.Of<IPreviewOriginResolver>());
         }
 
         private Mock<IEmailService> _emailMock = new();

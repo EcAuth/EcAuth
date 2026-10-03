@@ -66,7 +66,7 @@ namespace IdentityProvider.Test.Services.Billing
                 new PricingCalculator(),
                 _stripe,
                 configuration,
-                new Mock<ILogger<BillingService>>().Object);
+                new Mock<ILogger<BillingService>>().Object, Mock.Of<IPreviewOriginResolver>());
         }
 
         private static UsageMonth Month(string value)
@@ -486,7 +486,7 @@ namespace IdentityProvider.Test.Services.Billing
             var service = new BillingService(
                 _context, _tenantService, _accounts.Object, _usage.Object,
                 new PricingPlanResolver(_context), new PricingCalculator(), flaky.Object,
-                new ConfigurationBuilder().Build(), new Mock<ILogger<BillingService>>().Object);
+                new ConfigurationBuilder().Build(), new Mock<ILogger<BillingService>>().Object, Mock.Of<IPreviewOriginResolver>());
             var evt = Event("evt_retry", "setup_intent.succeeded", customerId);
 
             await Assert.ThrowsAsync<HttpRequestException>(() => service.HandleWebhookAsync(Tenant, evt, CancellationToken.None));
@@ -566,7 +566,7 @@ namespace IdentityProvider.Test.Services.Billing
             var detachedService = new BillingService(
                 sibling, siblingTenant, _accounts.Object, _usage.Object,
                 new PricingPlanResolver(sibling), new PricingCalculator(), _stripe,
-                new ConfigurationBuilder().Build(), new Mock<ILogger<BillingService>>().Object);
+                new ConfigurationBuilder().Build(), new Mock<ILogger<BillingService>>().Object, Mock.Of<IPreviewOriginResolver>());
 
             var racing = new Mock<IStripeGateway>();
             racing.Setup(s => s.EnsureDefaultPaymentMethodAsync(Tenant, customerId, It.IsAny<CancellationToken>()))
@@ -580,7 +580,7 @@ namespace IdentityProvider.Test.Services.Billing
             var attachedService = new BillingService(
                 _context, _tenantService, _accounts.Object, _usage.Object,
                 new PricingPlanResolver(_context), new PricingCalculator(), racing.Object,
-                new ConfigurationBuilder().Build(), new Mock<ILogger<BillingService>>().Object);
+                new ConfigurationBuilder().Build(), new Mock<ILogger<BillingService>>().Object, Mock.Of<IPreviewOriginResolver>());
 
             await attachedService.HandleWebhookAsync(
                 Tenant, Event("evt_attached", "payment_method.attached", customerId), CancellationToken.None);
@@ -650,7 +650,7 @@ namespace IdentityProvider.Test.Services.Billing
             var service = new BillingService(
                 _context, _tenantService, _accounts.Object, _usage.Object,
                 new PricingPlanResolver(_context), new PricingCalculator(), racing.Object,
-                configuration, new Mock<ILogger<BillingService>>().Object);
+                configuration, new Mock<ILogger<BillingService>>().Object, Mock.Of<IPreviewOriginResolver>());
 
             await service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
 
@@ -669,7 +669,7 @@ namespace IdentityProvider.Test.Services.Billing
                 _context, _tenantService, _accounts.Object, _usage.Object,
                 new PricingPlanResolver(_context), new PricingCalculator(), _stripe,
                 new ConfigurationBuilder().Build(),
-                new Mock<ILogger<BillingService>>().Object);
+                new Mock<ILogger<BillingService>>().Object, Mock.Of<IPreviewOriginResolver>());
 
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateCheckoutSessionAsync(Subject, CancellationToken.None));
             Assert.Contains("Billing:ReturnBaseUrl:accounts", ex.Message);
@@ -684,9 +684,28 @@ namespace IdentityProvider.Test.Services.Billing
             var service = new BillingService(
                 _context, _tenantService, _accounts.Object, _usage.Object,
                 new PricingPlanResolver(_context), new PricingCalculator(), _stripe, configuration,
-                new Mock<ILogger<BillingService>>().Object);
+                new Mock<ILogger<BillingService>>().Object, Mock.Of<IPreviewOriginResolver>());
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateCheckoutSessionAsync(Subject, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task CheckoutAndPortal_FromPreviewOrigin_ReturnToPreview()
+        {
+            // PR プレビュー（EcAuthDocs#159）から開かれたマイページは、固定の戻り先ではなくそのプレビューへ戻す。
+            var previewOrigins = new Mock<IPreviewOriginResolver>();
+            previewOrigins.Setup(p => p.ResolveRequestOrigin()).Returns("https://abc.ecauth-website-stg.pages.dev");
+            var service = new BillingService(
+                _context, _tenantService, _accounts.Object, _usage.Object,
+                new PricingPlanResolver(_context), new PricingCalculator(), _stripe,
+                new ConfigurationBuilder().Build(),
+                new Mock<ILogger<BillingService>>().Object, previewOrigins.Object);
+
+            var checkout = await service.CreateCheckoutSessionAsync(Subject, CancellationToken.None);
+            var portal = await service.CreatePortalSessionAsync(Subject, CancellationToken.None);
+
+            Assert.Equal("https://abc.ecauth-website-stg.pages.dev/mypage/?billing=setup_complete", checkout);
+            Assert.Equal("https://abc.ecauth-website-stg.pages.dev/mypage/", portal);
         }
 
         public void Dispose() => _db.Dispose();

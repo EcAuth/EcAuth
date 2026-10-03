@@ -34,6 +34,7 @@ namespace IdentityProvider.Services
         private readonly ILogger<SignupService> _logger;
         private readonly IPasskeyRegistrationTokenService _registrationTokenService;
         private readonly IOrganizationProvisioningService _provisioning;
+        private readonly IPreviewOriginResolver _previewOrigins;
 
         public SignupService(
             EcAuthDbContext context,
@@ -43,7 +44,8 @@ namespace IdentityProvider.Services
             IConfiguration configuration,
             ILogger<SignupService> logger,
             IPasskeyRegistrationTokenService registrationTokenService,
-            IOrganizationProvisioningService provisioning)
+            IOrganizationProvisioningService provisioning,
+            IPreviewOriginResolver previewOrigins)
         {
             _context = context;
             _tenantService = tenantService;
@@ -53,6 +55,7 @@ namespace IdentityProvider.Services
             _logger = logger;
             _registrationTokenService = registrationTokenService;
             _provisioning = provisioning;
+            _previewOrigins = previewOrigins;
         }
 
         /// <inheritdoc />
@@ -604,10 +607,22 @@ namespace IdentityProvider.Services
         /// Host ヘッダ偽装によるトークン窃取（フィッシング）を防ぐため、
         /// <c>HttpContext.Request.Host</c> へのフォールバックは行わない。設定が無い／不正テナントの場合は例外を投げて停止する。
         /// </para>
+        /// <para>
+        /// 例外として、リクエストの Origin がテナントの PR プレビューのパターンに一致する場合はそのオリジンを使う
+        /// （<see cref="IPreviewOriginResolver"/>、EcAuthDocs#159）。Host ではなく許可済みパターンとの照合なので上記の方針は崩れない。
+        /// </para>
         /// </summary>
         private string BuildConfirmUrl(string confirmToken)
         {
             var encodedToken = Uri.EscapeDataString(confirmToken);
+
+            // PR プレビュー（テナントで許可されたパターンに一致する Origin）から申し込まれた場合は、確認ページも
+            // そのプレビューへ向ける（EcAuthDocs#159）。一致しなければ従来どおり固定の設定値を使う。
+            var previewOrigin = _previewOrigins.ResolveRequestOrigin();
+            if (previewOrigin != null)
+            {
+                return $"{previewOrigin}/signup/confirm?token={encodedToken}";
+            }
 
             // 確認 URL の基底はテナント別の信頼済み設定値（フロントエンドのベース URL）のみを使用する（Request.Host は信頼しない）。
             // 環境変数名にハイフンを使えないため、キーのテナント部を env-var-safe に正規化する（"stg-accounts" -> "stg_accounts"）。

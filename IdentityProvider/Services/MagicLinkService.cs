@@ -28,6 +28,7 @@ namespace IdentityProvider.Services
         private readonly IEmailService _emailService;
         private readonly IConfiguration _configuration;
         private readonly MagicLinkOptions _options;
+        private readonly IPreviewOriginResolver _previewOrigins;
         private readonly ILogger<MagicLinkService> _logger;
 
         public MagicLinkService(
@@ -38,7 +39,8 @@ namespace IdentityProvider.Services
             IEmailService emailService,
             IConfiguration configuration,
             IOptions<MagicLinkOptions> options,
-            ILogger<MagicLinkService> logger)
+            ILogger<MagicLinkService> logger,
+            IPreviewOriginResolver previewOrigins)
         {
             _context = context;
             _tenantService = tenantService;
@@ -48,6 +50,7 @@ namespace IdentityProvider.Services
             _configuration = configuration;
             _options = options.Value;
             _logger = logger;
+            _previewOrigins = previewOrigins;
         }
 
         /// <inheritdoc />
@@ -317,10 +320,18 @@ namespace IdentityProvider.Services
         /// Host ヘッダ偽装によるトークン窃取を防ぐため <c>Request.Host</c> へはフォールバックしない
         /// （SignupService.BuildConfirmUrl と同方針）。テナント名のハイフンは環境変数名に使えないため
         /// <c>[A-Za-z0-9_]</c> 以外を <c>_</c> に正規化する（例: <c>stg-accounts</c> → <c>stg_accounts</c>）。
+        /// Origin がテナントの PR プレビューのパターンに一致する場合だけはそのオリジンを使う（EcAuthDocs#159）。
         /// </summary>
         private string BuildMagicLinkUrl(string token)
         {
             var encodedToken = Uri.EscapeDataString(token);
+
+            // PR プレビューから要求された場合はリンクもそのプレビューへ向ける（SignupService.BuildConfirmUrl と同じ）。
+            var previewOrigin = _previewOrigins.ResolveRequestOrigin();
+            if (previewOrigin != null)
+            {
+                return $"{previewOrigin}/signin/magic-link?token={encodedToken}";
+            }
 
             var tenantName = _tenantService.TenantName;
             var configKey = $"MagicLink:BaseUrl:{NonConfigKeyChar.Replace(tenantName, "_")}";
