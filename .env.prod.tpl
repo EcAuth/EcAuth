@@ -38,8 +38,8 @@ PROD_REDIRECT_URI=op://EcAuth/ecauth-prod-app/redirect_uri
 # =============================================================================
 # EcAuth から Azure MockIdP への OAuth2 連携設定
 PROD_MOCK_IDP_APP_NAME=op://EcAuth/ecauth-prod-mockidp/app_name
-PROD_MOCK_IDP_CLIENT_ID=op://EcAuth/ecauth-prod-mockidp/client_id
-PROD_MOCK_IDP_CLIENT_SECRET=op://EcAuth/ecauth-prod-mockidp/client_secret
+PROD_MOCK_IDP_CLIENT_ID=op://EcAuth/mockidp-production/default_client_id
+PROD_MOCK_IDP_CLIENT_SECRET=op://EcAuth/mockidp-production/default_client_secret
 
 # MockIdP エンドポイント（Azure Container Apps）
 MOCK_IDP_BASE_URL=op://EcAuth/mockidp-production/base_url

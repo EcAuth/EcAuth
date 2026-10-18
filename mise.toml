@@ -1,2 +1,7 @@
 [tools]
 dotnet = "10"
+
+[env]
+# 1Password は skirnir.1password.com（Business）に集約している。移行期間中は個人アカウント
+# （my.1password.com）にも同名の vault が残るため、op run / op read の解決先を固定する。
+OP_ACCOUNT = "skirnir.1password.com"
