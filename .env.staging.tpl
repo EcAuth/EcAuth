@@ -38,8 +38,8 @@ STAGING_REDIRECT_URI=op://EcAuth/ecauth-staging-app/redirect_uri
 # =============================================================================
 # EcAuth から Azure MockIdP への OAuth2 連携設定
 STAGING_MOCK_IDP_APP_NAME=op://EcAuth/ecauth-staging-mockidp/app_name
-STAGING_MOCK_IDP_CLIENT_ID=op://EcAuth/ecauth-staging-mockidp/client_id
-STAGING_MOCK_IDP_CLIENT_SECRET=op://EcAuth/ecauth-staging-mockidp/client_secret
+STAGING_MOCK_IDP_CLIENT_ID=op://EcAuth/mockidp-staging/default_client_id
+STAGING_MOCK_IDP_CLIENT_SECRET=op://EcAuth/mockidp-staging/default_client_secret
 
 # MockIdP エンドポイント（Azure Container Apps）
 MOCK_IDP_BASE_URL=op://EcAuth/mockidp-staging/base_url

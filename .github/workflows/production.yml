@@ -64,8 +64,8 @@ jobs:
           PROD_REDIRECT_URI: op://EcAuth/ecauth-prod-app/redirect_uri
           # Production MockIdP settings
           PROD_MOCK_IDP_APP_NAME: op://EcAuth/ecauth-prod-mockidp/app_name
-          PROD_MOCK_IDP_CLIENT_ID: op://EcAuth/ecauth-prod-mockidp/client_id
-          PROD_MOCK_IDP_CLIENT_SECRET: op://EcAuth/ecauth-prod-mockidp/client_secret
+          PROD_MOCK_IDP_CLIENT_ID: op://EcAuth/mockidp-production/default_client_id
+          PROD_MOCK_IDP_CLIENT_SECRET: op://EcAuth/mockidp-production/default_client_secret
           PROD_MOCK_IDP_AUTHORIZATION_ENDPOINT: op://EcAuth/mockidp-production/authorization_endpoint
           PROD_MOCK_IDP_TOKEN_ENDPOINT: op://EcAuth/mockidp-production/token_endpoint
           PROD_MOCK_IDP_USERINFO_ENDPOINT: op://EcAuth/mockidp-production/userinfo_endpoint
@@ -108,15 +108,15 @@ jobs:
           STAGING_APP_NAME: op://EcAuth/ecauth-staging-app/app_name
           STAGING_REDIRECT_URI: op://EcAuth/ecauth-staging-app/redirect_uri
           STAGING_MOCK_IDP_APP_NAME: op://EcAuth/ecauth-staging-mockidp/app_name
-          STAGING_MOCK_IDP_CLIENT_ID: op://EcAuth/ecauth-staging-mockidp/client_id
-          STAGING_MOCK_IDP_CLIENT_SECRET: op://EcAuth/ecauth-staging-mockidp/client_secret
+          STAGING_MOCK_IDP_CLIENT_ID: op://EcAuth/mockidp-staging/default_client_id
+          STAGING_MOCK_IDP_CLIENT_SECRET: op://EcAuth/mockidp-staging/default_client_secret
           STAGING_MOCK_IDP_AUTHORIZATION_ENDPOINT: op://EcAuth/mockidp-staging/authorization_endpoint
           STAGING_MOCK_IDP_TOKEN_ENDPOINT: op://EcAuth/mockidp-staging/token_endpoint
           STAGING_MOCK_IDP_USERINFO_ENDPOINT: op://EcAuth/mockidp-staging/userinfo_endpoint
           # Azure credentials
-          AZURE_CLIENT_ID: op://EcAuth/ecauth-workload-identity/AZURE_CLIENT_ID
-          AZURE_TENANT_ID: op://EcAuth/ecauth-workload-identity/AZURE_TENANT_ID
-          AZURE_SUBSCRIPTION_ID: op://EcAuth/ecauth-workload-identity/AZURE_SUBSCRIPTION_ID
+          AZURE_CLIENT_ID: op://skirnir-common/ecauth-workload-identity/AZURE_CLIENT_ID
+          AZURE_TENANT_ID: op://skirnir-common/azure-subscription/AZURE_TENANT_ID
+          AZURE_SUBSCRIPTION_ID: op://skirnir-common/azure-subscription/AZURE_SUBSCRIPTION_ID
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -264,9 +264,9 @@ jobs:
           export-env: true
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          AZURE_CLIENT_ID: op://EcAuth/ecauth-workload-identity/AZURE_CLIENT_ID
-          AZURE_TENANT_ID: op://EcAuth/ecauth-workload-identity/AZURE_TENANT_ID
-          AZURE_SUBSCRIPTION_ID: op://EcAuth/ecauth-workload-identity/AZURE_SUBSCRIPTION_ID
+          AZURE_CLIENT_ID: op://skirnir-common/ecauth-workload-identity/AZURE_CLIENT_ID
+          AZURE_TENANT_ID: op://skirnir-common/azure-subscription/AZURE_TENANT_ID
+          AZURE_SUBSCRIPTION_ID: op://skirnir-common/azure-subscription/AZURE_SUBSCRIPTION_ID
           WEB_APP_SUFFIX: op://EcAuth/ecauth-prod-app/web_app_suffix
 
       - name: Login to Azure
