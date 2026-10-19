@@ -63,7 +63,7 @@ jobs:
           DOCS_READER_PRIVATE_KEY: op://EcAuth/github-app-docs-reader/private_key
       - name: Create EcAuthDocs access token
         id: docs-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ steps.op.outputs.DOCS_READER_CLIENT_ID }}
           private-key: ${{ steps.op.outputs.DOCS_READER_PRIVATE_KEY }}
@@ -99,7 +99,7 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@ed670b4cf9de2a5a570d130d2f6197b9e543cd64 # v1.0.240
+        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
