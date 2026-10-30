@@ -264,7 +264,7 @@ namespace IdentityProvider.Services
             {
                 AccountSubject = accountSubject,
                 OrganizationId = organization.Id,
-                Role = "owner"
+                Role = AccountOrganization.OwnerRole
             });
 
             // 最初の Client は、後から足す Client（AddClientAsync）と同じ規則で作る。

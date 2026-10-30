@@ -68,6 +68,14 @@ namespace IdentityProvider.Services.Billing
         public bool InvoicingEnabled { get; set; }
 
         /// <summary>
+        /// 月次ジョブが自動で起票する最初の対象月（<c>YYYY-MM</c>）。これより前の月は起票しない。
+        /// フラグを有効にした時点の「前月」がいきなり請求されないようにするための下限で、
+        /// <see cref="InvoicingEnabled"/> が true なのに未設定・不正な値なら、ジョブは起票せずにエラーを記録する
+        /// （黙って全期間を対象にしない）。初回は 2026-11（EcAuthDocs#119）。
+        /// </summary>
+        public string? InvoicingStartMonth { get; set; }
+
+        /// <summary>
         /// Invoice を起票してから自動確定（＝カードへの請求）までの日数。既定 2 日。
         /// 誤請求を void で止める猶予。安定後は 0 で即時確定にできる。
         /// </summary>

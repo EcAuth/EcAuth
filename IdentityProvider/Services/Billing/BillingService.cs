@@ -23,6 +23,20 @@ namespace IdentityProvider.Services.Billing
             "customer.deleted",
         };
 
+        /// <summary>
+        /// 月次請求（PR-2）の Invoice の状態を変えるイベント。受けたら Stripe から Invoice を読み直して
+        /// <c>billing_invoice</c> に写す。ecauth-infrastructure の Webhook エンドポイントの enabled_events は
+        /// <see cref="PaymentMethodEvents"/> とこれの和に一致させる。
+        /// </summary>
+        public static readonly IReadOnlySet<string> InvoiceEvents = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "invoice.finalized",
+            "invoice.paid",
+            "invoice.payment_failed",
+            "invoice.voided",
+            "invoice.marked_uncollectible",
+        };
+
         private readonly EcAuthDbContext _context;
         private readonly ITenantService _tenantService;
         private readonly IAccountService _accountService;
@@ -232,6 +246,15 @@ namespace IdentityProvider.Services.Billing
         /// </summary>
         private async Task ProcessAsync(string tenantName, StripeWebhookEnvelope envelope, CancellationToken cancellationToken)
         {
+            if (InvoiceEvents.Contains(envelope.Type))
+            {
+                if (envelope.InvoiceId != null)
+                {
+                    await SyncInvoiceAsync(tenantName, envelope, cancellationToken);
+                }
+                return;
+            }
+
             if (!PaymentMethodEvents.Contains(envelope.Type) || envelope.CustomerId == null)
             {
                 return;
@@ -270,6 +293,63 @@ namespace IdentityProvider.Services.Billing
         /// <c>updated_at</c> が進んでいるので別のキーになり、新しい Customer が作られる（Stripe の冪等キーは 24 時間
         /// 有効なので、Account だけのキーだと削除直後の作り直しで削除済みの Customer が返ってくる）。
         /// </summary>
+        /// <summary>
+        /// 月次請求の Invoice を Stripe から読み直し、<c>billing_invoice</c> の状態と Stripe が計算した金額を写す。
+        /// 支払い方法の同期と同じく、書き込みは「読み始めた時刻」が記録より新しいときだけにする（並行した Webhook の
+        /// 古い読み取りが新しい状態を上書きしない）。起票の途中（pending）の行は書かない（月次ジョブの再開の印を壊さない）。
+        /// テナントも条件にして、live の Invoice の通知が test 側の受け口に来ても書かない。
+        /// </summary>
+        private async Task SyncInvoiceAsync(string tenantName, StripeWebhookEnvelope envelope, CancellationToken cancellationToken)
+        {
+            var invoiceId = envelope.InvoiceId!;
+            var row = await _context.BillingInvoices
+                .AsNoTracking()
+                .FirstOrDefaultAsync(i => i.StripeInvoiceId == invoiceId && i.TenantName == tenantName, cancellationToken);
+            if (row == null)
+            {
+                // ダッシュボードで手作業で作った Invoice など、月次ジョブが起票していないもの。
+                _logger.LogInformation(
+                    "Stripe Webhook の Invoice に対応する月次請求がありません: Event={EventId}, Type={Type}, Invoice={InvoiceId}, Tenant={Tenant}",
+                    envelope.Id, envelope.Type, invoiceId, tenantName);
+                return;
+            }
+
+            var readTicks = DateTimeOffset.UtcNow.UtcTicks;
+            var snapshot = await _stripe.GetInvoiceAsync(tenantName, invoiceId, cancellationToken);
+            var status = snapshot?.Status ?? IMonthlyInvoicingService.Statuses.Deleted;
+            var now = DateTimeOffset.UtcNow;
+
+            var updated = await _context.BillingInvoices
+                .Where(i => i.Id == row.Id
+                    && i.Status != IMonthlyInvoicingService.Statuses.Pending
+                    && (i.StripeCheckedTicks == null || i.StripeCheckedTicks < readTicks))
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(i => i.Status, status)
+                    .SetProperty(i => i.TaxJpy, snapshot == null ? null : snapshot.TaxJpy)
+                    .SetProperty(i => i.StripeTotalJpy, snapshot == null ? null : snapshot.TotalJpy)
+                    .SetProperty(i => i.AmountPaidJpy, snapshot == null ? null : snapshot.AmountPaidJpy)
+                    .SetProperty(i => i.StripeCheckedTicks, readTicks)
+                    .SetProperty(i => i.UpdatedAt, now), cancellationToken);
+
+            if (updated == 0)
+            {
+                _logger.LogInformation(
+                    "月次請求の状態を書きませんでした（起票中、またはより新しい同期が反映済み）: Invoice={InvoiceId}, Status={Status}",
+                    invoiceId, status);
+                return;
+            }
+
+            // 支払い失敗・void・回収不能は運用で拾う（Stripe も顧客に通知し、失敗は Smart Retries で再試行する）。
+            var level = envelope.Type == "invoice.payment_failed"
+                || status is not (IMonthlyInvoicingService.Statuses.Paid or IMonthlyInvoicingService.Statuses.Draft
+                    or IMonthlyInvoicingService.Statuses.Open)
+                ? LogLevel.Warning
+                : LogLevel.Information;
+            _logger.Log(level,
+                "月次請求の状態を同期しました: Month={Month}, Account={Subject}, Invoice={InvoiceId}, Status={Status}, Event={Type}",
+                row.YearMonth, row.AccountSubject, invoiceId, status, envelope.Type);
+        }
+
         private async Task<string> EnsureCustomerAsync(Account account, string tenant, CancellationToken cancellationToken)
         {
             if (account.StripeCustomerId != null)
@@ -386,9 +466,11 @@ namespace IdentityProvider.Services.Billing
             // 管理対象 Organization は削除済みも含めて引く。IAccountService.GetManagedOrganizationsAsync は
             // トークンの managed_orgs 用に「現在削除されていないもの」へ絞るが、請求は「対象月に有効だったか」で
             // 見る（UsageReportService.IsBillable）。月の途中で解約したサイトの当月 MAU を落とさないため。
+            // 請求先は owner の Account だけ（EcAuthDocs#119）。招待された Account（#143）の画面に他人の請求額を出さず、
+            // 月次請求（同じ関数で金額を出す）が同じ Organization を 2 人に請求しないようにする。
             var organizationIds = await _context.AccountOrganizations
                 .IgnoreQueryFilters()
-                .Where(ao => ao.AccountSubject == accountSubject)
+                .Where(ao => ao.AccountSubject == accountSubject && ao.Role == AccountOrganization.OwnerRole)
                 .Select(ao => ao.OrganizationId)
                 .ToListAsync(cancellationToken);
             var report = await _usageReport.GetReportAsync(

@@ -708,6 +708,116 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.Equal("https://abc.ecauth-website-stg.pages.dev/mypage/", portal);
         }
 
+        // ---- 月次請求の Invoice（invoice.*）----
+
+        private async Task<(BillingInvoice Row, string InvoiceId)> SeedInvoiceAsync(string status = IMonthlyInvoicingService.Statuses.Draft, string tenant = Tenant)
+        {
+            var snapshot = await _stripe.CreateInvoiceAsync(
+                tenant, new InvoiceDraftRequest("cus_x", "test", new Dictionary<string, string>()),
+                "seed-" + Guid.NewGuid(), CancellationToken.None);
+            await _stripe.AddInvoiceItemAsync(tenant, "cus_x", snapshot.Id, 1_000, "item", new Dictionary<string, string>(), "seed-item-" + snapshot.Id, CancellationToken.None);
+            var row = new BillingInvoice
+            {
+                YearMonth = "2026-11", AccountSubject = Subject, TenantName = tenant, StripeCustomerId = "cus_x",
+                StripeInvoiceId = snapshot.Id, Status = status, SubtotalJpy = 1_000, TotalJpy = 1_000,
+            };
+            _context.BillingInvoices.Add(row);
+            await _context.SaveChangesAsync();
+            return (row, snapshot.Id);
+        }
+
+        private BillingInvoice ReloadInvoice(int id) => _context.BillingInvoices.AsNoTracking().Single(i => i.Id == id);
+
+        [Fact]
+        public async Task Webhook_InvoicePaid_CopiesStripeStateAndAmounts()
+        {
+            var (row, invoiceId) = await SeedInvoiceAsync();
+            _stripe.SetInvoiceStatus(invoiceId, "paid");
+
+            Assert.True(await _service.HandleWebhookAsync(Tenant,
+                new StripeWebhookEnvelope("evt_paid", "invoice.paid", "cus_x", null, invoiceId), CancellationToken.None));
+
+            var updated = ReloadInvoice(row.Id);
+            Assert.Equal(IMonthlyInvoicingService.Statuses.Paid, updated.Status);
+            Assert.Equal(100, updated.TaxJpy);
+            Assert.Equal(1_100, updated.StripeTotalJpy);
+            Assert.Equal(1_100, updated.AmountPaidJpy);
+            Assert.NotNull(updated.StripeCheckedTicks);
+        }
+
+        [Fact]
+        public async Task Webhook_InvoiceDeletedInStripe_MarksDeleted()
+        {
+            var (row, invoiceId) = await SeedInvoiceAsync();
+            await _stripe.CancelInvoiceAsync(Tenant, invoiceId, CancellationToken.None);
+
+            await _service.HandleWebhookAsync(Tenant,
+                new StripeWebhookEnvelope("evt_voided", "invoice.voided", "cus_x", null, invoiceId), CancellationToken.None);
+
+            var updated = ReloadInvoice(row.Id);
+            Assert.Equal(IMonthlyInvoicingService.Statuses.Deleted, updated.Status);
+            Assert.Null(updated.TaxJpy);
+        }
+
+        [Fact]
+        public async Task Webhook_Invoice_PendingRowIsNotOverwritten()
+        {
+            // 月次ジョブが明細を積んでいる途中。pending を書き換えると再開の印が消える。
+            var (row, invoiceId) = await SeedInvoiceAsync(IMonthlyInvoicingService.Statuses.Pending);
+            _stripe.SetInvoiceStatus(invoiceId, "open");
+
+            await _service.HandleWebhookAsync(Tenant,
+                new StripeWebhookEnvelope("evt_final", "invoice.finalized", "cus_x", null, invoiceId), CancellationToken.None);
+
+            Assert.Equal(IMonthlyInvoicingService.Statuses.Pending, ReloadInvoice(row.Id).Status);
+        }
+
+        [Fact]
+        public async Task Webhook_Invoice_OtherTenantOrUnknownInvoiceIsIgnored()
+        {
+            var (row, invoiceId) = await SeedInvoiceAsync(tenant: "stg-accounts");
+            _stripe.SetInvoiceStatus(invoiceId, "paid");
+
+            // live の受け口に test の Invoice の通知が来ても書かない
+            Assert.True(await _service.HandleWebhookAsync(Tenant,
+                new StripeWebhookEnvelope("evt_other", "invoice.paid", "cus_x", null, invoiceId), CancellationToken.None));
+            Assert.True(await _service.HandleWebhookAsync(Tenant,
+                new StripeWebhookEnvelope("evt_unknown", "invoice.paid", "cus_x", null, "in_unknown"), CancellationToken.None));
+
+            Assert.Equal(IMonthlyInvoicingService.Statuses.Draft, ReloadInvoice(row.Id).Status);
+        }
+
+        [Fact]
+        public async Task Webhook_Invoice_OlderReadDoesNotOverwriteNewer()
+        {
+            var (row, invoiceId) = await SeedInvoiceAsync();
+            // より新しい読み取りが既に反映されている
+            await _context.BillingInvoices.Where(i => i.Id == row.Id).ExecuteUpdateAsync(s => s
+                .SetProperty(i => i.Status, IMonthlyInvoicingService.Statuses.Paid)
+                .SetProperty(i => i.StripeCheckedTicks, DateTimeOffset.UtcNow.AddMinutes(5).UtcTicks));
+
+            await _service.HandleWebhookAsync(Tenant,
+                new StripeWebhookEnvelope("evt_old", "invoice.finalized", "cus_x", null, invoiceId), CancellationToken.None);
+
+            Assert.Equal(IMonthlyInvoicingService.Statuses.Paid, ReloadInvoice(row.Id).Status);
+        }
+
+        [Fact]
+        public async Task Estimate_OnlyOwnedOrganizationsAreBilled()
+        {
+            // 招待された（owner でない）Organization は見込み額にも請求にも入れない（EcAuthDocs#119 / #143）
+            _context.Organizations.Add(new Organization { Id = 11, Code = "other", Name = "Other", TenantName = "other" });
+            _context.AccountOrganizations.Add(new AccountOrganization { AccountSubject = Subject, OrganizationId = 11, Role = "member" });
+            await _context.SaveChangesAsync();
+            SetupReport(orgBillable: true, Client(1, SubjectType.B2B, 10));
+
+            await _service.GetEstimateAsync(Subject, _month, CancellationToken.None);
+
+            _usage.Verify(u => u.GetReportAsync(
+                It.Is<IUsageReportService.UsageReportQuery>(q => q.OrganizationIds.Contains(10) && !q.OrganizationIds.Contains(11)),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+
         public void Dispose() => _db.Dispose();
     }
 }

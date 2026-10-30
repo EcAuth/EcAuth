@@ -37,6 +37,16 @@ namespace IdentityProvider.Test.Services.Billing
         }
 
         [Fact]
+        public void ToEnvelope_Invoice_TakesInvoiceIdAndCustomer()
+        {
+            var envelope = StripeGateway.ToEnvelope(MakeEvent(
+                "invoice.paid",
+                new Invoice { Id = "in_1", CustomerId = "cus_1" }));
+
+            Assert.Equal(new StripeWebhookEnvelope("evt_1", "invoice.paid", "cus_1", null, "in_1"), envelope);
+        }
+
+        [Fact]
         public void ToEnvelope_PaymentMethodDetached_FallsBackToPreviousAttributesCustomer()
         {
             // デタッチ後の PaymentMethod は customer が null。previous_attributes に変更前の Customer が載る。

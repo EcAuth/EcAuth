@@ -64,6 +64,10 @@ namespace IdentityProvider.Services.Billing
                     // MVP はカードのみ（requirements.html §5.2）。
                     PaymentMethodTypes = new List<string> { "card" },
                     Currency = "jpy",
+                    // 請求先住所を必須にして Customer に残す。国内は TaxRate で足りるが、海外の顧客へ Stripe Tax
+                    //（automatic_tax）で売るときに課税判定に要る（EcAuthDocs#119）。
+                    BillingAddressCollection = "required",
+                    CustomerUpdate = new Stripe.Checkout.SessionCustomerUpdateOptions { Address = "auto" },
                     SuccessUrl = successUrl,
                     CancelUrl = cancelUrl,
                 },
@@ -172,6 +176,175 @@ namespace IdentityProvider.Services.Billing
             return ToEnvelope(stripeEvent);
         }
 
+        /// <inheritdoc />
+        public async Task<StripeInvoiceSnapshot> CreateInvoiceAsync(
+            string tenantName, InvoiceDraftRequest request, string idempotencyKey, CancellationToken cancellationToken)
+        {
+            var client = ClientFor(tenantName);
+            var taxRateKey = ConfigKey("TaxRateId", tenantName);
+            var taxRateId = _configuration[taxRateKey];
+            if (string.IsNullOrWhiteSpace(taxRateId))
+            {
+                // 税率なしで起票すると消費税を取りこぼした請求書が確定してしまう。起票ごと止める。
+                throw new InvalidOperationException($"Stripe の消費税の TaxRate が未設定です（{taxRateKey}）。");
+            }
+
+            await EnsureJapaneseLocaleAsync(client, request.CustomerId, cancellationToken);
+
+            var invoice = await client.V1.Invoices.CreateAsync(
+                new InvoiceCreateOptions
+                {
+                    Customer = request.CustomerId,
+                    Currency = "jpy",
+                    CollectionMethod = "charge_automatically",
+                    // 明細を積み終えるまでは確定させない（ScheduleFinalizationAsync で後から予約する）。
+                    AutoAdvance = false,
+                    // Customer に溜まった他の InvoiceItem（ダッシュボードでの手作業など）をこの請求書に混ぜない。
+                    PendingInvoiceItemsBehavior = "exclude",
+                    DefaultTaxRates = new List<string> { taxRateId },
+                    Description = request.Description,
+                    Metadata = new Dictionary<string, string>(request.Metadata),
+                },
+                new RequestOptions { IdempotencyKey = idempotencyKey },
+                cancellationToken);
+            return ToSnapshot(invoice);
+        }
+
+        public async Task<string> AddInvoiceItemAsync(
+            string tenantName, string customerId, string invoiceId, long amountJpy, string description,
+            IReadOnlyDictionary<string, string> metadata, string idempotencyKey, CancellationToken cancellationToken)
+        {
+            var client = ClientFor(tenantName);
+            var item = await client.V1.InvoiceItems.CreateAsync(
+                new InvoiceItemCreateOptions
+                {
+                    Customer = customerId,
+                    Invoice = invoiceId,
+                    Currency = "jpy",
+                    // 税抜の金額。消費税は Invoice の default_tax_rates で付く（明細ごとに丸めない）。
+                    Amount = amountJpy,
+                    Description = description,
+                    Metadata = new Dictionary<string, string>(metadata),
+                },
+                new RequestOptions { IdempotencyKey = idempotencyKey },
+                cancellationToken);
+            return item.Id;
+        }
+
+        /// <inheritdoc />
+        public async Task<StripeInvoiceSnapshot> ScheduleFinalizationAsync(
+            string tenantName, string invoiceId, DateTimeOffset finalizesAt, CancellationToken cancellationToken)
+        {
+            var client = ClientFor(tenantName);
+            var invoice = await client.V1.Invoices.UpdateAsync(
+                invoiceId,
+                new InvoiceUpdateOptions
+                {
+                    // この時刻に Stripe が確定して既定の支払い方法へ請求する。それまで（既定 2 日）は削除で止められる。
+                    AutoAdvance = true,
+                    AutomaticallyFinalizesAt = finalizesAt.UtcDateTime,
+                },
+                cancellationToken: cancellationToken);
+            return ToSnapshot(invoice);
+        }
+
+        /// <inheritdoc />
+        public async Task<string?> FindInvoiceIdByMetadataAsync(
+            string tenantName, string customerId, string key, string value, CancellationToken cancellationToken)
+        {
+            var client = ClientFor(tenantName);
+            await foreach (var invoice in client.V1.Invoices.ListAutoPagingAsync(
+                new InvoiceListOptions { Customer = customerId, Limit = 100 }, cancellationToken: cancellationToken))
+            {
+                if (invoice.Metadata != null && invoice.Metadata.TryGetValue(key, out var v) && v == value)
+                {
+                    return invoice.Id;
+                }
+            }
+            return null;
+        }
+
+        /// <inheritdoc />
+        public async Task<IReadOnlyList<StripeInvoiceItemSnapshot>> ListInvoiceItemsAsync(
+            string tenantName, string invoiceId, CancellationToken cancellationToken)
+        {
+            var client = ClientFor(tenantName);
+            var items = new List<StripeInvoiceItemSnapshot>();
+            await foreach (var item in client.V1.InvoiceItems.ListAutoPagingAsync(
+                new InvoiceItemListOptions { Invoice = invoiceId, Limit = 100 }, cancellationToken: cancellationToken))
+            {
+                items.Add(new StripeInvoiceItemSnapshot(
+                    item.Id, item.Amount, item.Metadata ?? new Dictionary<string, string>()));
+            }
+            return items;
+        }
+
+        /// <inheritdoc />
+        public async Task<StripeInvoiceSnapshot?> GetInvoiceAsync(
+            string tenantName, string invoiceId, CancellationToken cancellationToken)
+        {
+            var client = ClientFor(tenantName);
+            try
+            {
+                var invoice = await client.V1.Invoices.GetAsync(invoiceId, cancellationToken: cancellationToken);
+                return invoice.Deleted == true ? null : ToSnapshot(invoice);
+            }
+            catch (StripeException ex) when (ex.StripeError?.Code == "resource_missing")
+            {
+                // 下書きを削除すると取得できなくなる（別モードの ID も同じ扱い）。
+                return null;
+            }
+        }
+
+        public async Task<StripeInvoiceSnapshot> CancelInvoiceAsync(
+            string tenantName, string invoiceId, CancellationToken cancellationToken)
+        {
+            var client = ClientFor(tenantName);
+            var invoice = await client.V1.Invoices.GetAsync(invoiceId, cancellationToken: cancellationToken);
+            switch (invoice.Status)
+            {
+                case "draft":
+                    await client.V1.Invoices.DeleteAsync(invoiceId, cancellationToken: cancellationToken);
+                    return ToSnapshot(invoice) with { Status = StripeInvoiceSnapshot.DeletedStatus };
+                case "open":
+                    return ToSnapshot(await client.V1.Invoices.VoidInvoiceAsync(invoiceId, cancellationToken: cancellationToken));
+                default:
+                    throw new InvalidOperationException(
+                        $"Invoice {invoiceId} は status={invoice.Status} のため取り消せません（支払い済みの返金は Stripe のダッシュボードで行ってください）。");
+            }
+        }
+
+        /// <summary>
+        /// 請求書 PDF とメールの言語は Customer の <c>preferred_locales</c> で決まる（未設定だとアカウントの既定）。
+        /// 未設定のときだけ日本語にし、顧客がダッシュボード経由で選んだ言語は上書きしない。
+        /// </summary>
+        private static async Task EnsureJapaneseLocaleAsync(StripeClient client, string customerId, CancellationToken cancellationToken)
+        {
+            var customer = await client.V1.Customers.GetAsync(customerId, cancellationToken: cancellationToken);
+            if (customer.PreferredLocales is { Count: > 0 })
+            {
+                return;
+            }
+            await client.V1.Customers.UpdateAsync(
+                customerId,
+                new CustomerUpdateOptions { PreferredLocales = new List<string> { "ja" } },
+                cancellationToken: cancellationToken);
+        }
+
+        private static StripeInvoiceSnapshot ToSnapshot(Invoice invoice)
+        {
+            DateTimeOffset? finalizesAt = invoice.AutomaticallyFinalizesAt is { } at
+                ? new DateTimeOffset(DateTime.SpecifyKind(at, DateTimeKind.Utc))
+                : null;
+            return new StripeInvoiceSnapshot(
+                invoice.Id,
+                invoice.Status,
+                invoice.TotalTaxes?.Sum(t => t.Amount) ?? 0,
+                invoice.Total,
+                invoice.AmountPaid,
+                finalizesAt);
+        }
+
         /// <summary>
         /// 検証済みの <see cref="Event"/> から EcAuth が使う情報だけを取り出す。
         /// <c>payment_method.detached</c> はデタッチ後の PaymentMethod が載るため <c>data.object.customer</c> が null。
@@ -181,6 +354,7 @@ namespace IdentityProvider.Services.Billing
         {
             string? customerId = null;
             string? checkoutMode = null;
+            string? invoiceId = null;
             switch (stripeEvent.Data.Object)
             {
                 case Stripe.Checkout.Session session:
@@ -198,6 +372,7 @@ namespace IdentityProvider.Services.Billing
                     break;
                 case Invoice invoice:
                     customerId = invoice.CustomerId;
+                    invoiceId = invoice.Id;
                     break;
             }
 
@@ -209,7 +384,7 @@ namespace IdentityProvider.Services.Billing
                 customerId = previousCustomer.ToString();
             }
 
-            return new StripeWebhookEnvelope(stripeEvent.Id, stripeEvent.Type, customerId, checkoutMode);
+            return new StripeWebhookEnvelope(stripeEvent.Id, stripeEvent.Type, customerId, checkoutMode, invoiceId);
         }
 
         private StripeClient ClientFor(string tenantName)

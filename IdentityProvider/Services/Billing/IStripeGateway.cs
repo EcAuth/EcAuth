@@ -61,6 +61,109 @@ namespace IdentityProvider.Services.Billing
         /// <see cref="StripeWebhookSignatureException"/>。
         /// </summary>
         StripeWebhookEnvelope ParseWebhookEvent(string tenantName, string payload, string? signatureHeader);
+
+        /// <summary>
+        /// 月次請求の Invoice を下書き（draft）で作る（EcAuthDocs#119 PR-2）。
+        /// <c>collection_method=charge_automatically</c>、<c>pending_invoice_items_behavior=exclude</c>（Customer に
+        /// 溜まった他の InvoiceItem を拾わない）、消費税はテナント別の TaxRate（<c>Stripe:TaxRateId:{tenant}</c>）を
+        /// <c>default_tax_rates</c> に付けて Stripe に計算させる。<paramref name="idempotencyKey"/> は Stripe の Idempotency-Key。
+        /// <para>
+        /// 作成時は自動確定しない（<c>auto_advance=false</c>）。明細を積み終える前に確定すると、欠けた明細（割引など）の
+        /// まま請求され、確定後の Invoice には明細を足せないため直せない。確定の予約は全明細を積んだ後に
+        /// <see cref="ScheduleFinalizationAsync"/> で入れる。
+        /// </para>
+        /// </summary>
+        Task<StripeInvoiceSnapshot> CreateInvoiceAsync(
+            string tenantName,
+            InvoiceDraftRequest request,
+            string idempotencyKey,
+            CancellationToken cancellationToken);
+
+        /// <summary>
+        /// 下書きの Invoice に明細を 1 行足し、InvoiceItem の ID（<c>ii_*</c>）を返す。金額は税抜の円（負なら割引）。
+        /// </summary>
+        Task<string> AddInvoiceItemAsync(
+            string tenantName,
+            string customerId,
+            string invoiceId,
+            long amountJpy,
+            string description,
+            IReadOnlyDictionary<string, string> metadata,
+            string idempotencyKey,
+            CancellationToken cancellationToken);
+
+        /// <summary>
+        /// 全明細を積み終えた下書きに自動確定を予約する（<c>auto_advance=true</c>、<c>automatically_finalizes_at</c>）。
+        /// その時刻に Stripe が確定し、既定の支払い方法へ請求する。同じ値で何度呼んでもよい。
+        /// </summary>
+        Task<StripeInvoiceSnapshot> ScheduleFinalizationAsync(
+            string tenantName,
+            string invoiceId,
+            DateTimeOffset finalizesAt,
+            CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Customer の Invoice のうち、metadata の <paramref name="key"/> が <paramref name="value"/> のものの ID。無ければ null。
+        /// 作成の応答を失った（ID を保存する前に落ちた）Invoice を、冪等キーの有効期限（24 時間）の後でも見つけるために使う。
+        /// 一覧 API は強整合なので、作成直後でも見える（検索 API は結果整合なので使わない）。削除済みの下書きは返らない。
+        /// </summary>
+        Task<string?> FindInvoiceIdByMetadataAsync(
+            string tenantName,
+            string customerId,
+            string key,
+            string value,
+            CancellationToken cancellationToken);
+
+        /// <summary>Invoice に付いている InvoiceItem（ID と metadata）。再開時に、作成済みの明細を突き合わせるために使う。</summary>
+        Task<IReadOnlyList<StripeInvoiceItemSnapshot>> ListInvoiceItemsAsync(
+            string tenantName,
+            string invoiceId,
+            CancellationToken cancellationToken);
+
+        /// <summary>Invoice の現在の状態。Stripe に無い（削除済みの下書きなど）なら null。</summary>
+        Task<StripeInvoiceSnapshot?> GetInvoiceAsync(
+            string tenantName,
+            string invoiceId,
+            CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Invoice を取り消す。確定前（draft）は削除（戻り値の <see cref="StripeInvoiceSnapshot.Status"/> は
+        /// <see cref="StripeInvoiceSnapshot.DeletedStatus"/>）、確定後で未払い（open）は void にする。
+        /// 支払い済み（paid）などは取り消せないので <see cref="InvalidOperationException"/>（返金は Stripe のダッシュボードで行う）。
+        /// </summary>
+        Task<StripeInvoiceSnapshot> CancelInvoiceAsync(
+            string tenantName,
+            string invoiceId,
+            CancellationToken cancellationToken);
+    }
+
+    /// <summary>
+    /// 月次 Invoice の作成内容（<see cref="IStripeGateway.CreateInvoiceAsync"/>）。明細は作成後に
+    /// <see cref="IStripeGateway.AddInvoiceItemAsync"/> で足す。
+    /// </summary>
+    public sealed record InvoiceDraftRequest(
+        string CustomerId,
+        string Description,
+        IReadOnlyDictionary<string, string> Metadata);
+
+    /// <summary>InvoiceItem のうち、再開時の突き合わせに使う部分。</summary>
+    public sealed record StripeInvoiceItemSnapshot(string Id, long AmountJpy, IReadOnlyDictionary<string, string> Metadata);
+
+    /// <summary>
+    /// Stripe の Invoice のうち EcAuth が写す部分。金額は円（JPY はゼロ小数通貨なので Stripe の値そのまま）。
+    /// </summary>
+    /// <param name="Status">Stripe の status（draft / open / paid / uncollectible / void）。削除済みの下書きは <see cref="DeletedStatus"/></param>
+    /// <param name="TaxJpy">消費税額（Stripe が計算）。下書きの間は明細の追加で変わる</param>
+    /// <param name="TotalJpy">合計（税込）</param>
+    public sealed record StripeInvoiceSnapshot(
+        string Id,
+        string Status,
+        long TaxJpy,
+        long TotalJpy,
+        long AmountPaidJpy,
+        DateTimeOffset? AutomaticallyFinalizesAt)
+    {
+        public const string DeletedStatus = "deleted";
     }
 
     /// <summary><see cref="IStripeGateway.EnsureDefaultPaymentMethodAsync"/> が返す Customer の状態。</summary>
@@ -81,7 +184,9 @@ namespace IdentityProvider.Services.Billing
     /// <param name="Type">イベント種別</param>
     /// <param name="CustomerId">イベントの対象 Customer（<c>cus_*</c>）。Customer に紐づかないイベントは null</param>
     /// <param name="CheckoutMode"><c>checkout.session.completed</c> のときの mode（<c>setup</c> 等）。それ以外は null</param>
-    public sealed record StripeWebhookEnvelope(string Id, string Type, string? CustomerId, string? CheckoutMode);
+    /// <param name="InvoiceId"><c>invoice.*</c> のときの Invoice ID（<c>in_*</c>）。それ以外は null</param>
+    public sealed record StripeWebhookEnvelope(
+        string Id, string Type, string? CustomerId, string? CheckoutMode, string? InvoiceId = null);
 
     /// <summary>Webhook の署名検証に失敗した（→ 400）。</summary>
     public sealed class StripeWebhookSignatureException : Exception

@@ -10,6 +10,9 @@ namespace IdentityProvider.Models
     [Table("account_organization")]
     public class AccountOrganization
     {
+        /// <summary>Organization の所有者。請求先になるのはこの role の Account だけ（EcAuthDocs#119 / #143）。</summary>
+        public const string OwnerRole = "owner";
+
         [Column("account_subject")]
         [MaxLength(255)]
         [Required]
@@ -22,7 +25,7 @@ namespace IdentityProvider.Models
         [Column("role")]
         [MaxLength(50)]
         [Required]
-        public string Role { get; set; } = "owner";
+        public string Role { get; set; } = OwnerRole;
 
         [Column("created_at")]
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

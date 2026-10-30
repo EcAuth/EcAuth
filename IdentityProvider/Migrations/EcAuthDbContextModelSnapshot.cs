@@ -17,7 +17,7 @@ namespace IdentityProvider.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.12")
+                .HasAnnotation("ProductVersion", "10.0.13")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -493,6 +493,235 @@ namespace IdentityProvider.Migrations
                         .IsUnique();
 
                     b.ToTable("b2b_user_identity");
+                });
+
+            modelBuilder.Entity("IdentityProvider.Models.BillingInvoice", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("id");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AccountSubject")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)")
+                        .HasColumnName("account_subject");
+
+                    b.Property<long?>("AmountPaidJpy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("amount_paid_jpy");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("DiscountJpy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("discount_jpy");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)")
+                        .HasColumnName("error");
+
+                    b.Property<DateTimeOffset?>("FinalizesAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("finalizes_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)")
+                        .HasColumnName("status");
+
+                    b.Property<long?>("StripeCheckedTicks")
+                        .HasColumnType("bigint")
+                        .HasColumnName("stripe_checked_ticks");
+
+                    b.Property<string>("StripeCustomerId")
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)")
+                        .HasColumnName("stripe_customer_id");
+
+                    b.Property<string>("StripeInvoiceId")
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)")
+                        .HasColumnName("stripe_invoice_id");
+
+                    b.Property<long?>("StripeTotalJpy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("stripe_total_jpy");
+
+                    b.Property<long>("SubtotalJpy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("subtotal_jpy");
+
+                    b.Property<long?>("TaxJpy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("tax_jpy");
+
+                    b.Property<string>("TenantName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)")
+                        .HasColumnName("tenant_name");
+
+                    b.Property<long>("TotalJpy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("total_jpy");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("YearMonth")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("nvarchar(7)")
+                        .HasColumnName("year_month");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StripeInvoiceId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_billing_invoice_stripe_invoice_id")
+                        .HasFilter("[stripe_invoice_id] IS NOT NULL");
+
+                    b.HasIndex("YearMonth", "AccountSubject")
+                        .IsUnique();
+
+                    b.ToTable("billing_invoice");
+                });
+
+            modelBuilder.Entity("IdentityProvider.Models.BillingInvoiceLine", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("id");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<long>("AmountJpy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("amount_jpy");
+
+                    b.Property<string>("AppName")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("app_name");
+
+                    b.Property<int>("BillableUnits")
+                        .HasColumnType("int")
+                        .HasColumnName("billable_units");
+
+                    b.Property<int>("BillingInvoiceId")
+                        .HasColumnType("int")
+                        .HasColumnName("billing_invoice_id");
+
+                    b.Property<int?>("ClientDbId")
+                        .HasColumnType("int")
+                        .HasColumnName("client_db_id");
+
+                    b.Property<string>("ClientId")
+                        .HasMaxLength(512)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("client_id");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("description");
+
+                    b.Property<string>("ExemptReason")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)")
+                        .HasColumnName("exempt_reason");
+
+                    b.Property<int>("FreeTierMau")
+                        .HasColumnType("int")
+                        .HasColumnName("free_tier_mau");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)")
+                        .HasColumnName("kind");
+
+                    b.Property<long>("ListPriceJpy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("list_price_jpy");
+
+                    b.Property<int>("MonthlyActiveUsers")
+                        .HasColumnType("int")
+                        .HasColumnName("monthly_active_users");
+
+                    b.Property<string>("OrganizationCode")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("organization_code");
+
+                    b.Property<int?>("OrganizationId")
+                        .HasColumnType("int")
+                        .HasColumnName("organization_id");
+
+                    b.Property<string>("OrganizationName")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("organization_name");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("int")
+                        .HasColumnName("position");
+
+                    b.Property<string>("StripeInvoiceItemId")
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)")
+                        .HasColumnName("stripe_invoice_item_id");
+
+                    b.Property<int?>("SubjectType")
+                        .HasColumnType("int")
+                        .HasColumnName("subject_type");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BillingInvoiceId");
+
+                    b.ToTable("billing_invoice_line");
+                });
+
+            modelBuilder.Entity("IdentityProvider.Models.BillingInvoiceRun", b =>
+                {
+                    b.Property<string>("YearMonth")
+                        .HasMaxLength(7)
+                        .HasColumnType("nvarchar(7)")
+                        .HasColumnName("year_month");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("int")
+                        .HasColumnName("attempts");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("completed_at");
+
+                    b.Property<int>("Failed")
+                        .HasColumnType("int")
+                        .HasColumnName("failed");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("started_at");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("YearMonth");
+
+                    b.ToTable("billing_invoice_run");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.Client", b =>
@@ -1420,6 +1649,17 @@ namespace IdentityProvider.Migrations
                     b.Navigation("B2BUser");
                 });
 
+            modelBuilder.Entity("IdentityProvider.Models.BillingInvoiceLine", b =>
+                {
+                    b.HasOne("IdentityProvider.Models.BillingInvoice", "Invoice")
+                        .WithMany("Lines")
+                        .HasForeignKey("BillingInvoiceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Invoice");
+                });
+
             modelBuilder.Entity("IdentityProvider.Models.Client", b =>
                 {
                     b.HasOne("IdentityProvider.Models.Organization", "Organization")
@@ -1567,6 +1807,11 @@ namespace IdentityProvider.Migrations
                     b.Navigation("Identities");
 
                     b.Navigation("PasskeyCredentials");
+                });
+
+            modelBuilder.Entity("IdentityProvider.Models.BillingInvoice", b =>
+                {
+                    b.Navigation("Lines");
                 });
 
             modelBuilder.Entity("IdentityProvider.Models.Client", b =>
