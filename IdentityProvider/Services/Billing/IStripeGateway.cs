@@ -102,6 +102,24 @@ namespace IdentityProvider.Services.Billing
             DateTimeOffset finalizesAt,
             CancellationToken cancellationToken);
 
+        /// <summary>
+        /// Customer の Invoice のうち、metadata の <paramref name="key"/> が <paramref name="value"/> のものの ID。無ければ null。
+        /// 作成の応答を失った（ID を保存する前に落ちた）Invoice を、冪等キーの有効期限（24 時間）の後でも見つけるために使う。
+        /// 一覧 API は強整合なので、作成直後でも見える（検索 API は結果整合なので使わない）。削除済みの下書きは返らない。
+        /// </summary>
+        Task<string?> FindInvoiceIdByMetadataAsync(
+            string tenantName,
+            string customerId,
+            string key,
+            string value,
+            CancellationToken cancellationToken);
+
+        /// <summary>Invoice に付いている InvoiceItem（ID と metadata）。再開時に、作成済みの明細を突き合わせるために使う。</summary>
+        Task<IReadOnlyList<StripeInvoiceItemSnapshot>> ListInvoiceItemsAsync(
+            string tenantName,
+            string invoiceId,
+            CancellationToken cancellationToken);
+
         /// <summary>Invoice の現在の状態。Stripe に無い（削除済みの下書きなど）なら null。</summary>
         Task<StripeInvoiceSnapshot?> GetInvoiceAsync(
             string tenantName,
@@ -127,6 +145,9 @@ namespace IdentityProvider.Services.Billing
         string CustomerId,
         string Description,
         IReadOnlyDictionary<string, string> Metadata);
+
+    /// <summary>InvoiceItem のうち、再開時の突き合わせに使う部分。</summary>
+    public sealed record StripeInvoiceItemSnapshot(string Id, long AmountJpy, IReadOnlyDictionary<string, string> Metadata);
 
     /// <summary>
     /// Stripe の Invoice のうち EcAuth が写す部分。金額は円（JPY はゼロ小数通貨なので Stripe の値そのまま）。

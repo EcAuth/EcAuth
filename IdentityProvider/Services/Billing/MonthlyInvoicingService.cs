@@ -70,6 +70,9 @@ namespace IdentityProvider.Services.Billing
                         return;
                     }
 
+                    // 既に pending の行がある = 前の実行（このインスタンスか別インスタンス）が途中で止まった。
+                    // Stripe 側の実際の状態と突き合わせてから続きを行う。
+                    var resuming = row != null;
                     row ??= await ClaimAsync(account, month, cancellationToken);
                     if (row == null)
                     {
@@ -84,7 +87,7 @@ namespace IdentityProvider.Services.Billing
                         return;
                     }
 
-                    await IssueAsync(row, month, cancellationToken);
+                    await IssueAsync(row, month, resuming, cancellationToken);
                     invoiced++;
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -350,13 +353,43 @@ namespace IdentityProvider.Services.Billing
         /// ID を行に残しながら進めるので、次の実行は続きから再開する（同じ冪等キー・同じ金額で送る）。
         /// 確定の予約は全明細を積んだ後にだけ入れる（作成時に予約すると、再開が遅れたときに明細の欠けた請求書が
         /// 確定して請求され、確定後は明細を足せない）。
+        /// <para>
+        /// 再開（<paramref name="resuming"/>）のときは、冪等キーに頼らず Stripe の実際の状態と突き合わせる。冪等キーは
+        /// 24 時間で失効するため、「作成したが ID を保存する前に落ちた」Invoice / 明細を、1 日以上経ってから作り直すと
+        /// 二重になる（同じ請求書に同じ明細が 2 行載って過大請求になる）。Invoice と明細は metadata の
+        /// <c>ecauth_billing_invoice_id</c> / <c>ecauth_billing_invoice_line_id</c> で見つける。予約まで済んで確定・
+        /// 請求された後に落ちていた場合は、その状態をそのまま記録して終える。
+        /// </para>
         /// </summary>
-        private async Task IssueAsync(BillingInvoice row, UsageMonth month, CancellationToken cancellationToken)
+        private async Task IssueAsync(BillingInvoice row, UsageMonth month, bool resuming, CancellationToken cancellationToken)
         {
             var customerId = row.StripeCustomerId
                 ?? throw new InvalidOperationException($"billing_invoice(id={row.Id}) に Stripe Customer がありません。");
             var finalizesAt = row.FinalizesAt
                 ?? throw new InvalidOperationException($"billing_invoice(id={row.Id}) に確定日時がありません。");
+            var rowId = row.Id.ToString(CultureInfo.InvariantCulture);
+
+            if (resuming && row.StripeInvoiceId == null)
+            {
+                var found = await _stripe.FindInvoiceIdByMetadataAsync(
+                    row.TenantName, customerId, "ecauth_billing_invoice_id", rowId, cancellationToken);
+                if (found != null)
+                {
+                    _logger.LogWarning(
+                        "作成済みの Invoice を見つけたので使います（前回は ID を保存する前に止まった）: Month={Month}, Account={Subject}, Invoice={InvoiceId}",
+                        month, row.AccountSubject, found);
+                    row.StripeInvoiceId = found;
+                    row.UpdatedAt = _time.GetUtcNow();
+                    await _context.SaveChangesAsync(cancellationToken);
+                }
+            }
+            else if (resuming)
+            {
+                if (await AdoptIfNoLongerDraftAsync(row, month, cancellationToken))
+                {
+                    return;
+                }
+            }
 
             if (row.StripeInvoiceId == null)
             {
@@ -371,6 +404,11 @@ namespace IdentityProvider.Services.Billing
                 row.StripeInvoiceId = snapshot.Id;
                 row.UpdatedAt = _time.GetUtcNow();
                 await _context.SaveChangesAsync(cancellationToken);
+            }
+
+            if (resuming)
+            {
+                await ReconcileInvoiceItemsAsync(row, cancellationToken);
             }
 
             foreach (var line in row.Lines.Where(l => l.AmountJpy != 0 && l.StripeInvoiceItemId == null).OrderBy(l => l.Position))
@@ -414,6 +452,66 @@ namespace IdentityProvider.Services.Billing
             _logger.LogInformation(
                 "月次請求を起票しました: Month={Month}, Account={Subject}, Invoice={InvoiceId}, Total={Total}, FinalizesAt={FinalizesAt}",
                 month, row.AccountSubject, row.StripeInvoiceId, row.TotalJpy, finalizesAt);
+        }
+
+        /// <summary>
+        /// 再開した行の Invoice が既に下書きでなくなっていたら（予約まで済んで確定・請求された後に落ちた、または
+        /// ダッシュボードで削除された）、その状態を記録して true を返す。確定後の Invoice には明細も予約も足せない。
+        /// </summary>
+        private async Task<bool> AdoptIfNoLongerDraftAsync(BillingInvoice row, UsageMonth month, CancellationToken cancellationToken)
+        {
+            var snapshot = await _stripe.GetInvoiceAsync(row.TenantName, row.StripeInvoiceId!, cancellationToken);
+            if (snapshot is { Status: IMonthlyInvoicingService.Statuses.Draft })
+            {
+                return false;
+            }
+
+            row.Status = snapshot?.Status ?? IMonthlyInvoicingService.Statuses.Deleted;
+            row.TaxJpy = snapshot?.TaxJpy;
+            row.StripeTotalJpy = snapshot?.TotalJpy;
+            row.AmountPaidJpy = snapshot?.AmountPaidJpy;
+            row.Error = null;
+            row.UpdatedAt = _time.GetUtcNow();
+            await _context.SaveChangesAsync(cancellationToken);
+            _logger.LogWarning(
+                "再開した月次請求の Invoice は下書きではなくなっていたため、その状態を記録しました: Month={Month}, Account={Subject}, Invoice={InvoiceId}, Status={Status}",
+                month, row.AccountSubject, row.StripeInvoiceId, row.Status);
+            return true;
+        }
+
+        /// <summary>
+        /// Invoice に既にある明細を metadata の line ID で突き合わせ、ID を保存できていなかった行を埋める
+        /// （作り直すと二重になる）。
+        /// </summary>
+        private async Task ReconcileInvoiceItemsAsync(BillingInvoice row, CancellationToken cancellationToken)
+        {
+            var existing = await _stripe.ListInvoiceItemsAsync(row.TenantName, row.StripeInvoiceId!, cancellationToken);
+            var byLine = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var item in existing)
+            {
+                if (item.Metadata.TryGetValue("ecauth_billing_invoice_line_id", out var lineId))
+                {
+                    byLine.TryAdd(lineId, item.Id);
+                }
+            }
+
+            var recovered = 0;
+            foreach (var line in row.Lines.Where(l => l.StripeInvoiceItemId == null))
+            {
+                if (byLine.TryGetValue(line.Id.ToString(CultureInfo.InvariantCulture), out var itemId))
+                {
+                    line.StripeInvoiceItemId = itemId;
+                    recovered++;
+                }
+            }
+            if (recovered > 0)
+            {
+                row.UpdatedAt = _time.GetUtcNow();
+                await _context.SaveChangesAsync(cancellationToken);
+                _logger.LogWarning(
+                    "作成済みの明細 {Count} 件の ID を Stripe から復元しました（前回は ID を保存する前に止まった）: Invoice={InvoiceId}",
+                    recovered, row.StripeInvoiceId);
+            }
         }
 
         private async Task RecordErrorAsync(UsageMonth month, string accountSubject, Exception ex, CancellationToken cancellationToken)

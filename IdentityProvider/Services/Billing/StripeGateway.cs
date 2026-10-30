@@ -248,6 +248,38 @@ namespace IdentityProvider.Services.Billing
             return ToSnapshot(invoice);
         }
 
+        /// <inheritdoc />
+        public async Task<string?> FindInvoiceIdByMetadataAsync(
+            string tenantName, string customerId, string key, string value, CancellationToken cancellationToken)
+        {
+            var client = ClientFor(tenantName);
+            await foreach (var invoice in client.V1.Invoices.ListAutoPagingAsync(
+                new InvoiceListOptions { Customer = customerId, Limit = 100 }, cancellationToken: cancellationToken))
+            {
+                if (invoice.Metadata != null && invoice.Metadata.TryGetValue(key, out var v) && v == value)
+                {
+                    return invoice.Id;
+                }
+            }
+            return null;
+        }
+
+        /// <inheritdoc />
+        public async Task<IReadOnlyList<StripeInvoiceItemSnapshot>> ListInvoiceItemsAsync(
+            string tenantName, string invoiceId, CancellationToken cancellationToken)
+        {
+            var client = ClientFor(tenantName);
+            var items = new List<StripeInvoiceItemSnapshot>();
+            await foreach (var item in client.V1.InvoiceItems.ListAutoPagingAsync(
+                new InvoiceItemListOptions { Invoice = invoiceId, Limit = 100 }, cancellationToken: cancellationToken))
+            {
+                items.Add(new StripeInvoiceItemSnapshot(
+                    item.Id, item.Amount, item.Metadata ?? new Dictionary<string, string>()));
+            }
+            return items;
+        }
+
+        /// <inheritdoc />
         public async Task<StripeInvoiceSnapshot?> GetInvoiceAsync(
             string tenantName, string invoiceId, CancellationToken cancellationToken)
         {

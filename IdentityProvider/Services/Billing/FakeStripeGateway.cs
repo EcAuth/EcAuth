@@ -33,7 +33,7 @@ namespace IdentityProvider.Services.Billing
             public required IReadOnlyDictionary<string, string> Metadata { get; init; }
             public string Status { get; set; } = "draft";
             public long AmountPaid { get; set; }
-            public List<(string Id, long AmountJpy, string Description)> Items { get; } = new();
+            public List<(string Id, long AmountJpy, string Description, IReadOnlyDictionary<string, string> Metadata)> Items { get; } = new();
 
             /// <summary>税抜合計。</summary>
             public long Subtotal => Items.Sum(i => i.AmountJpy);
@@ -129,7 +129,7 @@ namespace IdentityProvider.Services.Billing
                     throw new InvalidOperationException($"下書きの Invoice がありません: {invoiceId}");
                 }
                 var id = "ii_fake_" + Guid.NewGuid().ToString("N")[..24];
-                invoice.Items.Add((id, amountJpy, description));
+                invoice.Items.Add((id, amountJpy, description, new Dictionary<string, string>(metadata)));
                 _idempotency[idempotencyKey] = id;
                 return Task.FromResult(id);
             }
@@ -148,6 +148,27 @@ namespace IdentityProvider.Services.Billing
                 return Task.FromResult(ToSnapshot(invoice));
             }
         }
+
+        public Task<string?> FindInvoiceIdByMetadataAsync(
+            string tenantName, string customerId, string key, string value, CancellationToken cancellationToken)
+        {
+            var found = _invoices.Values.FirstOrDefault(i =>
+                i.CustomerId == customerId && i.Status != StripeInvoiceSnapshot.DeletedStatus
+                && i.Metadata.TryGetValue(key, out var v) && v == value);
+            return Task.FromResult(found?.Id);
+        }
+
+        public Task<IReadOnlyList<StripeInvoiceItemSnapshot>> ListInvoiceItemsAsync(
+            string tenantName, string invoiceId, CancellationToken cancellationToken)
+        {
+            IReadOnlyList<StripeInvoiceItemSnapshot> items = _invoices.TryGetValue(invoiceId, out var invoice)
+                ? invoice.Items.Select(i => new StripeInvoiceItemSnapshot(i.Id, i.AmountJpy, i.Metadata)).ToList()
+                : new List<StripeInvoiceItemSnapshot>();
+            return Task.FromResult(items);
+        }
+
+        /// <summary>冪等キーの記録を捨てる（Stripe で 24 時間が過ぎてキーが失効した状況の再現）。</summary>
+        public void ForgetIdempotencyKeys() => _idempotency.Clear();
 
         public Task<StripeInvoiceSnapshot?> GetInvoiceAsync(string tenantName, string invoiceId, CancellationToken cancellationToken)
         {

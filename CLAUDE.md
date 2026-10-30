@@ -489,9 +489,11 @@ Checkout と Portal は保存済みの Customer を使う前に必ず 1 回同�
 - **二重起票の防止**: Stripe を呼ぶ前に `billing_invoice` を `pending` で INSERT し（`UNIQUE(year_month, account_subject)`）、
   金額と内訳（`billing_invoice_line`）をその時点で固定する。Invoice の ID と各 InvoiceItem の ID は作るたびに行へ書き、
   落ちたら次の実行が続きから再開する。冪等キーは `ecauth-billing-invoice-{id}` / `ecauth-billing-invoice-line-{id}`
-  （同じキーで違うパラメータを送ると Stripe はエラーにするので、再開は固定した値で送る）。Stripe の冪等キーは 24 時間で
-  失効するため、Invoice 作成後・行への保存前に落ちたまま 24 時間以上放置すると下書きが二重にできうる（毎時の再開で
-  通常は 1 時間以内に閉じる）。
+  （同じキーで違うパラメータを送ると Stripe はエラーにするので、再開は固定した値で送る）。**冪等キーは 24 時間で失効する**
+  ので、再開（既に `pending` の行がある）では冪等キーに頼らず Stripe と突き合わせる: ID を保存できなかった Invoice は
+  Customer の Invoice 一覧から metadata `ecauth_billing_invoice_id` で、明細は Invoice の InvoiceItem 一覧から
+  `ecauth_billing_invoice_line_id` で見つけて ID を埋める（一覧 API は強整合。検索 API は結果整合なので使わない）。
+  Invoice が既に下書きでない（予約まで済んで確定・請求された後に落ちた、ダッシュボードで削除された）ならその状態を記録して終える。
 - **Invoice の作り方**: `charge_automatically` / `pending_invoice_items_behavior=exclude` / `default_tax_rates=[Stripe:TaxRateId:{tenant}]`。
   明細は税抜で、0 円の行は送らない。割引は負の行。Customer の `preferred_locales` が空なら `ja` にする（請求書 PDF の言語）。
   **作成時は `auto_advance=false`** にし、全明細を積んだ後に `auto_advance=true` + `automatically_finalizes_at` を予約する

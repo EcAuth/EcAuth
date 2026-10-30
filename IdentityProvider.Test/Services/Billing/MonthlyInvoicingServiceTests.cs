@@ -250,6 +250,90 @@ namespace IdentityProvider.Test.Services.Billing
         }
 
         [Fact]
+        public async Task Run_ItemResponseLost_ResumeAfterKeyExpiry_DoesNotDuplicateItem()
+        {
+            AddAccount("acct-a");
+            SetEstimate("acct-a", clients: new[] { ClientLine(1, 12, 700), ClientLine(2, 10, 500) });
+            // 1 行目は Stripe で作られたが、応答を失って ID を保存できなかった
+            _stripe.LoseItemResponseAt = 0;
+            var first = await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+            Assert.Equal(1, first.Failed);
+            Assert.All(Row("acct-a").Lines, l => Assert.Null(l.StripeInvoiceItemId));
+
+            // 1 日以上経って冪等キーが失効してから再開する
+            _fake.ForgetIdempotencyKeys();
+            _stripe.LoseItemResponseAt = null;
+            var second = await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+
+            Assert.Equal(1, second.Invoiced);
+            var invoice = Assert.Single(_fake.Invoices);
+            Assert.Equal(new[] { 700L, 500L }, invoice.Items.Select(i => i.AmountJpy));   // 700 が 2 行にならない
+            var row = Row("acct-a");
+            Assert.Equal(invoice.Items[0].Id, row.Lines.Single(l => l.ClientDbId == 1).StripeInvoiceItemId);
+            Assert.Equal(IMonthlyInvoicingService.Statuses.Draft, row.Status);
+        }
+
+        [Fact]
+        public async Task Run_InvoiceResponseLost_ResumeAfterKeyExpiry_ReusesInvoice()
+        {
+            AddAccount("acct-a");
+            SetEstimate("acct-a", clients: ClientLine(1, 12, 700));
+            _stripe.LoseInvoiceResponse = true;
+            var first = await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+            Assert.Equal(1, first.Failed);
+            Assert.Null(Row("acct-a").StripeInvoiceId);
+
+            _fake.ForgetIdempotencyKeys();
+            _stripe.LoseInvoiceResponse = false;
+            await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+
+            var invoice = Assert.Single(_fake.Invoices);   // 2 通目の請求書を作らない
+            Assert.Equal(invoice.Id, Row("acct-a").StripeInvoiceId);
+            Assert.Equal(new[] { 700L }, invoice.Items.Select(i => i.AmountJpy));
+        }
+
+        [Theory]
+        [InlineData("paid", IMonthlyInvoicingService.Statuses.Paid)]
+        [InlineData("open", IMonthlyInvoicingService.Statuses.Open)]
+        public async Task Run_ResumedAfterStripeFinalized_AdoptsStripeState(string stripeStatus, string expected)
+        {
+            AddAccount("acct-a");
+            SetEstimate("acct-a", clients: ClientLine(1, 12, 700));
+            await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+            // 予約まで済んだが最後の保存の前に落ち、その後 Stripe が確定・請求した状況
+            var invoiceId = Row("acct-a").StripeInvoiceId!;
+            await _context.BillingInvoices.ExecuteUpdateAsync(s => s.SetProperty(i => i.Status, IMonthlyInvoicingService.Statuses.Pending));
+            _context.ChangeTracker.Clear();   // 本番の実行は毎回新しいスコープ（DbContext）で読む
+            _fake.SetInvoiceStatus(invoiceId, stripeStatus);
+
+            var result = await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+
+            Assert.Equal(0, result.Failed);
+            var row = Row("acct-a");
+            Assert.Equal(expected, row.Status);
+            Assert.Equal(70, row.TaxJpy);
+            Assert.Equal(770, row.StripeTotalJpy);
+            Assert.Single(_fake.Invoices.Single().Items);
+        }
+
+        [Fact]
+        public async Task Run_ResumedInvoiceDeletedInStripe_MarksDeleted()
+        {
+            AddAccount("acct-a");
+            SetEstimate("acct-a", clients: new[] { ClientLine(1, 12, 700), ClientLine(2, 10, 500) });
+            _stripe.FailItemsAfter = 1;
+            await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+            // 運用者が pending の間に Stripe のダッシュボードで下書きを削除した
+            await _fake.CancelInvoiceAsync(Live, Row("acct-a").StripeInvoiceId!, CancellationToken.None);
+            _stripe.FailItemsAfter = null;
+
+            var result = await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+
+            Assert.Equal(0, result.Failed);
+            Assert.Equal(IMonthlyInvoicingService.Statuses.Deleted, Row("acct-a").Status);
+        }
+
+        [Fact]
         public async Task Run_ResumedAfterPlannedFinalization_PostponesSchedule()
         {
             AddAccount("acct-a");
@@ -518,19 +602,42 @@ namespace IdentityProvider.Test.Services.Billing
             /// <summary>この件数の明細を送った後で失敗する。null なら失敗しない。</summary>
             public int? FailItemsAfter { get; set; }
 
-            public Task<string> AddInvoiceItemAsync(string tenantName, string customerId, string invoiceId, long amountJpy,
+            /// <summary>この番目（0 起点）の明細は Stripe で作られるが、応答を失う（ID を返さずに失敗する）。</summary>
+            public int? LoseItemResponseAt { get; set; }
+
+            /// <summary>Invoice は Stripe で作られるが、応答を失う。</summary>
+            public bool LoseInvoiceResponse { get; set; }
+
+            public async Task<string> AddInvoiceItemAsync(string tenantName, string customerId, string invoiceId, long amountJpy,
                 string description, IReadOnlyDictionary<string, string> metadata, string idempotencyKey, CancellationToken cancellationToken)
             {
                 if (FailItemsAfter is { } limit && _items >= limit)
                 {
                     throw new InvalidOperationException("Stripe 障害（テスト）");
                 }
-                _items++;
-                return inner.AddInvoiceItemAsync(tenantName, customerId, invoiceId, amountJpy, description, metadata, idempotencyKey, cancellationToken);
+                var index = _items++;
+                var id = await inner.AddInvoiceItemAsync(tenantName, customerId, invoiceId, amountJpy, description, metadata, idempotencyKey, cancellationToken);
+                if (LoseItemResponseAt == index)
+                {
+                    throw new HttpRequestException("応答を失った（テスト）");
+                }
+                return id;
             }
 
-            public Task<StripeInvoiceSnapshot> CreateInvoiceAsync(string tenantName, InvoiceDraftRequest request, string idempotencyKey, CancellationToken cancellationToken)
-                => inner.CreateInvoiceAsync(tenantName, request, idempotencyKey, cancellationToken);
+            public async Task<StripeInvoiceSnapshot> CreateInvoiceAsync(string tenantName, InvoiceDraftRequest request, string idempotencyKey, CancellationToken cancellationToken)
+            {
+                var snapshot = await inner.CreateInvoiceAsync(tenantName, request, idempotencyKey, cancellationToken);
+                if (LoseInvoiceResponse)
+                {
+                    throw new HttpRequestException("応答を失った（テスト）");
+                }
+                return snapshot;
+            }
+
+            public Task<string?> FindInvoiceIdByMetadataAsync(string tenantName, string customerId, string key, string value, CancellationToken cancellationToken)
+                => inner.FindInvoiceIdByMetadataAsync(tenantName, customerId, key, value, cancellationToken);
+            public Task<IReadOnlyList<StripeInvoiceItemSnapshot>> ListInvoiceItemsAsync(string tenantName, string invoiceId, CancellationToken cancellationToken)
+                => inner.ListInvoiceItemsAsync(tenantName, invoiceId, cancellationToken);
             public Task<StripeInvoiceSnapshot> ScheduleFinalizationAsync(string tenantName, string invoiceId, DateTimeOffset finalizesAt, CancellationToken cancellationToken)
                 => inner.ScheduleFinalizationAsync(tenantName, invoiceId, finalizesAt, cancellationToken);
             public Task<StripeInvoiceSnapshot?> GetInvoiceAsync(string tenantName, string invoiceId, CancellationToken cancellationToken)
