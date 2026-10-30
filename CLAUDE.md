@@ -494,6 +494,11 @@ Checkout と Portal は保存済みの Customer を使う前に必ず 1 回同�
   通常は 1 時間以内に閉じる）。
 - **Invoice の作り方**: `charge_automatically` / `pending_invoice_items_behavior=exclude` / `default_tax_rates=[Stripe:TaxRateId:{tenant}]`。
   明細は税抜で、0 円の行は送らない。割引は負の行。Customer の `preferred_locales` が空なら `ja` にする（請求書 PDF の言語）。
+  **作成時は `auto_advance=false`** にし、全明細を積んだ後に `auto_advance=true` + `automatically_finalizes_at` を予約する
+  （作成時に予約すると、明細の追加が予定時刻まで失敗し続けたとき欠けた請求書が確定して請求され、確定後は明細を足せない）。
+  再開が予定時刻を過ぎていたら 1 時間後に先送りする。
+- **実行の完了**: `billing_invoice_run.completed_at` は、この実行の失敗が 0 件で、かつその月に `pending` の行が残っていない
+  ときだけ立てる（別インスタンスが確保したまま落ちた行を、以後の確認が再開できるように）。
 - **取り消し**: `CancelAsync` が確定前の下書きは削除（`deleted`）、確定後で未払いは void。行は消さないので、同じ月を
   同じ Account に起票し直す経路は無い（必要なら Stripe のダッシュボードで作る）。
 - **Webhook**: `invoice.finalized` / `paid` / `payment_failed` / `voided` / `marked_uncollectible`（`BillingService.InvoiceEvents`）で

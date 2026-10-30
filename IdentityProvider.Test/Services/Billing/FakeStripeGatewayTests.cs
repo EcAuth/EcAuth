@@ -34,7 +34,7 @@ namespace IdentityProvider.Test.Services.Billing
         [Fact]
         public async Task Invoice_IdempotencyKeyReturnsSameInvoiceAndItem_AndCancelFollowsStatus()
         {
-            var request = new InvoiceDraftRequest("cus_1", DateTimeOffset.UtcNow.AddDays(2), "test", new Dictionary<string, string>());
+            var request = new InvoiceDraftRequest("cus_1", "test", new Dictionary<string, string>());
             var first = await _gateway.CreateInvoiceAsync("accounts", request, "key-1", CancellationToken.None);
             var again = await _gateway.CreateInvoiceAsync("accounts", request, "key-1", CancellationToken.None);
             Assert.Equal(first.Id, again.Id);

@@ -176,11 +176,7 @@ namespace IdentityProvider.Services.Billing
             return ToEnvelope(stripeEvent);
         }
 
-        /// <summary>
-        /// 検証済みの <see cref="Event"/> から EcAuth が使う情報だけを取り出す。
-        /// <c>payment_method.detached</c> はデタッチ後の PaymentMethod が載るため <c>data.object.customer</c> が null。
-        /// その場合は <c>data.previous_attributes.customer</c>（変更前の値）から元の Customer を取る。
-        /// </summary>
+        /// <inheritdoc />
         public async Task<StripeInvoiceSnapshot> CreateInvoiceAsync(
             string tenantName, InvoiceDraftRequest request, string idempotencyKey, CancellationToken cancellationToken)
         {
@@ -201,10 +197,8 @@ namespace IdentityProvider.Services.Billing
                     Customer = request.CustomerId,
                     Currency = "jpy",
                     CollectionMethod = "charge_automatically",
-                    // 下書きのまま置き、AutomaticallyFinalizesAt に Stripe が確定して既定の支払い方法へ請求する。
-                    // それまでの間（既定 2 日）は誤請求を削除で止められる。
-                    AutoAdvance = true,
-                    AutomaticallyFinalizesAt = request.FinalizesAt.UtcDateTime,
+                    // 明細を積み終えるまでは確定させない（ScheduleFinalizationAsync で後から予約する）。
+                    AutoAdvance = false,
                     // Customer に溜まった他の InvoiceItem（ダッシュボードでの手作業など）をこの請求書に混ぜない。
                     PendingInvoiceItemsBehavior = "exclude",
                     DefaultTaxRates = new List<string> { taxRateId },
@@ -235,6 +229,23 @@ namespace IdentityProvider.Services.Billing
                 new RequestOptions { IdempotencyKey = idempotencyKey },
                 cancellationToken);
             return item.Id;
+        }
+
+        /// <inheritdoc />
+        public async Task<StripeInvoiceSnapshot> ScheduleFinalizationAsync(
+            string tenantName, string invoiceId, DateTimeOffset finalizesAt, CancellationToken cancellationToken)
+        {
+            var client = ClientFor(tenantName);
+            var invoice = await client.V1.Invoices.UpdateAsync(
+                invoiceId,
+                new InvoiceUpdateOptions
+                {
+                    // この時刻に Stripe が確定して既定の支払い方法へ請求する。それまで（既定 2 日）は削除で止められる。
+                    AutoAdvance = true,
+                    AutomaticallyFinalizesAt = finalizesAt.UtcDateTime,
+                },
+                cancellationToken: cancellationToken);
+            return ToSnapshot(invoice);
         }
 
         public async Task<StripeInvoiceSnapshot?> GetInvoiceAsync(
@@ -302,6 +313,11 @@ namespace IdentityProvider.Services.Billing
                 finalizesAt);
         }
 
+        /// <summary>
+        /// 検証済みの <see cref="Event"/> から EcAuth が使う情報だけを取り出す。
+        /// <c>payment_method.detached</c> はデタッチ後の PaymentMethod が載るため <c>data.object.customer</c> が null。
+        /// その場合は <c>data.previous_attributes.customer</c>（変更前の値）から元の Customer を取る。
+        /// </summary>
         public static StripeWebhookEnvelope ToEnvelope(Event stripeEvent)
         {
             string? customerId = null;

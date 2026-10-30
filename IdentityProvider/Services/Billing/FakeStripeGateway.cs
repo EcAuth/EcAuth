@@ -27,7 +27,8 @@ namespace IdentityProvider.Services.Billing
             public required string Id { get; init; }
             public required string TenantName { get; init; }
             public required string CustomerId { get; init; }
-            public required DateTimeOffset FinalizesAt { get; init; }
+            /// <summary>自動確定の予約。null は未予約（明細を積んでいる途中）。</summary>
+            public DateTimeOffset? FinalizesAt { get; set; }
             public required string Description { get; init; }
             public required IReadOnlyDictionary<string, string> Metadata { get; init; }
             public string Status { get; set; } = "draft";
@@ -104,7 +105,6 @@ namespace IdentityProvider.Services.Billing
                     Id = "in_fake_" + Guid.NewGuid().ToString("N")[..24],
                     TenantName = tenantName,
                     CustomerId = request.CustomerId,
-                    FinalizesAt = request.FinalizesAt,
                     Description = request.Description,
                     Metadata = new Dictionary<string, string>(request.Metadata),
                 };
@@ -132,6 +132,20 @@ namespace IdentityProvider.Services.Billing
                 invoice.Items.Add((id, amountJpy, description));
                 _idempotency[idempotencyKey] = id;
                 return Task.FromResult(id);
+            }
+        }
+
+        public Task<StripeInvoiceSnapshot> ScheduleFinalizationAsync(
+            string tenantName, string invoiceId, DateTimeOffset finalizesAt, CancellationToken cancellationToken)
+        {
+            lock (_invoiceLock)
+            {
+                if (!_invoices.TryGetValue(invoiceId, out var invoice) || invoice.Status != "draft")
+                {
+                    throw new InvalidOperationException($"下書きの Invoice がありません: {invoiceId}");
+                }
+                invoice.FinalizesAt = finalizesAt;
+                return Task.FromResult(ToSnapshot(invoice));
             }
         }
 

@@ -713,7 +713,7 @@ namespace IdentityProvider.Test.Services.Billing
         private async Task<(BillingInvoice Row, string InvoiceId)> SeedInvoiceAsync(string status = IMonthlyInvoicingService.Statuses.Draft, string tenant = Tenant)
         {
             var snapshot = await _stripe.CreateInvoiceAsync(
-                tenant, new InvoiceDraftRequest("cus_x", DateTimeOffset.UtcNow.AddDays(2), "test", new Dictionary<string, string>()),
+                tenant, new InvoiceDraftRequest("cus_x", "test", new Dictionary<string, string>()),
                 "seed-" + Guid.NewGuid(), CancellationToken.None);
             await _stripe.AddInvoiceItemAsync(tenant, "cus_x", snapshot.Id, 1_000, "item", new Dictionary<string, string>(), "seed-item-" + snapshot.Id, CancellationToken.None);
             var row = new BillingInvoice

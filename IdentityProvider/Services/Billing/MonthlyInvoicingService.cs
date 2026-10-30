@@ -179,9 +179,16 @@ namespace IdentityProvider.Services.Billing
 
             var result = await RunAsync(month, IMonthlyInvoicingService.Scope.All, cancellationToken);
 
+            // 完了にするのは pending の行が 1 件も残っていないときだけ。この実行で失敗が無くても、別インスタンスが
+            // 先に確保した行（この実行では AlreadyProcessed に数える）が処理中のまま落ちていると pending で残り、
+            // ここで完了にすると以後の確認が再開しなくなる。
+            var hasPending = await _context.BillingInvoices
+                .AsNoTracking()
+                .AnyAsync(i => i.YearMonth == month.Value && i.Status == IMonthlyInvoicingService.Statuses.Pending, cancellationToken);
+
             // RunAsync は失敗時に ChangeTracker を捨てるので、追跡中の run は当てにせず直接書く。
             var finishedAt = _time.GetUtcNow();
-            DateTimeOffset? completedAt = result.Failed == 0 ? finishedAt : null;
+            DateTimeOffset? completedAt = result.Failed == 0 && !hasPending ? finishedAt : null;
             await _context.BillingInvoiceRuns
                 .Where(r => r.YearMonth == month.Value)
                 .ExecuteUpdateAsync(s => s
@@ -339,8 +346,10 @@ namespace IdentityProvider.Services.Billing
         }
 
         /// <summary>
-        /// Stripe に下書きの Invoice を作り、明細を積んで draft にする。途中で落ちても、作成済みの ID を行に残しながら
-        /// 進めるので、次の実行は続きから再開する（同じ冪等キー・同じ金額で送る）。
+        /// Stripe に下書きの Invoice を作り、明細を積み、最後に自動確定を予約して draft にする。途中で落ちても、作成済みの
+        /// ID を行に残しながら進めるので、次の実行は続きから再開する（同じ冪等キー・同じ金額で送る）。
+        /// 確定の予約は全明細を積んだ後にだけ入れる（作成時に予約すると、再開が遅れたときに明細の欠けた請求書が
+        /// 確定して請求され、確定後は明細を足せない）。
         /// </summary>
         private async Task IssueAsync(BillingInvoice row, UsageMonth month, CancellationToken cancellationToken)
         {
@@ -355,7 +364,6 @@ namespace IdentityProvider.Services.Billing
                     row.TenantName,
                     new InvoiceDraftRequest(
                         customerId,
-                        finalizesAt,
                         $"EcAuth ご利用料金（{month.Year} 年 {month.Month} 月分）",
                         Metadata(row)),
                     idempotencyKey: $"ecauth-billing-invoice-{row.Id}",
@@ -386,6 +394,18 @@ namespace IdentityProvider.Services.Billing
                     cancellationToken);
                 await _context.SaveChangesAsync(cancellationToken);
             }
+
+            // 再開が起票から大きく遅れて予定時刻を過ぎていたら、Stripe は過去の時刻を受け付けないので先送りする。
+            var earliest = _time.GetUtcNow() + MinimumFinalizeDelay;
+            if (finalizesAt < earliest)
+            {
+                _logger.LogWarning(
+                    "月次請求の確定予定を過ぎていたため先送りします: Month={Month}, Account={Subject}, Planned={Planned}, Actual={Actual}",
+                    month, row.AccountSubject, finalizesAt, earliest);
+                finalizesAt = earliest;
+                row.FinalizesAt = finalizesAt;
+            }
+            await _stripe.ScheduleFinalizationAsync(row.TenantName, row.StripeInvoiceId, finalizesAt, cancellationToken);
 
             row.Status = IMonthlyInvoicingService.Statuses.Draft;
             row.Error = null;
@@ -482,7 +502,9 @@ namespace IdentityProvider.Services.Billing
         /// 起票から自動確定までの時間。0 以下（即時確定）でも Stripe は未来の時刻を要求するので 1 時間置く
         /// （Stripe の既定の自動確定と同じ間隔）。
         /// </summary>
-        private static TimeSpan FinalizeDelay(int days) => days > 0 ? TimeSpan.FromDays(days) : TimeSpan.FromHours(1);
+        private static TimeSpan FinalizeDelay(int days) => days > 0 ? TimeSpan.FromDays(days) : MinimumFinalizeDelay;
+
+        private static readonly TimeSpan MinimumFinalizeDelay = TimeSpan.FromHours(1);
 
         private static string Truncate(string value) =>
             value.Length > MaxDescriptionLength ? value[..MaxDescriptionLength] : value;

@@ -66,8 +66,12 @@ namespace IdentityProvider.Services.Billing
         /// 月次請求の Invoice を下書き（draft）で作る（EcAuthDocs#119 PR-2）。
         /// <c>collection_method=charge_automatically</c>、<c>pending_invoice_items_behavior=exclude</c>（Customer に
         /// 溜まった他の InvoiceItem を拾わない）、消費税はテナント別の TaxRate（<c>Stripe:TaxRateId:{tenant}</c>）を
-        /// <c>default_tax_rates</c> に付けて Stripe に計算させる。<see cref="InvoiceDraftRequest.FinalizesAt"/> に Stripe が
-        /// 自動で確定し、既定の支払い方法へ請求する。<paramref name="idempotencyKey"/> は Stripe の Idempotency-Key。
+        /// <c>default_tax_rates</c> に付けて Stripe に計算させる。<paramref name="idempotencyKey"/> は Stripe の Idempotency-Key。
+        /// <para>
+        /// 作成時は自動確定しない（<c>auto_advance=false</c>）。明細を積み終える前に確定すると、欠けた明細（割引など）の
+        /// まま請求され、確定後の Invoice には明細を足せないため直せない。確定の予約は全明細を積んだ後に
+        /// <see cref="ScheduleFinalizationAsync"/> で入れる。
+        /// </para>
         /// </summary>
         Task<StripeInvoiceSnapshot> CreateInvoiceAsync(
             string tenantName,
@@ -86,6 +90,16 @@ namespace IdentityProvider.Services.Billing
             string description,
             IReadOnlyDictionary<string, string> metadata,
             string idempotencyKey,
+            CancellationToken cancellationToken);
+
+        /// <summary>
+        /// 全明細を積み終えた下書きに自動確定を予約する（<c>auto_advance=true</c>、<c>automatically_finalizes_at</c>）。
+        /// その時刻に Stripe が確定し、既定の支払い方法へ請求する。同じ値で何度呼んでもよい。
+        /// </summary>
+        Task<StripeInvoiceSnapshot> ScheduleFinalizationAsync(
+            string tenantName,
+            string invoiceId,
+            DateTimeOffset finalizesAt,
             CancellationToken cancellationToken);
 
         /// <summary>Invoice の現在の状態。Stripe に無い（削除済みの下書きなど）なら null。</summary>
@@ -111,7 +125,6 @@ namespace IdentityProvider.Services.Billing
     /// </summary>
     public sealed record InvoiceDraftRequest(
         string CustomerId,
-        DateTimeOffset FinalizesAt,
         string Description,
         IReadOnlyDictionary<string, string> Metadata);
 

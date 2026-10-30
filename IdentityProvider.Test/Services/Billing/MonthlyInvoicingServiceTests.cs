@@ -117,6 +117,7 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.Equal(630, row.TotalJpy);
             Assert.Equal(_time.GetUtcNow().AddDays(2), row.FinalizesAt);
             Assert.Null(row.Error);
+            Assert.Equal(row.FinalizesAt, _fake.Invoices.Single().FinalizesAt);
             // 内訳は請求対象外の Client も含めて全部残し、割引は負の行
             Assert.Equal(4, row.Lines.Count);
             var discountLine = Assert.Single(row.Lines, l => l.Kind == BillingInvoiceLine.KindDiscount);
@@ -129,7 +130,6 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.Equal(row.StripeInvoiceId, invoice.Id);
             Assert.Equal(Live, invoice.TenantName);
             Assert.Equal("cus_acct-a", invoice.CustomerId);
-            Assert.Equal(row.FinalizesAt, invoice.FinalizesAt);
             Assert.Equal("EcAuth ご利用料金（2026 年 11 月分）", invoice.Description);
             Assert.Equal(new[] { 700L, -70L }, invoice.Items.Select(i => i.AmountJpy));
             Assert.Equal(630, invoice.Subtotal);
@@ -231,6 +231,8 @@ namespace IdentityProvider.Test.Services.Billing
             Assert.Equal(IMonthlyInvoicingService.Statuses.Pending, pending.Status);
             Assert.NotNull(pending.StripeInvoiceId);
             Assert.Contains("Stripe 障害", pending.Error);
+            // 明細が欠けたまま確定・請求されないよう、全明細を積むまで自動確定を予約しない
+            Assert.Null(Assert.Single(_fake.Invoices).FinalizesAt);
 
             // 金額が後から変わっても、再開は確保した時点の内訳で送る
             SetEstimate("acct-a", clients: ClientLine(1, 50, 4_500));
@@ -244,6 +246,27 @@ namespace IdentityProvider.Test.Services.Billing
             var invoice = Assert.Single(_fake.Invoices);
             Assert.Equal(pending.StripeInvoiceId, invoice.Id);
             Assert.Equal(new[] { 700L, 500L, -100L }, invoice.Items.Select(i => i.AmountJpy));
+            Assert.Equal(row.FinalizesAt, invoice.FinalizesAt);
+        }
+
+        [Fact]
+        public async Task Run_ResumedAfterPlannedFinalization_PostponesSchedule()
+        {
+            AddAccount("acct-a");
+            SetEstimate("acct-a", clients: new[] { ClientLine(1, 12, 700), ClientLine(2, 10, 500) });
+            _stripe.FailItemsAfter = 1;
+            await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+            var planned = Row("acct-a").FinalizesAt!.Value;
+
+            // 障害が長引いて、再開したのは確定予定（起票 + 2 日）より後
+            _time.Now = planned.AddHours(5);
+            _stripe.FailItemsAfter = null;
+            await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+
+            var row = Row("acct-a");
+            Assert.Equal(IMonthlyInvoicingService.Statuses.Draft, row.Status);
+            Assert.Equal(_time.Now.AddHours(1), row.FinalizesAt);
+            Assert.Equal(row.FinalizesAt, _fake.Invoices.Single().FinalizesAt);
         }
 
         [Fact]
@@ -445,6 +468,29 @@ namespace IdentityProvider.Test.Services.Billing
         }
 
         [Fact]
+        public async Task RunIfDue_PendingRowOfAnotherInstance_KeepsMonthIncomplete()
+        {
+            AddAccount("acct-a");
+            SetEstimate("acct-a", clients: ClientLine(1, 12, 700));
+            // 別インスタンスが確保して処理中（または処理中に落ちた）の行。この実行は自分の分を失敗なく終えても、
+            // pending が残る月を完了にしてはいけない（完了にすると以後の確認がその行を再開しない）。
+            // 実際の競合（相手が先に UNIQUE を取り、こちらは AlreadyProcessed に数える）を、この実行が列挙しない
+            // Account の pending 行で再現する。
+            _context.BillingInvoices.Add(new BillingInvoice
+            {
+                YearMonth = _month.Value, AccountSubject = "acct-other-instance", TenantName = Live,
+                Status = IMonthlyInvoicingService.Statuses.Pending,
+            });
+            await _context.SaveChangesAsync();
+            _context.ChangeTracker.Clear();
+
+            var result = await _service.RunIfDueAsync(_time.GetUtcNow(), CancellationToken.None);
+
+            Assert.Equal(0, result!.Failed);
+            Assert.Null(_context.BillingInvoiceRuns.AsNoTracking().Single().CompletedAt);
+        }
+
+        [Fact]
         public async Task RunIfDue_BeforeStartMonth_DoesNothing()
         {
             AddAccount("acct-a");
@@ -459,7 +505,9 @@ namespace IdentityProvider.Test.Services.Billing
 
         private sealed class TestTimeProvider(DateTimeOffset now) : TimeProvider
         {
-            public override DateTimeOffset GetUtcNow() => now.ToUniversalTime();
+            public DateTimeOffset Now { get; set; } = now;
+
+            public override DateTimeOffset GetUtcNow() => Now.ToUniversalTime();
         }
 
         /// <summary>明細の追加を指定件数で失敗させる（Stripe の一時障害の再現）。それ以外は Fake に委ねる。</summary>
@@ -483,6 +531,8 @@ namespace IdentityProvider.Test.Services.Billing
 
             public Task<StripeInvoiceSnapshot> CreateInvoiceAsync(string tenantName, InvoiceDraftRequest request, string idempotencyKey, CancellationToken cancellationToken)
                 => inner.CreateInvoiceAsync(tenantName, request, idempotencyKey, cancellationToken);
+            public Task<StripeInvoiceSnapshot> ScheduleFinalizationAsync(string tenantName, string invoiceId, DateTimeOffset finalizesAt, CancellationToken cancellationToken)
+                => inner.ScheduleFinalizationAsync(tenantName, invoiceId, finalizesAt, cancellationToken);
             public Task<StripeInvoiceSnapshot?> GetInvoiceAsync(string tenantName, string invoiceId, CancellationToken cancellationToken)
                 => inner.GetInvoiceAsync(tenantName, invoiceId, cancellationToken);
             public Task<StripeInvoiceSnapshot> CancelInvoiceAsync(string tenantName, string invoiceId, CancellationToken cancellationToken)
