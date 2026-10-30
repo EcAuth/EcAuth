@@ -610,8 +610,7 @@ namespace IdentityProvider.Migrations
                         .HasColumnName("amount_jpy");
 
                     b.Property<string>("AppName")
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)")
+                        .HasColumnType("nvarchar(max)")
                         .HasColumnName("app_name");
 
                     b.Property<int>("BillableUnits")
@@ -627,8 +626,9 @@ namespace IdentityProvider.Migrations
                         .HasColumnName("client_db_id");
 
                     b.Property<string>("ClientId")
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)")
+                        .HasMaxLength(512)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(512)")
                         .HasColumnName("client_id");
 
                     b.Property<string>("Description")
@@ -661,8 +661,7 @@ namespace IdentityProvider.Migrations
                         .HasColumnName("monthly_active_users");
 
                     b.Property<string>("OrganizationCode")
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)")
+                        .HasColumnType("nvarchar(max)")
                         .HasColumnName("organization_code");
 
                     b.Property<int?>("OrganizationId")
@@ -670,8 +669,7 @@ namespace IdentityProvider.Migrations
                         .HasColumnName("organization_id");
 
                     b.Property<string>("OrganizationName")
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)")
+                        .HasColumnType("nvarchar(max)")
                         .HasColumnName("organization_name");
 
                     b.Property<int>("Position")

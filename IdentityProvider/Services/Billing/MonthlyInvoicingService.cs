@@ -10,6 +10,7 @@ namespace IdentityProvider.Services.Billing
     {
         private const int MaxDescriptionLength = 500;
         private const int MaxErrorLength = 1000;
+        private const int MaxStripeMetadataValueLength = 500;
 
         private readonly EcAuthDbContext _context;
         private readonly ITenantService _tenantService;
@@ -419,7 +420,11 @@ namespace IdentityProvider.Services.Billing
                 };
                 if (line.ClientId != null)
                 {
-                    metadata["ecauth_client_id"] = line.ClientId;
+                    // Stripe の metadata の値は 500 文字まで（client_id は 512 文字まで入る）。超える分は落として送り、
+                    // 全体は billing_invoice_line に残す（突き合わせは ecauth_billing_invoice_line_id で行う）。
+                    metadata["ecauth_client_id"] = line.ClientId.Length > MaxStripeMetadataValueLength
+                        ? line.ClientId[..MaxStripeMetadataValueLength]
+                        : line.ClientId;
                 }
                 line.StripeInvoiceItemId = await _stripe.AddInvoiceItemAsync(
                     row.TenantName,

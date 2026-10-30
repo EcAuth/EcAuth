@@ -140,6 +140,25 @@ namespace IdentityProvider.Test.Services.Billing
         }
 
         [Fact]
+        public async Task Run_LongClientId_KeepsFullValueInLineAndFitsStripeMetadata()
+        {
+            AddAccount("acct-a");
+            var longId = new string('c', 512);   // client.client_id は varchar(512)
+            var client = ClientLine(1, 12, 700) with { ClientId = longId, AppName = new string('あ', 300) };
+            SetEstimate("acct-a", clients: client);
+
+            var result = await _service.RunAsync(_month, IMonthlyInvoicingService.Scope.All, CancellationToken.None);
+
+            Assert.Equal(1, result.Invoiced);
+            var line = Row("acct-a").Lines.Single();
+            Assert.Equal(longId, line.ClientId);   // 内訳は切り詰めない
+            Assert.Equal(300, line.AppName!.Length);
+            var metadata = _fake.Invoices.Single().Items.Single().Metadata;
+            Assert.Equal(500, metadata["ecauth_client_id"].Length);   // Stripe の metadata の上限
+            Assert.True(line.Description.Length <= 500);
+        }
+
+        [Fact]
         public async Task Run_SkipsZeroExemptAndNoPaymentMethod_RecordsReasonWithoutStripe()
         {
             AddAccount("acct-zero");

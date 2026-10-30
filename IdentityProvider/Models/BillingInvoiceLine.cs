@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using Microsoft.EntityFrameworkCore;
 
 namespace IdentityProvider.Models
 {
@@ -39,12 +40,12 @@ namespace IdentityProvider.Models
         [Column("organization_id")]
         public int? OrganizationId { get; set; }
 
+        // 内訳は監査用の写しなので、元の列（organization.code / name、client.client_id / app_name）と同じ型にして
+        // 切り詰めない。短くすると、長い値を持つ Client が 1 つあるだけでその Account の行を保存できず、請求全体が止まる。
         [Column("organization_code")]
-        [MaxLength(255)]
         public string? OrganizationCode { get; set; }
 
         [Column("organization_name")]
-        [MaxLength(255)]
         public string? OrganizationName { get; set; }
 
         /// <summary><c>client.id</c>（内部 ID）。</summary>
@@ -53,11 +54,11 @@ namespace IdentityProvider.Models
 
         /// <summary><c>client.client_id</c>（公開 ID）。</summary>
         [Column("client_id")]
-        [MaxLength(255)]
+        [MaxLength(512)]
+        [Unicode(false)]
         public string? ClientId { get; set; }
 
         [Column("app_name")]
-        [MaxLength(255)]
         public string? AppName { get; set; }
 
         [Column("subject_type")]
