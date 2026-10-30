@@ -36,6 +36,9 @@ namespace IdentityProvider.Models
         public DbSet<MonthlyActiveUser> MonthlyActiveUsers { get; set; }
         public DbSet<StripeWebhookEvent> StripeWebhookEvents { get; set; }
         public DbSet<AccountBillingPlan> AccountBillingPlans { get; set; }
+        public DbSet<BillingInvoice> BillingInvoices { get; set; }
+        public DbSet<BillingInvoiceLine> BillingInvoiceLines { get; set; }
+        public DbSet<BillingInvoiceRun> BillingInvoiceRuns { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -425,6 +428,29 @@ namespace IdentityProvider.Models
                 .HasForeignKey(p => p.AccountSubject)
                 .HasPrincipalKey(a => a.Subject)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // BillingInvoice（EcAuthDocs#119 PR-2）: テナント横断（クエリフィルター対象外）。
+            // (year_month, account_subject) の UNIQUE が二重起票の防止の本体（月次ジョブは Stripe を呼ぶ前にこの行を INSERT する）。
+            modelBuilder.Entity<BillingInvoice>()
+                .HasIndex(i => new { i.YearMonth, i.AccountSubject })
+                .IsUnique();
+
+            // Webhook（invoice.*）から行を引く。作成前（pending の途中）と skipped_* は null なので filtered unique。
+            modelBuilder.Entity<BillingInvoice>()
+                .HasIndex(i => i.StripeInvoiceId)
+                .IsUnique()
+                .HasFilter("[stripe_invoice_id] IS NOT NULL")
+                .HasDatabaseName("IX_billing_invoice_stripe_invoice_id");
+
+            modelBuilder.Entity<BillingInvoiceLine>()
+                .HasOne(l => l.Invoice)
+                .WithMany(i => i.Lines)
+                .HasForeignKey(l => l.BillingInvoiceId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<BillingInvoiceRun>()
+                .Property(r => r.YearMonth)
+                .ValueGeneratedNever();
 
             // Client.BillingExempt: 既存行はすべて請求対象（false）。DB 側にも既定値を置き、
             // 列を追加するマイグレーションが既存 Client を課金対象外にしないようにする。

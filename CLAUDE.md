@@ -432,8 +432,10 @@ HTTP をモックする前例が無いため、ユニットテストも `IStripe
 | `Billing__Enabled` / `Billing__EnforcementEnabled` / `Billing__InvoicingEnabled` | 機能フラグ | すべて false | 有効化するときだけ production `app_settings`。ローカル / CI は `Enabled=true` |
 | `Billing__Provider` | 非秘密 | `Stripe` | ローカル / CI のみ `Fake`（compose.yaml / `.env.dev.tpl` / playwright.yml）。本番は書かない。`Stripe` / `Fake` 以外は起動時に例外（書き間違いを黙って Stripe 扱いにしない） |
 | `Billing__FinalizeAfterDays` | チューニング定数 | 2 | 配線しない（コード既定値） |
+| `Billing__InvoicingStartMonth` | 非秘密 | なし（`InvoicingEnabled=true` で未設定・不正なら起票せずエラー） | production `app_settings`（初回は `2026-11`）。ローカル / CI には入れない |
 | `Billing__ReturnBaseUrl__{accounts,stg_accounts}` | 非秘密・テナント別・https 必須 | なし（未設定は例外） | `.env.dev.tpl` + production `main.tf`（`MagicLink__BaseUrl__*` と同じ） |
 | `Stripe__SecretKey__{accounts,stg_accounts}` / `Stripe__WebhookSecret__{accounts,stg_accounts}` | **秘密**・テナント別 | なし | production `main.tf` の Key Vault 参照のみ（1Password `ecauth-prod-stripe` が一次情報）。staging には配線しない（accounts 系機能は本番のみ） |
+| `Stripe__TaxRateId__{accounts,stg_accounts}` | 非秘密・テナント別（`txr_*`） | なし（起票時に未設定なら例外） | production `main.tf`。ecauth-infrastructure の `stripe_tax_rate`（live / test）の ID をそのまま配線する（手でコピーしない） |
 
 テナント名の正規化は他のテナント別キーと同じ（`stg-accounts` → `stg_accounts`、`[^A-Za-z0-9_]` → `_`）。
 Webhook はテナントごとに 1 エンドポイント（Host で live / test を分け、署名シークレットもテナント別）。
@@ -470,6 +472,34 @@ Checkout と Portal は保存済みの Customer を使う前に必ず 1 回同�
 
 **Portal の 409**: Customer 未作成は `no_customer`、Customer はあるがカードが無い（Checkout をキャンセルすると Customer だけ残る）は
 `no_payment_method`。後者は判定前に Stripe と 1 回同期する（登録直後で Webhook 未着の場合を 409 にしない）。
+
+**月次請求（PR-2）**は `MonthlyInvoicingService` + `MonthlyInvoicingHostedService`。
+
+- **起動**: cron ではなく 1 時間ごとに起きて `RunIfDueAsync` を呼ぶ。当月 1 日の JST 03:00 を過ぎ、前月が
+  `InvoicingStartMonth` 以降で、`billing_invoice_run` の前月の行が未完了なら起票する。自動で追うのは前月だけ
+  （古い月の取りこぼしは ConsoleApp で起票する）。確定とカードへの請求は `automatically_finalizes_at`
+  （起票 + `FinalizeAfterDays`）に Stripe が行い、EcAuth は起票しかしない。
+- **請求先と金額**: `account_organization.role = owner` の Account に、見込み額と同じ `GetEstimateAsync` の結果を請求する
+  （見込み額も owner の Organization だけを数える）。見込み額の集計は Account のクエリフィルター（テナント）を前提に
+  しているため、ジョブは Account の受付テナントへ `ITenantService` を切り替えてから呼ぶ。**`IgnoreQueryFilters()` は
+  サブクエリに付けてもクエリ全体に効く**ので、テナントで絞るクエリに埋め込まない（別テナントの Account を拾った）。
+- **起票しない Account も記録する**: Account 全体の除外 → `skipped_exempt`、0 円 → `skipped_zero`、請求額はあるが
+  支払い方法が未登録 → `skipped_no_payment_method`（請求書は作らず金額だけ残す。上限強制・告知の前にいきなり
+  請求書を送らないため）。判定は DB の `payment_method_registered_at` だけを見る（Stripe は呼ばない）。
+- **二重起票の防止**: Stripe を呼ぶ前に `billing_invoice` を `pending` で INSERT し（`UNIQUE(year_month, account_subject)`）、
+  金額と内訳（`billing_invoice_line`）をその時点で固定する。Invoice の ID と各 InvoiceItem の ID は作るたびに行へ書き、
+  落ちたら次の実行が続きから再開する。冪等キーは `ecauth-billing-invoice-{id}` / `ecauth-billing-invoice-line-{id}`
+  （同じキーで違うパラメータを送ると Stripe はエラーにするので、再開は固定した値で送る）。Stripe の冪等キーは 24 時間で
+  失効するため、Invoice 作成後・行への保存前に落ちたまま 24 時間以上放置すると下書きが二重にできうる（毎時の再開で
+  通常は 1 時間以内に閉じる）。
+- **Invoice の作り方**: `charge_automatically` / `pending_invoice_items_behavior=exclude` / `default_tax_rates=[Stripe:TaxRateId:{tenant}]`。
+  明細は税抜で、0 円の行は送らない。割引は負の行。Customer の `preferred_locales` が空なら `ja` にする（請求書 PDF の言語）。
+- **取り消し**: `CancelAsync` が確定前の下書きは削除（`deleted`）、確定後で未払いは void。行は消さないので、同じ月を
+  同じ Account に起票し直す経路は無い（必要なら Stripe のダッシュボードで作る）。
+- **Webhook**: `invoice.finalized` / `paid` / `payment_failed` / `voided` / `marked_uncollectible`（`BillingService.InvoiceEvents`）で
+  Invoice を読み直し、`status` と Stripe が計算した `tax_jpy` / `stripe_total_jpy` / `amount_paid_jpy` を写す。
+  `stripe_checked_ticks` による条件付き書き込みは支払い方法の同期と同じ規約。`pending` の行（起票中）は書かない。
+- **必要な Stripe の権限**: アプリ用の制限付きキーに Invoices / Invoice items の書き込み（Customers の書き込みは PR-1 から）。
 
 **マイページ側のレース**: Checkout から戻った直後は Webhook より先に描画されるため、フロントは
 `?billing=setup_complete` で戻ったら `GET /v1/account/billing?refresh=1` を呼ぶ（Stripe に既定の支払い方法を

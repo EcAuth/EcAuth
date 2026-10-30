@@ -132,6 +132,10 @@ else
 builder.Services.AddSingleton<IPricingCalculator, PricingCalculator>();
 builder.Services.AddScoped<IPricingPlanResolver, PricingPlanResolver>();
 builder.Services.AddScoped<IBillingService, BillingService>();
+// 月次請求（EcAuthDocs#119 PR-2）。ジョブは常に登録し、Billing:InvoicingEnabled が false の間は確認だけして何もしない。
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<IMonthlyInvoicingService, MonthlyInvoicingService>();
+builder.Services.AddHostedService<MonthlyInvoicingHostedService>();
 
 // client_secret 等の保存時暗号化（EcAuthDocs#106）。
 // Development はローカル例外として平文パススルー、それ以外は Key Vault の CryptographyClient で暗号化する。
