@@ -29,6 +29,7 @@ namespace IdentityProvider.Test.Controllers
         private const string RedirectUri = "https://client.example.com/callback";
         private const string OtherClientId = "other-client";
         private const string OtherClientRedirectUri = "https://other.example.com/callback";
+        private const int OrganizationDbId = 10;
 
         // Iron はパスワード長 32 文字以上を要求する
         private const string StatePassword = "test-state-password-must-be-32-chars-or-longer";
@@ -60,9 +61,10 @@ namespace IdentityProvider.Test.Controllers
 
         private void SeedClientAndProvider()
         {
+            // Organization の ID は Client / OpenIdProvider の ID と違う値にする（取り違えを検出するため）
             _context.Organizations.Add(new Organization
             {
-                Id = 1,
+                Id = OrganizationDbId,
                 Code = "test-org",
                 Name = "Test Org",
                 TenantName = "test",
@@ -75,7 +77,7 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = ClientId,
                 ClientSecret = "test-secret",
                 AppName = "Test App",
-                OrganizationId = 1
+                OrganizationId = OrganizationDbId
             });
             // redirect_uri は client に登録済みのものと完全一致でなければ拒否される（EcAuthDocs#100）
             _context.RedirectUris.Add(new RedirectUri
@@ -91,7 +93,7 @@ namespace IdentityProvider.Test.Controllers
                 ClientId = OtherClientId,
                 ClientSecret = "other-secret",
                 AppName = "Other App",
-                OrganizationId = 1
+                OrganizationId = OrganizationDbId
             });
             _context.RedirectUris.Add(new RedirectUri
             {
@@ -328,7 +330,7 @@ namespace IdentityProvider.Test.Controllers
 
             var state = await UnsealStateFrom(result);
             Assert.Equal(1, state.ClientId);
-            Assert.Equal(1, state.OrganizationId);
+            Assert.Equal(OrganizationDbId, state.OrganizationId);
             Assert.Equal(1, state.OpenIdProviderId);
             Assert.Equal("client-state", state.ClientState);
         }
@@ -340,7 +342,7 @@ namespace IdentityProvider.Test.Controllers
             // 使っているため、Organization のクエリフィルターでナビゲーションが null になり素通りする
             // （ClientQueryExtensionsRelationalTests）。EcAuthDocs#164 段 4（F-1）で 400 へ反転させる。
             // このフィクスチャの Organization は TenantName が MockTenantService と異なるためフィルターを外して引く
-            var org = await _context.Organizations.IgnoreQueryFilters().SingleAsync(o => o.Id == 1);
+            var org = await _context.Organizations.IgnoreQueryFilters().SingleAsync(o => o.Id == OrganizationDbId);
             org.DeletedAt = DateTimeOffset.UtcNow;
             await _context.SaveChangesAsync();
 

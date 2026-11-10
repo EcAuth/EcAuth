@@ -74,13 +74,19 @@ builder.Services.AddScoped<OrganizationFilter>();
 builder.Services.AddHttpClient(); // HttpClientFactoryを有効化（ExternalUserInfoServiceで使用）
 // AuthorizationCallbackController が外部 IdP のトークン交換 / userinfo 取得に使う。
 // 開発環境（ローカルの MockIdP 等）では自己署名証明書を受け入れる。
+// IHttpClientFactory はハンドラーをリクエスト間でプールするため、Cookie を無効にする。
+// 有効のままだと、外部 IdP が返した Set-Cookie が CookieContainer に残り、別ユーザーの
+// トークン交換 / userinfo リクエストに送られてしまう（以前はリクエストごとにハンドラーを作っていた）。
 builder.Services.AddHttpClient(IdentityProvider.Controllers.AuthorizationCallbackController.ExternalIdpHttpClientName)
-    .ConfigurePrimaryHttpMessageHandler(() => builder.Environment.IsDevelopment()
-        ? new HttpClientHandler
+    .ConfigurePrimaryHttpMessageHandler(() =>
+    {
+        var handler = new HttpClientHandler { UseCookies = false };
+        if (builder.Environment.IsDevelopment())
         {
-            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
         }
-        : new HttpClientHandler());
+        return handler;
+    });
 
 // B2Bパスキー認証関連サービス
 builder.Services.AddScoped<IWebAuthnChallengeService, WebAuthnChallengeService>();

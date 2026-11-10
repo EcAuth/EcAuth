@@ -33,8 +33,9 @@ namespace IdentityProvider.Test.Controllers
         private const string RedirectUri = "https://client.example.com/callback";
         private const string ValidChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
-        private const int OrganizationId = 1;
-        private const int OtherOrganizationId = 2;
+        // Organization の ID は Client / OpenIdProvider の ID と違う値にする（取り違えを検出するため）
+        private const int OrganizationId = 10;
+        private const int OtherOrganizationId = 20;
         private const int ClientDbId = 1;
         private const int OtherClientDbId = 2;
         private const int ProviderId = 1;
