@@ -485,5 +485,98 @@ namespace IdentityProvider.Test.Services
             // Assert
             Assert.Empty(result);
         }
+
+        // ---- 境界の検証（EcAuthDocs#164 段 2。#122 で解決方法を作り替える前の安全網）----
+
+        private static async Task SeedUserWithMappingAsync(EcAuthDbContext context, string tenantName = "test-tenant")
+        {
+            context.Organizations.Add(new Organization { Id = 1, Code = "TESTORG", Name = "TestOrg", TenantName = tenantName });
+            var user = new EcAuthUser
+            {
+                Subject = "test-subject",
+                EmailHash = EmailHashUtil.HashEmail("test@example.com"),
+                OrganizationId = 1
+            };
+            context.EcAuthUsers.Add(user);
+            context.ExternalIdpMappings.Add(new ExternalIdpMapping
+            {
+                EcAuthSubject = user.Subject,
+                ExternalProvider = "google",
+                ExternalSubject = "google-user-123"
+            });
+            await context.SaveChangesAsync();
+        }
+
+        [Fact]
+        public async Task GetUserByExternalIdAsync_SameSubjectWithDifferentProvider_ShouldReturnNull()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            await SeedUserWithMappingAsync(context);
+            var service = new UserService(context, new Mock<ILogger<UserService>>().Object);
+
+            // provider が違えば、sub が同じでも別人として扱う
+            var result = await service.GetUserByExternalIdAsync("line", "google-user-123", 1);
+
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public async Task GetUserByExternalIdAsync_FromAnotherTenant_ShouldReturnNull()
+        {
+            var dbName = Guid.NewGuid().ToString();
+            using (var seedContext = TestDbContextHelper.CreateInMemoryContext(dbName))
+            {
+                await SeedUserWithMappingAsync(seedContext);
+            }
+
+            // 同じ DB を別テナントのリクエストとして開く。Organization ID が一致していても、
+            // EcAuthUser / ExternalIdpMapping のクエリフィルター（Organization.TenantName）で見えない
+            var otherTenant = new MockTenantService();
+            otherTenant.SetTenant("other-tenant");
+            using var context = TestDbContextHelper.CreateInMemoryContext(dbName, otherTenant);
+            var service = new UserService(context, new Mock<ILogger<UserService>>().Object);
+
+            Assert.Null(await service.GetUserByExternalIdAsync("google", "google-user-123", 1));
+            Assert.Null(await service.GetUserBySubjectAsync("test-subject"));
+        }
+
+        [Fact]
+        public async Task GetUserByExternalIdAsync_InDeletedOrganization_ShouldReturnNull()
+        {
+            var dbName = Guid.NewGuid().ToString();
+            using (var seedContext = TestDbContextHelper.CreateInMemoryContext(dbName))
+            {
+                await SeedUserWithMappingAsync(seedContext);
+                var org = await seedContext.Organizations.SingleAsync();
+                org.DeletedAt = DateTimeOffset.UtcNow;
+                await seedContext.SaveChangesAsync();
+            }
+
+            using var context = TestDbContextHelper.CreateInMemoryContext(dbName);
+            var service = new UserService(context, new Mock<ILogger<UserService>>().Object);
+
+            // 論理削除された Organization のユーザーはクエリフィルターで見えない
+            Assert.Null(await service.GetUserByExternalIdAsync("google", "google-user-123", 1));
+        }
+
+        [Fact]
+        public async Task CreateOrUpdateFromExternalAsync_ExistingUser_ShouldUpdateEmailHashWithoutNewMapping()
+        {
+            using var context = TestDbContextHelper.CreateInMemoryContext();
+            await SeedUserWithMappingAsync(context);
+            var service = new UserService(context, new Mock<ILogger<UserService>>().Object);
+
+            var result = await service.CreateOrUpdateFromExternalAsync(new ExternalUserInfo
+            {
+                Provider = "google",
+                Subject = "google-user-123",
+                Email = "changed@example.com"
+            }, 1);
+
+            Assert.Equal("test-subject", result.Subject);
+            Assert.Equal(EmailHashUtil.HashEmail("changed@example.com"), result.EmailHash);
+            Assert.Single(await context.EcAuthUsers.ToListAsync());
+            Assert.Single(await context.ExternalIdpMappings.ToListAsync());
+        }
     }
 }
