@@ -2,6 +2,7 @@ using IdentityProvider.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using IdpUtilities;
+using IdentityProvider.Data;
 
 namespace IdentityProvider.Services
 {
@@ -16,63 +17,243 @@ namespace IdentityProvider.Services
             _logger = logger;
         }
 
-        public async Task<EcAuthUser> GetOrCreateUserAsync(IUserService.UserCreationRequest request)
+        public async Task<EcAuthUser> ResolveFederatedUserAsync(IUserService.FederatedLoginRequest request)
         {
-            if (string.IsNullOrWhiteSpace(request.ExternalProvider))
-                throw new ArgumentException("ExternalProvider cannot be null or empty.", nameof(request.ExternalProvider));
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentNullException.ThrowIfNull(request.Client);
+            ArgumentNullException.ThrowIfNull(request.Provider);
             if (string.IsNullOrWhiteSpace(request.ExternalSubject))
-                throw new ArgumentException("ExternalSubject cannot be null or empty.", nameof(request.ExternalSubject));
-            // EmailHashは空文字列を許可（メールが提供されない場合）
-            if (request.EmailHash == null)
-                throw new ArgumentException("EmailHash cannot be null.", nameof(request.EmailHash));
-            if (request.OrganizationId <= 0)
-                throw new ArgumentException("OrganizationId must be positive.", nameof(request.OrganizationId));
+                throw new ArgumentException("ExternalSubject cannot be null or empty.", nameof(request));
+            if (string.IsNullOrWhiteSpace(request.Client.ClientId))
+                throw new ArgumentException("Client.ClientId cannot be null or empty.", nameof(request));
+            if (request.Client.OrganizationId is not > 0)
+                throw new ArgumentException("Client.OrganizationId must be positive.", nameof(request));
+            if (request.Provider.ClientId != request.Client.Id)
+                throw new ArgumentException("Provider does not belong to Client.", nameof(request));
 
-            // 既存ユーザーの検索（外部IdP情報で検索）
-            var existingUser = await GetUserByExternalIdAsync(
-                request.ExternalProvider, 
-                request.ExternalSubject, 
-                request.OrganizationId);
+            var login = new ResolvedLogin(
+                ClientId: request.Client.ClientId,
+                OrganizationId: request.Client.OrganizationId.Value,
+                ProviderName: request.Provider.Name,
+                ExternalSubject: request.ExternalSubject,
+                IssuerKey: B2CIssuerKey.ForIdp(request.Provider.Id),
+                ExternalId: ExternalIdHasher.HashCaseSensitive(request.ExternalSubject),
+                EmailHash: HashEmailOrEmpty(request.Email, request.Provider.Name),
+                EmailVerified: request.EmailVerified);
 
-            if (existingUser != null)
+            try
             {
-                // ユーザーが既存の場合、EmailHashを更新（変更されている可能性があるため）
-                if (existingUser.EmailHash != request.EmailHash)
-                {
-                    existingUser.EmailHash = request.EmailHash;
-                    existingUser.UpdatedAt = DateTimeOffset.UtcNow;
-                    await _context.SaveChangesAsync();
-                }
-                return existingUser;
+                return await ResolveOnceAsync(login);
+            }
+            catch (DbUpdateException ex) when (DatabaseResilience.IsUniqueConstraintViolation(ex))
+            {
+                // 同じ sub の初回ログインが並行すると、後から来た側は identity の一意制約に当たる。
+                // 先に作られた identity を引き直せば同じユーザーに解決できる（1 回だけ）。
+                _logger.LogInformation(ex, "Concurrent federated login detected, retrying resolution. IssuerKey: {IssuerKey}", login.IssuerKey);
+                _context.ChangeTracker.Clear();
+                return await ResolveOnceAsync(login);
+            }
+        }
+
+        private sealed record ResolvedLogin(
+            string ClientId,
+            int OrganizationId,
+            string ProviderName,
+            string ExternalSubject,
+            string IssuerKey,
+            string ExternalId,
+            string EmailHash,
+            bool EmailVerified);
+
+        /// <remarks>
+        /// テナントのクエリフィルターは使わない（<c>IgnoreQueryFilters</c>）。/v1/auth/callback は
+        /// 外部 IdP から固定のホストへ戻ってくるため、リクエストのテナントがログイン先の
+        /// Organization と一致するとは限らない。代わりに、issuer_key（OpenIdProvider の行 = Client）で
+        /// 引き、見つけたユーザーの Client / Organization を明示的に照合する。
+        /// </remarks>
+        private async Task<EcAuthUser> ResolveOnceAsync(ResolvedLogin login)
+        {
+            var now = DateTimeOffset.UtcNow;
+
+            // 1. identity が見つかる → そのユーザー（通常のログイン）
+            var identity = await _context.EcAuthUserIdentities
+                .IgnoreQueryFilters()
+                .Include(i => i.EcAuthUser)
+                .FirstOrDefaultAsync(i => i.IssuerKey == login.IssuerKey && i.ExternalId == login.ExternalId);
+            if (identity?.EcAuthUser != null)
+            {
+                var user = identity.EcAuthUser;
+                EnsureSamePool(user, login);
+                user.ClientId ??= login.ClientId;
+                ApplyEmail(user, login, now);
+                await _context.SaveChangesAsync();
+                return user;
             }
 
-            // 新規ユーザーの作成（JITプロビジョニング）
+            // 2. identity が無く、旧 ExternalIdpMapping で見つかる → identity を足して返す（遅延移行）。
+            // 旧構造は provider 名で区切っており Client 間で衝突しうるため、同じ Organization かつ
+            // 同じ Client（backfill で Client を決められなかった null を含む）のユーザーに限る。
+            var mappedUser = await _context.ExternalIdpMappings
+                .IgnoreQueryFilters()
+                .Where(m => m.ExternalProvider == login.ProviderName
+                    && m.ExternalSubject == login.ExternalSubject
+                    && m.EcAuthUser != null
+                    && m.EcAuthUser.OrganizationId == login.OrganizationId
+                    && (m.EcAuthUser.ClientId == null || m.EcAuthUser.ClientId == login.ClientId))
+                .Select(m => m.EcAuthUser!)
+                .FirstOrDefaultAsync();
+            if (mappedUser != null)
+            {
+                _logger.LogInformation("Migrating ExternalIdpMapping to identity. EcAuthSubject: {Subject}, IssuerKey: {IssuerKey}",
+                    mappedUser.Subject, login.IssuerKey);
+                mappedUser.ClientId ??= login.ClientId;
+                AddIdentity(mappedUser, login, now);
+                ApplyEmail(mappedUser, login, now);
+                await _context.SaveChangesAsync();
+                return mappedUser;
+            }
+
+            // 3. 確認済みメールアドレスが同じ Client 内の確認済みユーザー 1 人と一致 → 統合
+            if (login.EmailVerified && login.EmailHash.Length > 0)
+            {
+                var candidates = await _context.EcAuthUsers
+                    .IgnoreQueryFilters()
+                    .Where(u => u.ClientId == login.ClientId
+                        && u.OrganizationId == login.OrganizationId
+                        && u.EmailHash == login.EmailHash
+                        && u.EmailVerifiedAt != null)
+                    .Take(2)
+                    .ToListAsync();
+                if (candidates.Count == 1)
+                {
+                    var target = candidates[0];
+                    _logger.LogInformation("Linking identity to existing user by verified email. EcAuthSubject: {Subject}, IssuerKey: {IssuerKey}",
+                        target.Subject, login.IssuerKey);
+                    AddIdentity(target, login, now);
+                    await AddLegacyMappingIfFreeAsync(target, login, now);
+                    await _context.SaveChangesAsync();
+                    return target;
+                }
+                if (candidates.Count > 1)
+                {
+                    // 候補が複数あるときは統合しない（どれに足すか決められない）
+                    _logger.LogWarning("Multiple verified users share the email hash; creating a new user. ClientId: {ClientId}", login.ClientId);
+                }
+            }
+
+            // 4. それ以外 → 新しいユーザーと identity を作る（JIT プロビジョニング）
             var newUser = new EcAuthUser
             {
                 Subject = Guid.NewGuid().ToString(),
-                EmailHash = request.EmailHash,
-                OrganizationId = request.OrganizationId,
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow
+                EmailHash = login.EmailHash,
+                EmailVerifiedAt = login.EmailVerified && login.EmailHash.Length > 0 ? now : null,
+                OrganizationId = login.OrganizationId,
+                ClientId = login.ClientId,
+                CreatedAt = now,
+                UpdatedAt = now
             };
-
             _context.EcAuthUsers.Add(newUser);
-
-            // 外部IdPマッピングの作成
-            var externalMapping = new ExternalIdpMapping
-            {
-                EcAuthSubject = newUser.Subject,
-                ExternalProvider = request.ExternalProvider,
-                ExternalSubject = request.ExternalSubject,
-                CreatedAt = DateTimeOffset.UtcNow,
-                EcAuthUser = newUser  // Navigation propertyを明示的に設定（EF Core 9マルチテナントフィルタ対応）
-            };
-
-            _context.ExternalIdpMappings.Add(externalMapping);
-
+            AddIdentity(newUser, login, now);
+            await AddLegacyMappingIfFreeAsync(newUser, login, now);
             await _context.SaveChangesAsync();
 
+            _logger.LogInformation("Created B2C user by JIT provisioning. EcAuthSubject: {Subject}, IssuerKey: {IssuerKey}",
+                newUser.Subject, login.IssuerKey);
             return newUser;
+        }
+
+        private void EnsureSamePool(EcAuthUser user, ResolvedLogin login)
+        {
+            if (user.OrganizationId != login.OrganizationId
+                || (user.ClientId != null && user.ClientId != login.ClientId))
+            {
+                _logger.LogError("Identity resolves to a user in another pool. EcAuthSubject: {Subject}, IssuerKey: {IssuerKey}, ClientId: {ClientId}",
+                    user.Subject, login.IssuerKey, login.ClientId);
+                throw new UserPoolMismatchException("identity が別のユーザープールのユーザーを指しています。");
+            }
+        }
+
+        private void AddIdentity(EcAuthUser user, ResolvedLogin login, DateTimeOffset now)
+        {
+            _context.EcAuthUserIdentities.Add(new EcAuthUserIdentity
+            {
+                EcAuthSubject = user.Subject,
+                IssuerKey = login.IssuerKey,
+                ExternalId = login.ExternalId,
+                ClientId = login.ClientId,
+                CreatedAt = now,
+                EcAuthUser = user
+            });
+        }
+
+        /// <summary>
+        /// 旧 ExternalIdpMapping への二重書き（expand 期間だけ。ロールアウト中の旧インスタンスが
+        /// 同じユーザーに解決できるようにする）。旧構造の一意制約 (external_provider, external_subject) は
+        /// Organization をまたいで効くので、既に行があるときは書かない。書くとこの変更で解消した
+        /// 制約違反を二重書きが作り直してしまう。
+        /// </summary>
+        private async Task AddLegacyMappingIfFreeAsync(EcAuthUser user, ResolvedLogin login, DateTimeOffset now)
+        {
+            var taken = await _context.ExternalIdpMappings
+                .IgnoreQueryFilters()
+                .AnyAsync(m => m.ExternalProvider == login.ProviderName && m.ExternalSubject == login.ExternalSubject);
+            if (taken)
+            {
+                return;
+            }
+            _context.ExternalIdpMappings.Add(new ExternalIdpMapping
+            {
+                EcAuthSubject = user.Subject,
+                ExternalProvider = login.ProviderName,
+                ExternalSubject = login.ExternalSubject,
+                CreatedAt = now,
+                EcAuthUser = user  // Navigation propertyを明示的に設定（EF Core 9マルチテナントフィルタ対応）
+            });
+        }
+
+        /// <summary>
+        /// ログインで得たメールアドレスをユーザーに反映する。
+        /// <list type="bullet">
+        /// <item>メールアドレスが無いログイン（LINE など）では触らない。別の識別子で得た値を消さないため</item>
+        /// <item>変わっていたら更新し、確認状態は今回の値にする</item>
+        /// <item>同じなら、今回確認済みのときだけ確認時刻を埋める（未確認の表明で降格はしない）</item>
+        /// </list>
+        /// </summary>
+        private static void ApplyEmail(EcAuthUser user, ResolvedLogin login, DateTimeOffset now)
+        {
+            if (login.EmailHash.Length == 0)
+            {
+                return;
+            }
+            if (user.EmailHash != login.EmailHash)
+            {
+                user.EmailHash = login.EmailHash;
+                user.EmailVerifiedAt = login.EmailVerified ? now : null;
+                user.UpdatedAt = now;
+            }
+            else if (login.EmailVerified && user.EmailVerifiedAt == null)
+            {
+                user.EmailVerifiedAt = now;
+                user.UpdatedAt = now;
+            }
+        }
+
+        private string HashEmailOrEmpty(string? email, string providerName)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                return string.Empty;
+            }
+            try
+            {
+                return EmailHashUtil.HashEmail(email);
+            }
+            catch (Exception ex)
+            {
+                // メールハッシュ化に失敗した場合は空文字列のまま続行（従来どおり）
+                _logger.LogWarning(ex, "Failed to hash email for user. Provider: {Provider}", providerName);
+                return string.Empty;
+            }
         }
 
         public async Task<EcAuthUser?> GetUserBySubjectAsync(string subject)
@@ -84,87 +265,6 @@ namespace IdentityProvider.Services
                 .Include(u => u.Organization)
                 .Include(u => u.ExternalIdpMappings)
                 .FirstOrDefaultAsync(u => u.Subject == subject);
-        }
-
-        public async Task<EcAuthUser?> GetUserByExternalIdAsync(string externalProvider, string externalSubject, int organizationId)
-        {
-            if (string.IsNullOrWhiteSpace(externalProvider) || string.IsNullOrWhiteSpace(externalSubject))
-                return null;
-
-            var mapping = await _context.ExternalIdpMappings
-                .Include(m => m.EcAuthUser)
-                .ThenInclude(u => u!.Organization)
-                .Include(m => m.EcAuthUser)
-                .ThenInclude(u => u!.ExternalIdpMappings)
-                .FirstOrDefaultAsync(m => 
-                    m.ExternalProvider == externalProvider && 
-                    m.ExternalSubject == externalSubject &&
-                    m.EcAuthUser!.OrganizationId == organizationId);
-
-            return mapping?.EcAuthUser;
-        }
-
-        public async Task<EcAuthUser> CreateOrUpdateFromExternalAsync(ExternalUserInfo externalUser, int organizationId)
-        {
-            if (externalUser == null)
-                throw new ArgumentNullException(nameof(externalUser));
-            if (string.IsNullOrWhiteSpace(externalUser.Subject))
-                throw new ArgumentException("ExternalUser.Subject cannot be null or empty.", nameof(externalUser));
-            if (string.IsNullOrWhiteSpace(externalUser.Provider))
-                throw new ArgumentException("ExternalUser.Provider cannot be null or empty.", nameof(externalUser));
-            if (organizationId <= 0)
-                throw new ArgumentException("OrganizationId must be positive.", nameof(organizationId));
-
-            _logger.LogInformation("Creating or updating user from external IdP. Provider: {Provider}, Subject: {Subject}, OrganizationId: {OrganizationId}",
-                externalUser.Provider, externalUser.Subject, organizationId);
-
-            // メールアドレスのハッシュ化（メールが提供されている場合のみ）
-            string emailHash = string.Empty;
-            if (!string.IsNullOrWhiteSpace(externalUser.Email))
-            {
-                try
-                {
-                    emailHash = EmailHashUtil.HashEmail(externalUser.Email);
-                    _logger.LogDebug("Email hash generated for user. Provider: {Provider}, Subject: {Subject}",
-                        externalUser.Provider, externalUser.Subject);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to hash email for user. Provider: {Provider}, Subject: {Subject}",
-                        externalUser.Provider, externalUser.Subject);
-                    // メールハッシュ化に失敗した場合は空文字列のまま続行
-                }
-            }
-            else
-            {
-                _logger.LogInformation("No email provided for user. Provider: {Provider}, Subject: {Subject}",
-                    externalUser.Provider, externalUser.Subject);
-            }
-
-            // UserCreationRequestに変換
-            var request = new IUserService.UserCreationRequest
-            {
-                ExternalProvider = externalUser.Provider,
-                ExternalSubject = externalUser.Subject,
-                EmailHash = emailHash,
-                OrganizationId = organizationId
-            };
-
-            try
-            {
-                var result = await GetOrCreateUserAsync(request);
-                
-                _logger.LogInformation("Successfully created or updated user. EcAuthSubject: {EcAuthSubject}, Provider: {Provider}, ExternalSubject: {ExternalSubject}",
-                    result.Subject, externalUser.Provider, externalUser.Subject);
-
-                return result;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to create or update user from external IdP. Provider: {Provider}, Subject: {Subject}, OrganizationId: {OrganizationId}",
-                    externalUser.Provider, externalUser.Subject, organizationId);
-                throw;
-            }
         }
 
         public async Task<List<EcAuthUser>> GetUsersByEmailHashAsync(string emailHash, int? organizationId = null)
