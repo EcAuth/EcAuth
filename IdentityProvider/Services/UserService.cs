@@ -71,7 +71,7 @@ namespace IdentityProvider.Services
         /// Organization と一致するとは限らない。代わりに、issuer_key（OpenIdProvider の行 = Client）で
         /// 引き、見つけたユーザーの Client / Organization を明示的に照合する。
         /// </remarks>
-        private async Task<EcAuthUser> ResolveOnceAsync(ResolvedLogin login)
+        private async Task<EcAuthUser> ResolveOnceAsync(ResolvedLogin login, bool claimLost = false)
         {
             var now = DateTimeOffset.UtcNow;
 
@@ -106,7 +106,21 @@ namespace IdentityProvider.Services
             {
                 _logger.LogInformation("Migrating ExternalIdpMapping to identity. EcAuthSubject: {Subject}, IssuerKey: {IssuerKey}",
                     mappedUser.Subject, login.IssuerKey);
-                mappedUser.ClientId ??= login.ClientId;
+                if (mappedUser.ClientId == null)
+                {
+                    // backfill で Client を決められなかった旧ユーザーのプールを確定する。同じ Organization の
+                    // 別 Client から同時にログインが来ると両方が null を読むので、null のときだけ書く条件付き
+                    // UPDATE で 1 つの Client だけに確定させる。負けた側は、そのユーザーを自分のプールの
+                    // ユーザーとして扱わず、解決をやり直す（mapping の候補から外れ、統合か新規作成になる）。
+                    if (await TryClaimClientAsync(mappedUser.Id, login.ClientId) == 0 && !claimLost)
+                    {
+                        _logger.LogInformation("Legacy user was claimed by another client concurrently. EcAuthSubject: {Subject}, ClientId: {ClientId}",
+                            mappedUser.Subject, login.ClientId);
+                        _context.ChangeTracker.Clear();
+                        return await ResolveOnceAsync(login, claimLost: true);
+                    }
+                    mappedUser.ClientId = login.ClientId;
+                }
                 AddIdentity(mappedUser, login, now);
                 ApplyEmail(mappedUser, login, now);
                 await _context.SaveChangesAsync();
@@ -160,6 +174,20 @@ namespace IdentityProvider.Services
             _logger.LogInformation("Created B2C user by JIT provisioning. EcAuthSubject: {Subject}, IssuerKey: {IssuerKey}",
                 newUser.Subject, login.IssuerKey);
             return newUser;
+        }
+
+        /// <summary>
+        /// client_id がまだ null のときだけ、ユーザーのプールを <paramref name="clientId"/> に確定する。
+        /// 戻り値は更新した行数（0 なら別の要求が先に確定した）。
+        /// InMemory プロバイダーは <c>ExecuteUpdate</c> 非対応のため、ユニットテストでは override する
+        /// （<see cref="AuthorizationCodeService"/> の <c>TryMarkAsUsedAsync</c> と同じ流儀）。
+        /// </summary>
+        protected virtual Task<int> TryClaimClientAsync(int userId, string clientId)
+        {
+            return _context.EcAuthUsers
+                .IgnoreQueryFilters()
+                .Where(u => u.Id == userId && u.ClientId == null)
+                .ExecuteUpdateAsync(set => set.SetProperty(u => u.ClientId, clientId));
         }
 
         private void EnsureSamePool(EcAuthUser user, ResolvedLogin login)

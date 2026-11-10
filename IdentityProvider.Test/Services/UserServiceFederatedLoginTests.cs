@@ -42,7 +42,7 @@ namespace IdentityProvider.Test.Services
             _otherClientGoogle = NewProvider(201, "google", _otherClientSameOrg.Id);
             _context.OpenIdProviders.AddRange(_google, _line, _otherClientGoogle);
             _context.SaveChanges();
-            _service = new UserService(_context, new Mock<ILogger<UserService>>().Object);
+            _service = new TestableUserService(_context, new Mock<ILogger<UserService>>().Object);
         }
 
         private static OpenIdProvider NewProvider(int id, string name, int clientId) => new()

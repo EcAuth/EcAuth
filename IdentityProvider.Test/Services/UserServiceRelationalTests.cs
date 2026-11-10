@@ -151,6 +151,87 @@ namespace IdentityProvider.Test.Services
             await Assert.ThrowsAsync<DbUpdateException>(() => _db.Context.SaveChangesAsync());
         }
 
+        // ---- 旧ユーザーのプール確定（client_id が null の旧ユーザー）----
+
+        private async Task SeedLegacyUserAsync(string subject, string provider, string externalSubject)
+        {
+            var user = new EcAuthUser { Subject = subject, EmailHash = string.Empty, OrganizationId = OrganizationId, ClientId = null };
+            _db.Context.EcAuthUsers.Add(user);
+            _db.Context.ExternalIdpMappings.Add(new ExternalIdpMapping
+            {
+                EcAuthSubject = subject,
+                ExternalProvider = provider,
+                ExternalSubject = externalSubject,
+                EcAuthUser = user
+            });
+            await _db.Context.SaveChangesAsync();
+            _db.Context.ChangeTracker.Clear();
+        }
+
+        [Fact]
+        public async Task LegacyUserWithoutClient_IsClaimedByConditionalUpdate()
+        {
+            await SeedLegacyUserAsync("legacy-1", "google", "sub-1");
+
+            var user = await Login(_google, "sub-1", null);
+
+            Assert.Equal("legacy-1", user.Subject);
+            await using var check = _db.CreateSiblingContext();
+            var stored = await check.EcAuthUsers.IgnoreQueryFilters().SingleAsync(u => u.Subject == "legacy-1");
+            Assert.Equal("client-a", stored.ClientId);
+        }
+
+        [Fact]
+        public async Task LegacyUserClaimedConcurrentlyByAnotherClient_IsNotShared()
+        {
+            // 別 Client からのログインが、こちらが読んだ直後にプールを確定させた状況を再現する
+            await SeedLegacyUserAsync("legacy-1", "google", "sub-1");
+            var racing = new ClaimRacedUserService(_db, "client-a2", new Mock<ILogger<UserService>>().Object);
+
+            var user = await racing.ResolveFederatedUserAsync(new IUserService.FederatedLoginRequest
+            {
+                Client = _client,
+                Provider = _google,
+                ExternalSubject = "sub-1"
+            });
+
+            // 負けた側は旧ユーザーを自分のプールに取り込まず、自分の Client に新しいユーザーを作る
+            Assert.NotEqual("legacy-1", user.Subject);
+            Assert.Equal("client-a", user.ClientId);
+            await using var check = _db.CreateSiblingContext();
+            var legacy = await check.EcAuthUsers.IgnoreQueryFilters().SingleAsync(u => u.Subject == "legacy-1");
+            Assert.Equal("client-a2", legacy.ClientId);
+            Assert.False(await check.EcAuthUserIdentities.IgnoreQueryFilters().AnyAsync(i => i.EcAuthSubject == "legacy-1"));
+        }
+
+        /// <summary>条件付き UPDATE の直前に、別の要求（兄弟 context）がプールを確定させる。</summary>
+        private sealed class ClaimRacedUserService : UserService
+        {
+            private readonly RetryingSqliteContext _db;
+            private readonly string _otherClientId;
+            private bool _raced;
+
+            public ClaimRacedUserService(RetryingSqliteContext db, string otherClientId, ILogger<UserService> logger)
+                : base(db.Context, logger)
+            {
+                _db = db;
+                _otherClientId = otherClientId;
+            }
+
+            protected override async Task<int> TryClaimClientAsync(int userId, string clientId)
+            {
+                if (!_raced)
+                {
+                    _raced = true;
+                    await using var other = _db.CreateSiblingContext();
+                    await other.EcAuthUsers.IgnoreQueryFilters()
+                        .Where(u => u.Id == userId && u.ClientId == null)
+                        .ExecuteUpdateAsync(set => set.SetProperty(u => u.ClientId, _otherClientId));
+                }
+                return await base.TryClaimClientAsync(userId, clientId);
+            }
+        }
+
         public void Dispose() => _db.Dispose();
     }
 }
