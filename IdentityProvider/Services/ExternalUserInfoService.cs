@@ -34,20 +34,14 @@ namespace IdentityProvider.Services
 
             try
             {
-                // 1. 外部IdPマッピングの取得
-                _logger.LogInformation("Fetching external IdP mapping for subject {Subject} and provider {Provider}",
+                // 1. ユーザーと、そのユーザーが紐付いている OpenIdProvider を解決する（EcAuthDocs#122）
+                _logger.LogInformation("Resolving external IdP link for subject {Subject} and provider {Provider}",
                     request.EcAuthSubject, request.ExternalProvider);
 
-                var externalMapping = await _context.ExternalIdpMappings
-                    .IgnoreQueryFilters()
-                    .Include(m => m.EcAuthUser)
-                        .ThenInclude(u => u.Organization)
-                    .FirstOrDefaultAsync(m => m.EcAuthSubject == request.EcAuthSubject &&
-                                             m.ExternalProvider == request.ExternalProvider);
-
-                if (externalMapping == null)
+                var openIdProvider = await ResolveLinkedProviderAsync(request.EcAuthSubject, request.ExternalProvider);
+                if (openIdProvider == null)
                 {
-                    _logger.LogWarning("External IdP mapping not found for subject {Subject} and provider {Provider}",
+                    _logger.LogWarning("External IdP link not found for subject {Subject} and provider {Provider}",
                         request.EcAuthSubject, request.ExternalProvider);
                     return null;
                 }
@@ -65,31 +59,19 @@ namespace IdentityProvider.Services
                     return null;
                 }
 
-                // 3. OpenIdProvider設定の取得
-                _logger.LogInformation("Fetching OpenIdProvider configuration for provider {Provider}",
-                    request.ExternalProvider);
-
-                var openIdProvider = await _context.OpenIdProviders
-                    .IgnoreQueryFilters()
-                    .FirstOrDefaultAsync(p => p.Name == request.ExternalProvider);
-
-                if (openIdProvider == null)
-                {
-                    _logger.LogError("OpenIdProvider not found for provider {Provider}", request.ExternalProvider);
-                    return null;
-                }
-
                 if (string.IsNullOrEmpty(openIdProvider.UserinfoEndpoint))
                 {
                     _logger.LogError("UserInfo endpoint not configured for provider {Provider}", request.ExternalProvider);
                     return null;
                 }
 
-                // 4. 外部IdPのUserInfo endpointへのリクエスト
+                // 3. 外部IdPのUserInfo endpointへのリクエスト
                 _logger.LogInformation("Fetching user info from external IdP {Provider} at {Endpoint}",
                     request.ExternalProvider, openIdProvider.UserinfoEndpoint);
 
-                var httpClient = _httpClientFactory.CreateClient();
+                // 既定のクライアントはハンドラーをプールして Cookie を共有するため、Cookie を無効にした
+                // 外部 IdP 用の名前付きクライアントを使う（AuthorizationCallbackController と同じ）。
+                var httpClient = _httpClientFactory.CreateClient(Controllers.AuthorizationCallbackController.ExternalIdpHttpClientName);
                 httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", externalToken.AccessToken);
 
                 var response = await httpClient.GetAsync(openIdProvider.UserinfoEndpoint);
@@ -104,7 +86,7 @@ namespace IdentityProvider.Services
                 var userInfoJson = await response.Content.ReadAsStringAsync();
                 _logger.LogInformation("Successfully fetched user info from external IdP {Provider}", request.ExternalProvider);
 
-                // 5. ユーザー情報のパースと返却
+                // 4. ユーザー情報のパースと返却
                 var userInfoDocument = JsonDocument.Parse(userInfoJson);
 
                 return new IExternalUserInfoService.ExternalUserInfo
@@ -131,6 +113,76 @@ namespace IdentityProvider.Services
                     request.ExternalProvider);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// ユーザーが紐付いている OpenIdProvider を、provider 名とユーザーのプール（Client / Organization）で解決する。
+        ///
+        /// <para>
+        /// provider 名は Client 間で衝突しうるので、名前だけで OpenIdProvider を引かない（別 Client の
+        /// userinfo エンドポイントへ別の IdP のトークンを送ってしまう）。紐付きの確認は
+        /// <see cref="EcAuthUserIdentity"/>（issuer_key = idp:{open_id_provider.id}）を正とし、
+        /// identity を持たない旧ユーザーだけ旧 <see cref="ExternalIdpMapping"/> を見る（expand 期間。
+        /// 旧 mapping は Organization をまたぐ一意制約に当たる場合は書かれないため、identity だけを持つ
+        /// ユーザーがいる）。
+        /// </para>
+        /// <para>
+        /// テナントのクエリフィルターは使わない。アクセストークンの検証で subject は確定済みで、
+        /// ログイン時の解決（UserService）と同じくユーザーのプールで明示的に絞る。
+        /// </para>
+        /// </summary>
+        private async Task<OpenIdProvider?> ResolveLinkedProviderAsync(string ecAuthSubject, string providerName)
+        {
+            var user = await _context.EcAuthUsers
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(u => u.Subject == ecAuthSubject);
+            if (user == null)
+            {
+                return null;
+            }
+
+            var query = _context.OpenIdProviders
+                .IgnoreQueryFilters()
+                .Where(p => p.Name == providerName
+                    && p.Client != null
+                    && p.Client.OrganizationId == user.OrganizationId);
+            if (user.ClientId != null)
+            {
+                query = query.Where(p => p.Client!.ClientId == user.ClientId);
+            }
+            var candidates = await query.ToListAsync();
+            if (candidates.Count == 0)
+            {
+                return null;
+            }
+
+            var issuerKeys = candidates.Select(p => B2CIssuerKey.ForIdp(p.Id)).ToList();
+            var linkedIssuerKeys = await _context.EcAuthUserIdentities
+                .IgnoreQueryFilters()
+                .Where(i => i.EcAuthSubject == ecAuthSubject && issuerKeys.Contains(i.IssuerKey))
+                .Select(i => i.IssuerKey)
+                .ToListAsync();
+            var linked = candidates.Where(p => linkedIssuerKeys.Contains(B2CIssuerKey.ForIdp(p.Id))).ToList();
+            if (linked.Count == 1)
+            {
+                return linked[0];
+            }
+            if (linked.Count > 1)
+            {
+                // 1 Client に同名の provider が複数ある（設定の誤り）。どれか決められない
+                _logger.LogWarning("Multiple linked providers share the name {Provider} for subject {Subject}", providerName, ecAuthSubject);
+                return null;
+            }
+
+            // identity を持たない旧ユーザー（backfill で Client を決められず、まだ再ログインしていない）
+            var hasLegacyMapping = await _context.ExternalIdpMappings
+                .IgnoreQueryFilters()
+                .AnyAsync(m => m.EcAuthSubject == ecAuthSubject && m.ExternalProvider == providerName);
+            if (hasLegacyMapping && candidates.Count == 1)
+            {
+                return candidates[0];
+            }
+            return null;
         }
     }
 }

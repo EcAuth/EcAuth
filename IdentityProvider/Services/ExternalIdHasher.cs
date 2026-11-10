@@ -25,5 +25,23 @@ namespace IdentityProvider.Services
         {
             return EmailHashUtil.HashEmail(externalId);
         }
+
+        /// <summary>
+        /// 外部 IdP の sub など、値そのものが識別子である external_id を SHA-256 ハッシュ化した値を返す。
+        /// OpenID Connect Core 1.0 §2 は sub を case-sensitive な文字列と定めているため、
+        /// <see cref="Hash"/> と違って小文字化も Trim もしない（大小や前後の空白だけが違う別人の sub を
+        /// 同一視すると、別アカウントの identity に解決されてしまう）。
+        /// 値が null または空白だけの場合は <see cref="System.ArgumentException"/> を投げる。
+        /// 出力形式は <see cref="Hash"/> と同じ（UTF-8 → SHA-256 → 大文字 hex 64 文字）。
+        /// </summary>
+        public static string HashCaseSensitive(string externalId)
+        {
+            if (string.IsNullOrWhiteSpace(externalId))
+            {
+                throw new System.ArgumentException("externalId は必須です。", nameof(externalId));
+            }
+            var bytes = System.Text.Encoding.UTF8.GetBytes(externalId);
+            return System.Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+        }
     }
 }

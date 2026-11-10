@@ -100,6 +100,28 @@ namespace IdentityProvider.Controllers
                     return BadRequest("Identity provider not found");
                 }
 
+                // 2.1. ログイン先の Client を確認する。外部 IdP と通信してユーザーを作る前に確かめる
+                // （従来は JIT プロビジョニングの後だったため、Client が無くてもユーザーが作られていた）。
+                // State は封緘されているが、Client / Organization / OpenIdProvider の組が DB 上でも
+                // 整合していることを確かめてからユーザープールを決める（EcAuthDocs#122）。
+                var client = await _context.Clients
+                    .ExcludeDeletedOrganizations()
+                    .FirstOrDefaultAsync(c => c.Id == stateData.ClientId);
+
+                if (client == null)
+                {
+                    _logger.LogError("Client not found: {ClientId}", stateData.ClientId);
+                    return BadRequest("Client not found");
+                }
+
+                if (identityProvider.ClientId != client.Id || client.OrganizationId != stateData.OrganizationId)
+                {
+                    _logger.LogError(
+                        "State is inconsistent with client. ClientId: {ClientId}, ProviderClientId: {ProviderClientId}, StateOrganizationId: {StateOrganizationId}, ClientOrganizationId: {ClientOrganizationId}",
+                        client.Id, identityProvider.ClientId, stateData.OrganizationId, client.OrganizationId);
+                    return BadRequest("Client not found");
+                }
+
                 // 3. 外部IdPのトークンエンドポイントを呼び出してアクセストークンを取得
                 var tokenResponse = await ExchangeCodeForTokenAsync(identityProvider, code);
                 if (tokenResponse == null || string.IsNullOrEmpty(tokenResponse.AccessToken))
@@ -116,9 +138,23 @@ namespace IdentityProvider.Controllers
                     return BadRequest("Failed to get user information");
                 }
 
-                // 5. JITプロビジョニング：ユーザーを取得または作成
-                var ecAuthUser = await _userService.CreateOrUpdateFromExternalAsync(
-                    externalUserInfo, stateData.OrganizationId);
+                // 5. JITプロビジョニング：ユーザーを取得または作成（ユーザープールは Client 単位。EcAuthDocs#122）
+                EcAuthUser ecAuthUser;
+                try
+                {
+                    ecAuthUser = await _userService.ResolveFederatedUserAsync(new IUserService.FederatedLoginRequest
+                    {
+                        Client = client,
+                        Provider = identityProvider,
+                        ExternalSubject = externalUserInfo.Subject,
+                        Email = externalUserInfo.Email,
+                        EmailVerified = externalUserInfo.EmailVerified
+                    });
+                }
+                catch (UserPoolMismatchException)
+                {
+                    return BadRequest("Failed to resolve user");
+                }
 
                 // 5.1. 外部IdPトークンを保存
                 await _externalIdpTokenService.SaveTokenAsync(new IExternalIdpTokenService.SaveTokenRequest
@@ -134,16 +170,6 @@ namespace IdentityProvider.Controllers
                     ecAuthUser.Subject, identityProvider.Name);
 
                 // 6. EcAuth独自の認可コードを生成
-                var client = await _context.Clients
-                    .ExcludeDeletedOrganizations()
-                    .FirstOrDefaultAsync(c => c.Id == stateData.ClientId);
-
-                if (client == null)
-                {
-                    _logger.LogError("Client not found: {ClientId}", stateData.ClientId);
-                    return BadRequest("Client not found");
-                }
-
                 var authCodeRequest = new IAuthorizationCodeService.AuthorizationCodeRequest
                 {
                     Subject = ecAuthUser.Subject,
@@ -260,6 +286,18 @@ namespace IdentityProvider.Controllers
         }
 
         /// <summary>
+        /// OIDC の <c>email_verified</c> を真偽値として読む。仕様は JSON の boolean だが、
+        /// 文字列 "true" を返す IdP もあるため両方を受け付ける。それ以外（欠落・null・不正値）は false。
+        /// </summary>
+        private static bool IsTrue(object? value) => value switch
+        {
+            JsonElement { ValueKind: JsonValueKind.True } => true,
+            JsonElement { ValueKind: JsonValueKind.String } e => string.Equals(e.GetString(), "true", StringComparison.OrdinalIgnoreCase),
+            bool b => b,
+            _ => false
+        };
+
+        /// <summary>
         /// 外部IdPからユーザー情報を取得
         /// </summary>
         private async Task<ExternalUserInfo?> GetExternalUserInfoAsync(OpenIdProvider provider, string accessToken)
@@ -293,7 +331,8 @@ namespace IdentityProvider.Controllers
                 {
                     Provider = provider.Name,
                     Subject = userInfo.ContainsKey("sub") ? userInfo["sub"].ToString() ?? "" : "",
-                    Email = userInfo.ContainsKey("email") ? userInfo["email"].ToString() ?? "" : ""
+                    Email = userInfo.ContainsKey("email") ? userInfo["email"].ToString() ?? "" : "",
+                    EmailVerified = userInfo.TryGetValue("email_verified", out var emailVerified) && IsTrue(emailVerified)
                 };
             }
             catch (Exception ex)

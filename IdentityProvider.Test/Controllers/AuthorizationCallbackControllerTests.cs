@@ -151,7 +151,7 @@ namespace IdentityProvider.Test.Controllers
         // ---- 正常系: JIT プロビジョニングと認可コード発行 ----
 
         [Fact]
-        public async Task Callback_NewUser_CreatesUserAndMappingInStateOrganization()
+        public async Task Callback_NewUser_CreatesUserIdentityAndMappingInClientPool()
         {
             _idp.Userinfo("ext-sub-1", "user@example.com");
 
@@ -160,7 +160,13 @@ namespace IdentityProvider.Test.Controllers
             GetCode(result);
             var user = Assert.Single(await _context.EcAuthUsers.ToListAsync());
             Assert.Equal(OrganizationId, user.OrganizationId);
+            Assert.Equal("client-a", user.ClientId);
             Assert.Equal(EmailHashUtil.HashEmail("user@example.com"), user.EmailHash);
+            var identity = Assert.Single(await _context.EcAuthUserIdentities.IgnoreQueryFilters().ToListAsync());
+            Assert.Equal(user.Subject, identity.EcAuthSubject);
+            Assert.Equal(B2CIssuerKey.ForIdp(ProviderId), identity.IssuerKey);
+            Assert.Equal(ExternalIdHasher.HashCaseSensitive("ext-sub-1"), identity.ExternalId);
+            // expand 期間の二重書き
             var mapping = Assert.Single(await _context.ExternalIdpMappings.ToListAsync());
             Assert.Equal(user.Subject, mapping.EcAuthSubject);
             Assert.Equal(ProviderName, mapping.ExternalProvider);
@@ -273,9 +279,9 @@ namespace IdentityProvider.Test.Controllers
 
             await Callback(providerId: OtherProviderId, clientId: OtherClientDbId, organizationId: OtherOrganizationId);
 
-            // InMemory はユニーク制約を検査しない。SQL Server では (external_provider, external_subject) の
-            // ユニーク制約に当たる（UserServiceRelationalTests で固定）。ここではユーザー解決が
-            // Organization で分かれていることだけを確認する。
+            // identity の issuer_key は OpenIdProvider の行で区切るので、provider 名と sub が同じでも
+            // 別 Organization（別 Client）なら別ユーザーになる。旧構造の一意制約に当たらないことは
+            // UserServiceRelationalTests（SQLite）で確認している。
             var users = await _context.EcAuthUsers.OrderBy(u => u.OrganizationId).ToListAsync();
             Assert.Equal(2, users.Count);
             Assert.Equal(new[] { OrganizationId, OtherOrganizationId }, users.Select(u => u.OrganizationId));
@@ -352,16 +358,58 @@ namespace IdentityProvider.Test.Controllers
         }
 
         [Fact]
-        public async Task Callback_WithUnknownClient_ReturnsBadRequestAfterProvisioningUser()
+        public async Task Callback_WithUnknownClient_ReturnsBadRequestBeforeContactingIdp()
         {
             _idp.Userinfo("ext-sub-1", "user@example.com");
 
             var result = await Callback(clientId: 999);
 
             Assert.IsType<BadRequestObjectResult>(result);
-            // 現状は Client の確認より先に JIT プロビジョニングが走るため、ユーザーは作成済みになる
-            Assert.Single(await _context.EcAuthUsers.ToListAsync());
+            // Client の確認は外部 IdP との通信と JIT プロビジョニングより前（EcAuthDocs#122）
+            Assert.Empty(_idp.TokenRequestBodies);
+            Assert.Empty(await _context.EcAuthUsers.ToListAsync());
             Assert.Empty(await _context.AuthorizationCodes.ToListAsync());
+        }
+
+        [Fact]
+        public async Task Callback_WithProviderOfAnotherClient_ReturnsBadRequestBeforeContactingIdp()
+        {
+            // 封緘された State の組（Client と OpenIdProvider）が DB 上で整合しないならユーザープールを決めない
+            _idp.Userinfo("ext-sub-1", "user@example.com");
+
+            var result = await Callback(providerId: OtherProviderId);
+
+            Assert.IsType<BadRequestObjectResult>(result);
+            Assert.Empty(_idp.TokenRequestBodies);
+            Assert.Empty(await _context.EcAuthUsers.ToListAsync());
+        }
+
+        [Fact]
+        public async Task Callback_WithOrganizationMismatchingClient_ReturnsBadRequest()
+        {
+            _idp.Userinfo("ext-sub-1", "user@example.com");
+
+            var result = await Callback(organizationId: OtherOrganizationId);
+
+            Assert.IsType<BadRequestObjectResult>(result);
+            Assert.Empty(await _context.EcAuthUsers.ToListAsync());
+        }
+
+        [Theory]
+        [InlineData("true", true)]
+        [InlineData("\"true\"", true)]
+        [InlineData("false", false)]
+        [InlineData("\"yes\"", false)]
+        [InlineData(null, false)]
+        public async Task Callback_ReadsEmailVerifiedClaim(string? emailVerifiedJson, bool expectedVerified)
+        {
+            var extra = emailVerifiedJson == null ? "" : $",\"email_verified\":{emailVerifiedJson}";
+            _idp.UserinfoResponse(HttpStatusCode.OK, $"{{\"sub\":\"ext-sub-1\",\"email\":\"user@example.com\"{extra}}}");
+
+            await Callback();
+
+            var user = await _context.EcAuthUsers.SingleAsync();
+            Assert.Equal(expectedVerified, user.EmailVerifiedAt != null);
         }
 
         [Fact]

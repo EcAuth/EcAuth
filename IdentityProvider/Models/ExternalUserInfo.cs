@@ -16,6 +16,12 @@ namespace IdentityProvider.Models
         public string? Email { get; set; }
 
         /// <summary>
+        /// IdP がメールアドレスを確認済みと表明しているか（OIDC 標準クレーム <c>email_verified</c>）。
+        /// 表明が無いときは false。確認済みメールアドレス同士だけ自動で統合する（EcAuthDocs#122）。
+        /// </summary>
+        public bool EmailVerified { get; set; }
+
+        /// <summary>
         /// 表示名（オプション）
         /// </summary>
         public string? Name { get; set; }

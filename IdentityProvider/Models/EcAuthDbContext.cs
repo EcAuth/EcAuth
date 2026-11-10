@@ -22,6 +22,7 @@ namespace IdentityProvider.Models
         public DbSet<OpenIdProviderScope> OpenIdProviderScopes { get; set; }
         public DbSet<EcAuthUser> EcAuthUsers { get; set; }
         public DbSet<ExternalIdpMapping> ExternalIdpMappings { get; set; }
+        public DbSet<EcAuthUserIdentity> EcAuthUserIdentities { get; set; }
         public DbSet<AuthorizationCode> AuthorizationCodes { get; set; }
         public DbSet<AccessToken> AccessTokens { get; set; }
         public DbSet<ExternalIdpToken> ExternalIdpTokens { get; set; }
@@ -86,6 +87,10 @@ namespace IdentityProvider.Models
             modelBuilder.Entity<ExternalIdpMapping>()
                 .HasQueryFilter(m => m.EcAuthUser != null && m.EcAuthUser.Organization != null && m.EcAuthUser.Organization.TenantName == _tenantService.TenantName && m.EcAuthUser.Organization.DeletedAt == null);
 
+            // EcAuthUserIdentity テナントフィルター（EcAuthUser 経由。EcAuthDocs#122）
+            modelBuilder.Entity<EcAuthUserIdentity>()
+                .HasQueryFilter(i => i.EcAuthUser != null && i.EcAuthUser.Organization != null && i.EcAuthUser.Organization.TenantName == _tenantService.TenantName && i.EcAuthUser.Organization.DeletedAt == null);
+
             // AuthorizationCodeにもグローバルクエリフィルターを適用
             // 注: 旧外部キー削除後はClient経由でテナントフィルターを適用
             modelBuilder.Entity<AuthorizationCode>()
@@ -119,6 +124,13 @@ namespace IdentityProvider.Models
                 .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<EcAuthUser>()
+                .HasMany(u => u.Identities)
+                .WithOne(i => i.EcAuthUser)
+                .HasForeignKey(i => i.EcAuthSubject)
+                .HasPrincipalKey(u => u.Subject)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<EcAuthUser>()
                 .HasMany<ExternalIdpToken>()
                 .WithOne(eit => eit.EcAuthUser)
                 .HasForeignKey(eit => eit.EcAuthSubject)
@@ -140,9 +152,20 @@ namespace IdentityProvider.Models
                 .OnDelete(DeleteBehavior.Restrict);
 
             // インデックスの設定
+            // email_hash は統合の手がかりであって識別子ではないため一意にしない（EcAuthDocs#122）。
+            // 旧 UNIQUE (organization_id, email_hash) は、メールアドレスを返さない IdP の 2 人目や、
+            // 同じメールアドレスで別 IdP から入った顧客を例外にしていた。統合の候補を
+            // ユーザープール（Client）内で引くための通常の索引にする。
             modelBuilder.Entity<EcAuthUser>()
-                .HasIndex(u => new { u.OrganizationId, u.EmailHash })
+                .HasIndex(u => new { u.ClientId, u.EmailHash });
+
+            modelBuilder.Entity<EcAuthUserIdentity>()
+                .HasIndex(i => new { i.IssuerKey, i.ExternalId })
                 .IsUnique();
+
+            // Client 解約時に該当 identity を一括で引くための索引（B2B と同じ）。
+            modelBuilder.Entity<EcAuthUserIdentity>()
+                .HasIndex(i => i.ClientId);
 
             modelBuilder.Entity<EcAuthUser>()
                 .HasIndex(u => u.Subject)
