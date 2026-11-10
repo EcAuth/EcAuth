@@ -136,6 +136,16 @@ namespace IdentityProvider.Test.Services
         }
 
         [Fact]
+        public async Task SubjectsDifferingOnlyByWhitespace_AreDifferentUsers()
+        {
+            // sub は加工せずにハッシュする。前後の空白を落とすと別アカウントの identity に解決される
+            var plain = await Login(_google, "account-1");
+            var spaced = await Login(_google, " account-1");
+
+            Assert.NotEqual(plain.Subject, spaced.Subject);
+        }
+
+        [Fact]
         public async Task SameSubjectFromAnotherProvider_IsDifferentUser()
         {
             var google = await Login(_google, "sub-1");

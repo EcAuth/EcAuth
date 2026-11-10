@@ -85,12 +85,17 @@ namespace IdentityProvider.Migrations
             // open_id_provider を引き、1 行に決まるものだけを移す。決まらない行は残しておけば、
             // 次のログインで UserService の遅延移行（mapping フォールバック）が Client を確定して移す。
             //
+            // 1 つ目でユーザーの client_id を決め、2 つ目の identity は「ユーザーの client_id と同じ Client」の
+            // mapping だけから作る。旧モデルのユーザーは同じ Organization の複数 Client をまたげたため、
+            // client_id を決められなかったユーザーに Client ごとの identity を作ると、最初にログインした
+            // Client にプールが確定した後、もう一方の Client からは別プールとして拒否されてログインできなくなる。
+            //
             // external_id は C# の ExternalIdHasher.HashCaseSensitive と同じ値にする:
-            //   hash = Convert.ToHexString(SHA256(UTF8(sub.Trim())))   // 大文字 hex 64 文字、小文字化しない
+            //   hash = Convert.ToHexString(SHA256(UTF8(sub)))   // 大文字 hex 64 文字、小文字化も Trim もしない
             // T-SQL では UTF-8 照合順序で varchar に変換して HASHBYTES に渡す（nvarchar のままだと UTF-16LE に
-            // なり一致しない。20260622210330_HashB2BUserExternalId と同じ書き方）。T-SQL の LTRIM / RTRIM は
-            // ASCII スペースしか除かず C# の Trim と乖離するので、Trim の差が出ない値（ASCII 印字可能文字だけで、
-            // 前後に空白が無い）だけを対象にする。OIDC の sub は ASCII なので通常はすべて対象になる。
+            // なり一致しない。20260622210330_HashB2BUserExternalId と同じ書き方）。変換で C# と食い違わない
+            // ことを確かめられる ASCII 印字可能文字だけの値を対象にする。OIDC の sub は ASCII なので通常は
+            // すべて対象になり、それ以外は遅延移行に任せる。
             //
             // 冪等: client_id は NULL の行だけ、identity は NOT EXISTS の行だけ書く（transition リリースの
             // 追いつき backfill で同じ SQL を再実行できる）。追加した列を参照するので EXEC() で包む。
@@ -122,6 +127,7 @@ namespace IdentityProvider.Migrations
                         JOIN dbo.ecauth_user u ON u.subject = m.ecauth_subject
                         JOIN dbo.open_id_provider p ON p.name = m.external_provider
                         JOIN dbo.client c ON c.id = p.client_id AND c.organization_id = u.organization_id
+                                         AND c.client_id = u.client_id
                     ), uniq AS (
                         SELECT mapping_id, MIN(subject) AS subject, MIN(provider_id) AS provider_id,
                                MIN(client_id) AS client_id, MIN(external_subject) AS external_subject,
@@ -137,8 +143,6 @@ namespace IdentityProvider.Migrations
                         FROM uniq q
                         WHERE PATINDEX(N''%[^ -~]%'', q.external_subject COLLATE Latin1_General_100_BIN2) = 0
                           AND q.external_subject <> N''''
-                          AND LEFT(q.external_subject, 1) <> N'' ''
-                          AND RIGHT(q.external_subject, 1) <> N'' ''
                     )
                     INSERT INTO dbo.ecauth_user_identity (ecauth_subject, issuer_key, external_id, client_id, created_at)
                     SELECT h.subject, h.issuer_key, h.external_id, h.client_id, h.created_at

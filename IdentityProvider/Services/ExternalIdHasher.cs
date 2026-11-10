@@ -27,10 +27,11 @@ namespace IdentityProvider.Services
         }
 
         /// <summary>
-        /// 大文字小文字を区別する external_id（外部 IdP の sub）を SHA-256 ハッシュ化した値を返す。
+        /// 外部 IdP の sub など、値そのものが識別子である external_id を SHA-256 ハッシュ化した値を返す。
         /// OpenID Connect Core 1.0 §2 は sub を case-sensitive な文字列と定めているため、
-        /// <see cref="Hash"/> と違って小文字化しない（大小だけが違う別人の sub を同一視しない）。
-        /// 前後の空白だけは除く。値が null または空白の場合は <see cref="System.ArgumentException"/> を投げる。
+        /// <see cref="Hash"/> と違って小文字化も Trim もしない（大小や前後の空白だけが違う別人の sub を
+        /// 同一視すると、別アカウントの identity に解決されてしまう）。
+        /// 値が null または空白だけの場合は <see cref="System.ArgumentException"/> を投げる。
         /// 出力形式は <see cref="Hash"/> と同じ（UTF-8 → SHA-256 → 大文字 hex 64 文字）。
         /// </summary>
         public static string HashCaseSensitive(string externalId)
@@ -39,7 +40,7 @@ namespace IdentityProvider.Services
             {
                 throw new System.ArgumentException("externalId は必須です。", nameof(externalId));
             }
-            var bytes = System.Text.Encoding.UTF8.GetBytes(externalId.Trim());
+            var bytes = System.Text.Encoding.UTF8.GetBytes(externalId);
             return System.Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
         }
     }
