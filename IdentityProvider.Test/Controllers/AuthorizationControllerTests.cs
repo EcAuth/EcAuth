@@ -3,6 +3,7 @@ using IdentityProvider.Models;
 using IdentityProvider.Test.TestHelpers;
 using IdpUtilities;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -295,6 +296,58 @@ namespace IdentityProvider.Test.Controllers
             var result = await FederateWithRedirectUri(redirectUri);
 
             Assert.Equal("invalid_request", GetError(result));
+        }
+
+        // ---- Client / Organization の境界（EcAuthDocs#164 段 2）----
+
+        [Fact]
+        public async Task Federate_WithProviderRegisteredToAnotherClient_ReturnsInvalidRequest()
+        {
+            // OpenIdProvider は Client 単位。別 client の provider_name では State を封緘しない
+            _context.OpenIdProviders.Add(new OpenIdProvider
+            {
+                Id = 2,
+                Name = "other-client-provider",
+                IdpClientId = "other-idp-client-id",
+                IdpClientSecret = "other-idp-client-secret",
+                AuthorizationEndpoint = "https://other-idp.example.com/authorize",
+                ClientId = 2
+            });
+            await _context.SaveChangesAsync();
+
+            var result = await _controller.Federate(
+                ClientId, "other-client-provider", RedirectUri, null, ValidChallenge, "S256");
+
+            Assert.Equal("invalid_request", GetError(result));
+        }
+
+        [Fact]
+        public async Task Federate_SealsClientAndOrganizationOfRequestingClient()
+        {
+            var result = await Federate(ValidChallenge, "S256");
+
+            var state = await UnsealStateFrom(result);
+            Assert.Equal(1, state.ClientId);
+            Assert.Equal(1, state.OrganizationId);
+            Assert.Equal(1, state.OpenIdProviderId);
+            Assert.Equal("client-state", state.ClientState);
+        }
+
+        [Fact]
+        public async Task Federate_WithClientOfDeletedOrganization_CurrentlyRedirectsToProvider()
+        {
+            // 今の挙動の固定。Client 検索が IgnoreQueryFilters() なしで ExcludeDeletedOrganizations() を
+            // 使っているため、Organization のクエリフィルターでナビゲーションが null になり素通りする
+            // （ClientQueryExtensionsRelationalTests）。EcAuthDocs#164 段 4（F-1）で 400 へ反転させる。
+            // このフィクスチャの Organization は TenantName が MockTenantService と異なるためフィルターを外して引く
+            var org = await _context.Organizations.IgnoreQueryFilters().SingleAsync(o => o.Id == 1);
+            org.DeletedAt = DateTimeOffset.UtcNow;
+            await _context.SaveChangesAsync();
+
+            var result = await Federate(ValidChallenge, "S256");
+
+            var state = await UnsealStateFrom(result);
+            Assert.Equal(1, state.ClientId);
         }
 
         public void Dispose()

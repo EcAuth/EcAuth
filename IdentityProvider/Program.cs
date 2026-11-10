@@ -72,6 +72,15 @@ builder.Services.AddScoped<IExternalIdpTokenService, ExternalIdpTokenService>();
 builder.Services.AddScoped<IExternalUserInfoService, ExternalUserInfoService>();
 builder.Services.AddScoped<OrganizationFilter>();
 builder.Services.AddHttpClient(); // HttpClientFactoryを有効化（ExternalUserInfoServiceで使用）
+// AuthorizationCallbackController が外部 IdP のトークン交換 / userinfo 取得に使う。
+// 開発環境（ローカルの MockIdP 等）では自己署名証明書を受け入れる。
+builder.Services.AddHttpClient(IdentityProvider.Controllers.AuthorizationCallbackController.ExternalIdpHttpClientName)
+    .ConfigurePrimaryHttpMessageHandler(() => builder.Environment.IsDevelopment()
+        ? new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+        }
+        : new HttpClientHandler());
 
 // B2Bパスキー認証関連サービス
 builder.Services.AddScoped<IWebAuthnChallengeService, WebAuthnChallengeService>();

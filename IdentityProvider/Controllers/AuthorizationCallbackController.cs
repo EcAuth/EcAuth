@@ -18,8 +18,14 @@ namespace IdentityProvider.Controllers
         private readonly IUserService _userService;
         private readonly IExternalIdpTokenService _externalIdpTokenService;
         private readonly ILogger<AuthorizationCallbackController> _logger;
-        private readonly IHostEnvironment _environment;
+        private readonly IHttpClientFactory _httpClientFactory;
         private readonly IConfiguration _configuration;
+
+        /// <summary>
+        /// 外部 IdP（トークンエンドポイント / userinfo）との通信に使う名前付き HttpClient。
+        /// 開発環境で自己署名証明書を受け入れる設定は Program.cs の登録側で行う。
+        /// </summary>
+        public const string ExternalIdpHttpClientName = "external-idp";
 
         public AuthorizationCallbackController(
             EcAuthDbContext context,
@@ -27,7 +33,7 @@ namespace IdentityProvider.Controllers
             IUserService userService,
             IExternalIdpTokenService externalIdpTokenService,
             ILogger<AuthorizationCallbackController> logger,
-            IHostEnvironment environment,
+            IHttpClientFactory httpClientFactory,
             IConfiguration configuration)
         {
             _context = context;
@@ -35,7 +41,7 @@ namespace IdentityProvider.Controllers
             _userService = userService;
             _externalIdpTokenService = externalIdpTokenService;
             _logger = logger;
-            _environment = environment;
+            _httpClientFactory = httpClientFactory;
             _configuration = configuration;
         }
 
@@ -194,15 +200,7 @@ namespace IdentityProvider.Controllers
         {
             try
             {
-                var handler = _environment.IsDevelopment()
-                    ? new HttpClientHandler
-                    {
-                        ServerCertificateCustomValidationCallback
-                            = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-                    }
-                    : new HttpClientHandler();
-
-                using var client = new HttpClient(handler);
+                var client = _httpClientFactory.CreateClient(ExternalIdpHttpClientName);
 
                 var tokenRequest = new FormUrlEncodedContent(new Dictionary<string, string>
                 {
@@ -268,15 +266,7 @@ namespace IdentityProvider.Controllers
         {
             try
             {
-                var handler = _environment.IsDevelopment()
-                    ? new HttpClientHandler
-                    {
-                        ServerCertificateCustomValidationCallback
-                            = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-                    }
-                    : new HttpClientHandler();
-
-                using var client = new HttpClient(handler);
+                var client = _httpClientFactory.CreateClient(ExternalIdpHttpClientName);
                 client.DefaultRequestHeaders.Authorization =
                     new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
 
