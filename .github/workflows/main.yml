@@ -4,8 +4,12 @@ name: CI
 # reusable workflow（on: workflow_call）として呼び出す。これにより 1 回の CI 実行で
 # 全スイートが駆動され、各スイートが個別に push / PR イベントで多重起動するのを防ぐ。
 # （各スイートは workflow_dispatch も残しているので、Actions UI から個別に再実行できる。）
+# push は main に限定する。PR ブランチへの push は pull_request でも起動するため、
+# 無制限だと同じコミットで CI が二重に走る。PR を出していないブランチは workflow_dispatch で検証する。
+# pull_request は base を絞らない（スタックした PR でも CI を回すため）。
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
